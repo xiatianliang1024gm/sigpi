@@ -1,10 +1,35 @@
 # SigPi
 
-SigPi is a readable, real-world TypeScript agent reference implementation inspired by Pi's design. It shows the complete chain of an agent — agent loop, function calling, and context management — written with minimal abstraction layers so you can read it line by line. It is built for developers with a coding foundation who want to understand how an agent is actually implemented, not for zero-setup beginners.
+> A readable, real-world TypeScript agent you can read **line by line** — inspired by Pi's design, written to be understood.
 
-- agent loop
-- function calling
-- context management (summarization)
+SigPi is a **reference implementation** of a coding agent. It shows the complete chain — agent loop, function calling, and context management — with minimal abstraction layers, so you can open the source and follow every decision. It is for **developers with a coding foundation who want to understand how an agent is actually built**, not for zero-setup beginners.
+
+### What SigPi demonstrates
+
+- **Agent loop** — how a turn runs, calls tools, and decides when to stop
+- **Function calling** — how tool schemas are built, invoked, and their results fed back
+- **Context management** — how long conversations are summarized and trimmed to fit the window
+
+### Documentation
+
+SigPi ships a **bilingual, teaching-oriented guide**. Read the overview first, then go chapter by chapter — each chapter maps to a source module you can open side by side.
+
+- 📘 **English guide** — [docs/guide/en/README.md](./docs/guide/en/README.md)
+- 📕 **中文指南** — [docs/guide/zh/README.md](./docs/guide/zh/README.md)
+
+| # | Topic | English | 中文 |
+|---|-------|---------|------|
+| 01 | Overview | [en](./docs/guide/en/01-overview.md) | [中文](./docs/guide/zh/01-overview.md) |
+| 02 | Agent loop | [en](./docs/guide/en/02-agent-loop.md) | [中文](./docs/guide/zh/02-agent-loop.md) |
+| 03 | Function calling | [en](./docs/guide/en/03-function-calling.md) | [中文](./docs/guide/zh/03-function-calling.md) |
+| 04 | Context management | [en](./docs/guide/en/04-context-management.md) | [中文](./docs/guide/zh/04-context-management.md) |
+| 05 | Tools | [en](./docs/guide/en/05-tools.md) | [中文](./docs/guide/zh/05-tools.md) |
+| 06 | Model adapters | [en](./docs/guide/en/06-model-adapters.md) | [中文](./docs/guide/zh/06-model-adapters.md) |
+| 07 | Session | [en](./docs/guide/en/07-session.md) | [中文](./docs/guide/zh/07-session.md) |
+| 08 | Real-world concerns | [en](./docs/guide/en/08-real-world-concerns.md) | [中文](./docs/guide/zh/08-real-world-concerns.md) |
+| 09 | Higher-level features | [en](./docs/guide/en/09-higher-level.md) | [中文](./docs/guide/zh/09-higher-level.md) |
+
+Architecture decisions and project context: [docs/adr/README.md](./docs/adr/README.md) · [CONTEXT.md](./CONTEXT.md)
 
 ## Quick start
 
