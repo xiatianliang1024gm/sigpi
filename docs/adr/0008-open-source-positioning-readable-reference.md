@@ -56,7 +56,7 @@ But three tensions must be resolved now, or README / docs / naming will contradi
 ## Consequences
 
 - **Honest**: no more "minimal/tiny" mislabel; positioning matches the audience.
-- **Precise**: directly serves readers who want to understand agent implementation;同源 with the
+- **Precise**: directly serves readers who want to understand agent implementation;it mirrors the
   author's own pain.
 - **Cleanup required** (handled in another branch):
   - Remove the internal npm registry configuration and the scoped package prefix from `package.json`;
