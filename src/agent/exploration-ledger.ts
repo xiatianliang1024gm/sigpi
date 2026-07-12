@@ -282,11 +282,6 @@ function recordSuccessfulTool(
 			);
 			recordPathList(ledger.modifiedFiles, getStringFromData(data, "path"));
 			break;
-		case "apply_unified_patch":
-			for (const file of getStringArrayFromData(data, "paths")) {
-				recordPathList(ledger.modifiedFiles, file);
-			}
-			break;
 		case "bash":
 			recordShellFinding(ledger, toolCall, data);
 			break;

@@ -225,24 +225,14 @@ e.g. run `scripts/setup.mjs` and read `references/guide.md`.
 - `read` reads targeted line ranges or character offsets when the agent only needs local context; by default it returns up to 2,000 lines or 50KB before continuation
 - `read` returns explicit continuation metadata when truncated; use that metadata instead of guessing the next offset or line range
 - `write` handles full-file writes in a cross-platform way
-- `edit` applies one or more exact replacement blocks to a single file without JSON-escaping each search/replace pair
-- `edit` also applies standard unified diffs with `git apply --check` validation first
+- `edit` performs an exact string replacement on an existing file via `old_string` and `new_string` (no regex or fuzzy match; whitespace and indentation must match exactly)
+- `edit` requires the file to have been read this conversation, and `old_string` must appear exactly once unless `replace_all` is true
+- for `edit`, prefer a small unique `old_string` copied verbatim from the current file; after a failed edit, reread the affected lines and retry with a narrower string
 - `update_plan` tracks concise multi-step task progress inside a turn
-- patch blocks should use the marker lines `--- old`, `--- new`, and `--- end`
-- for `edit`, prefer small unique old blocks copied from the current file; after a failed patch, reread the affected lines and retry with a narrower block
 
 ## Development notes
 
 - TUI implementation guidance: `src/tui/README.md`
-- block shape:
-
-```text
---- old
-<exact existing text>
---- new
-<replacement text>
---- end
-```
 
 ## Shell tool notes
 
