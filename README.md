@@ -216,7 +216,7 @@ e.g. run `scripts/setup.mjs` and read `references/guide.md`.
 
 ## Search tool notes
 
-`search_in_files` wraps `ripgrep` so the agent can search inside workspace text files much more efficiently than reading entire files or using generic shell commands.
+`grep` wraps `ripgrep` so the agent can search inside workspace text files much more efficiently than reading entire files or using generic shell commands.
 
 - `output=lines` returns matching lines with line numbers
 - `output=files` returns only file paths that contain a match
@@ -226,16 +226,15 @@ e.g. run `scripts/setup.mjs` and read `references/guide.md`.
 
 ## File navigation notes
 
-- `find_files` is the fast path for filename/path searches and filtering candidate files with a glob like `src/**/*.ts`
-- `read_file_lines` reads targeted line ranges when the agent only needs local context; by default it returns up to 2,000 lines or 50KB before continuation
-- `read_file_chars` reads by character offset when the full file is actually needed, defaults to a 50KB window, and supports `startChar` continuation
-- both file-read tools return explicit continuation metadata when truncated; use that metadata instead of guessing the next offset or line range
-- `write_text_file` handles full-file writes in a cross-platform way
-- `apply_patch_text` applies one or more exact replacement blocks to a single file without JSON-escaping each search/replace pair
-- `apply_unified_patch` applies standard unified diffs with `git apply --check` validation first
-- `update_plan` tracks concise multi-step task progress inside a turn
+- `glob` is the fast path for filename/path searches and filtering candidate files with a glob like `src/**/*.ts`
+- `read` reads targeted line ranges or character offsets when the agent only needs local context; by default it returns up to 2,000 lines or 50KB before continuation
+- `read` returns explicit continuation metadata when truncated; use that metadata instead of guessing the next offset or line range
+- `write` handles full-file writes in a cross-platform way
+- `edit` applies one or more exact replacement blocks to a single file without JSON-escaping each search/replace pair
+- `edit` also applies standard unified diffs with `git apply --check` validation first
+- `update-plan` tracks concise multi-step task progress inside a turn
 - patch blocks should use the marker lines `--- old`, `--- new`, and `--- end`
-- for `apply_patch_text`, prefer small unique old blocks copied from the current file; after a failed patch, reread the affected lines and retry with a narrower block
+- for `edit`, prefer small unique old blocks copied from the current file; after a failed patch, reread the affected lines and retry with a narrower block
 
 ## Development notes
 
@@ -272,3 +271,7 @@ e.g. run `scripts/setup.mjs` and read `references/guide.md`.
 - Run `pnpm test:cli`
 - Run `pnpm pack:smoke`
 - Only commits that pass the full chain above should be used for beta package publishing
+
+## License
+
+MIT. See [LICENSE](./LICENSE).

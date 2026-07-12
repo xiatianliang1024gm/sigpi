@@ -2,6 +2,7 @@
   "name": "sigpi",
   "version": "0.1.0-beta.2026070802",
   "private": false,
+  "license": "MIT",
   "type": "module",
   "bin": {
     "sigpi": "dist/src/cli.js"
