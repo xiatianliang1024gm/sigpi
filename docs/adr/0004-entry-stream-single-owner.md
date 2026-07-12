@@ -1,67 +1,49 @@
-# 0004 — entry stream 单一所有者
+# 0004 — Single owner for the entry stream
 
-- **状态**：已接受
-- **日期**：2026-07-12
-- **提交**：`db809cd`
+- **Status**: Accepted
+- **Date**: 2026-07-12
+- **Commit**: `db809cd`
 
-## 背景与问题
+## Context and Problem
 
-会话的 on-disk entry stream（`SessionEntry[]`）是会话持久化的核心。它的序列化
-发生在 `src/session/format.ts` 的 `resolveEntriesForPersist`。该函数原先有
-**两套**产生 entries 的逻辑：
+The on-disk entry stream (`SessionEntry[]`) is the core of session persistence. Its serialization happens in `src/session/format.ts`'s `resolveEntriesForPersist`. That function originally had **two** streams of entry-producing logic:
 
-1. 信任 `contextState.entries`（运行时路径，由 `ConversationContext` 维护的累积
-   stream）；
-2. 当调用方只给 `{summary, recentMessages}` 时，用一段 **ad-hoc 的 merge**
-   （按 id 去重 + 随机补 id + 自行拼 compaction / 消息条目）从 `session.entries`
-   延伸出新 stream。
+1. Trust `contextState.entries` (the runtime path, maintained by `ConversationContext` as the accumulated stream);
+2. When the caller only passes `{summary, recentMessages}`, use an **ad-hoc merge** (dedupe by id + randomly fill ids + hand-build compaction / message entries) to extend a new stream from `session.entries`.
 
-第 (2) 套是第二生产者，且和 `hydrateState` 用来从 `{summary, recentMessages}`
-合成 stream 的 `buildEntriesFromContextState` 逻辑**不一致**——同一个输入有两种
-合成实现，违反了「entry stream 单一所有者」。
+Path (2) is a second producer and is **inconsistent** with `hydrateState`'s `buildEntriesFromContextState` logic that synthesizes a stream from `{summary, recentMessages}` — the same input has two synthesis implementations, violating "single owner for the entry stream".
 
-## 考虑过的方案
+## Considered Options
 
-1. **收敛为单一合成 seam**（采用）：
-   - 无 `contextState` → 返回 `session.entries`（调用方自有 stream）；
-   - 有 `contextState` 且带 `entries` → 信任其累积 stream（运行时路径）；
-   - 仅当调用方**未维护** `entries` 时，用 `hydrate` 同款 `buildEntriesFromContextState`
-     合成「新窗口」，再**追加**到既有累积 `session.entries` 上。
+1. **Collapse into a single synthesis seam** (adopted):
+   - No `contextState` → return `session.entries` (caller owns its stream);
+   - Has `contextState` with `entries` → trust its accumulated stream (runtime path);
+   - Only when the caller does **not** maintain `entries`, synthesize a "new window" with the same `buildEntriesFromContextState` as `hydrate`, then **append** it onto the existing accumulated `session.entries`.
+2. Delete the fallback outright and replace it with `buildEntriesFromContextState` **rebuilding** the window: `return buildEntriesFromContextState({summary, recentMessages})`.
+   - Rejected: this would **drop history** in multi-turn scenarios. The root cause is that `store.writeSession` persists by **incrementally appending** `entries.slice(prevCount)`, requiring `session.entries` to always be the **full accumulation**. Rebuilding the window (only the latest turn) makes `entries` non-accumulating, so the delta append breaks (`entries.length` does not grow, no error, no new lines persisted). The multi-turn integration test (`session store writes append-only transcript`) went red on the spot — a hidden contract the review had not anticipated.
 
-2. 直接删除 fallback，换成 `buildEntriesFromContextState` **重建**窗口：
-   `return buildEntriesFromContextState({summary, recentMessages})`。
-   - 否决：这会在多轮场景**丢掉历史**。根因是 `store.writeSession` 的落盘方式是
-     按 `entries.slice(prevCount)` 做**增量追加**，要求 `session.entries` 始终是
-     **累积全量**。重建窗口（只含最新一轮）会使 `entries` 不再累积，delta 追加失效
-     （`entries.length` 不增、不报错也不落盘新行）。多轮集成测试（`session store
-     writes append-only transcript`）当场红——这是评审当初没料到的隐蔽契约。
-
-## 决策结果
+## Decision
 
 ```ts
 export function resolveEntriesForPersist(args): SessionEntry[] {
-  if (!args.contextState) return args.session.entries;          // 调用方自有
-  if (args.contextState.entries?.length) return args.contextState.entries; // 运行时：信任
-  const base = args.session.entries ?? [];                      // 未维护 entries 的兼容路径
-  const window = buildEntriesFromContextState({                 // 单一合成器（与 hydrate 同款）
+  if (!args.contextState) return args.session.entries;          // caller owns it
+  if (args.contextState.entries?.length) return args.contextState.entries; // runtime: trust
+  const base = args.session.entries ?? [];                      // compat path for non-stream-aware callers
+  const window = buildEntriesFromContextState({                 // single synthesizer (same as hydrate)
     summary: args.contextState.summary ?? null,
     recentMessages: args.contextState.recentMessages ?? [],
     timestamp: args.timestamp,
   });
-  return [...base, ...window];                                 // 追加，保 append-only
+  return [...base, ...window];                                 // append, keep append-only
 }
 ```
 
-删除了原 ad-hoc merge / id 去重 / 自行拼条目的重复逻辑。`hydrateState` 与
-`resolveEntriesForPersist` 现在共用同一个合成 seam（`buildEntriesFromContextState`）。
+Removed the original ad-hoc merge / id-dedupe / hand-built-entry duplication. `hydrateState` and `resolveEntriesForPersist` now share the same synthesis seam (`buildEntriesFromContextState`).
 
-## 后果
+## Consequences
 
-- **单一所有者**：运行时路径始终相信 `ConversationContext` 的累积 `entries`；
-  非 stream-aware 调用方（legacy / 测试）经 `buildEntriesFromContextState` 合成
-  窗口并追加，保持 append-only。
-- **合成逻辑去重**：hydration 与 persistence 共用一处合成实现，不再各自维护一套。
-- **行为不变**：运行时始终走「信任 `entries`」路径；legacy / test 调用方仍得到
-  累积且 append-only 的 stream（多轮集成测试、restore 测试均保持原断言）。
-- `session-format` 测试更新为断言「旧 transcript 保留 + 新窗口追加」的语义。
-- biome + tsc 干净，全量 398/398 通过。
+- **Single owner**: the runtime path always trusts `ConversationContext`'s accumulated `entries`; non-stream-aware callers (legacy / tests) synthesize a window via `buildEntriesFromContextState` and append, keeping append-only.
+- **Deduplicated synthesis**: hydration and persistence share one synthesis implementation instead of each maintaining its own.
+- **Behavior unchanged**: the runtime always takes the "trust `entries`" path; legacy / test callers still get an accumulated, append-only stream (multi-turn integration tests and restore tests keep their original assertions).
+- `session-format` tests updated to assert the "old transcript retained + new window appended" semantics.
+- biome + tsc clean; full suite 398/398 passed.
