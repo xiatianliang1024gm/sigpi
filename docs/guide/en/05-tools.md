@@ -64,7 +64,7 @@ That uniformity is why the agent loop in Chapter 2 can treat all tools identical
 | `edit` | targeted edit |
 | `write` | create/overwrite |
 | `bash` | run a shell command |
-| `update-plan` | update the plan tracker state |
+| `update_plan` | update the plan tracker state |
 
 ## Deduplication and the ledger
 

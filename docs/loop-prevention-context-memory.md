@@ -29,7 +29,7 @@
 
 - 工具结果、summary、系统注入片段都要有硬上限。
 - 长期目标和进度状态不应依赖模型自己从完整历史中重新推断。
-- `update-plan` 更适合作为 UI/进度状态，不应把完整计划反复塞回模型上下文。
+- `update_plan` 更适合作为 UI/进度状态，不应把完整计划反复塞回模型上下文。
 - subagent fork 时要过滤工具历史、reasoning 和大输出，默认只传必要上下文。
 - 模型上下文中的状态片段应有明确 marker，方便压缩和调试。
 
@@ -153,7 +153,7 @@ schema 中该字段是 optional，旧 session 文件仍可读取。
 - 没有重写 session 存储为 pi 风格 append-only entry tree。
 - 没有新增持久 `task_state` 独立层。
 - 没有实现 `spawn_explorer` / `parallel_explore` 子 agent 工具。
-- 没有改变 `update-plan` 的 UI 状态定位。
+- 没有改变 `update_plan` 的 UI 状态定位。
 
 这些可以作为后续阶段继续做。当前版本已经把最容易导致死循环的两个问题压住：工具输出无界和压缩后遗忘探索状态。
 

@@ -130,18 +130,13 @@ pnpm dev ask "What time is it in UTC?"
 
 ## Built-in tools
 
-- `find_files`
-- `search_in_files`
-- `read_file_lines`
-- `read_file_chars`
-- `write_text_file`
-- `apply_patch_text`
-- `apply_unified_patch`
-- `update_plan`
-- `list_skills`
-- `describe_skill`
-- `call_skill`
+- `read`
+- `grep`
+- `glob`
+- `edit`
+- `write`
 - `bash`
+- `update_plan`
 
 ## Skills
 
@@ -232,7 +227,7 @@ e.g. run `scripts/setup.mjs` and read `references/guide.md`.
 - `write` handles full-file writes in a cross-platform way
 - `edit` applies one or more exact replacement blocks to a single file without JSON-escaping each search/replace pair
 - `edit` also applies standard unified diffs with `git apply --check` validation first
-- `update-plan` tracks concise multi-step task progress inside a turn
+- `update_plan` tracks concise multi-step task progress inside a turn
 - patch blocks should use the marker lines `--- old`, `--- new`, and `--- end`
 - for `edit`, prefer small unique old blocks copied from the current file; after a failed patch, reread the affected lines and retry with a narrower block
 

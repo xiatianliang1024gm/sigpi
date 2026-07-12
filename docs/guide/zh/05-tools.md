@@ -63,7 +63,7 @@ interface ToolDefinition {
 | `edit` | 定向编辑 |
 | `write` | 创建/覆盖 |
 | `bash` | 跑 shell 命令 |
-| `update-plan` | 更新 plan tracker 状态 |
+| `update_plan` | 更新 plan tracker 状态 |
 
 ## 去重与 ledger
 
