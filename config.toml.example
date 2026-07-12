@@ -1,0 +1,43 @@
+[model]
+default = "local"
+
+[models.local]
+base_url = "http://localhost:8000/v1"
+api_key = "your-api-key"
+name = "your-model-name"
+api_format = "chat_completions"
+timeout_ms = 60000
+max_retries = 2
+retry_base_delay_ms = 250
+
+# [models.remote]
+# base_url = "https://api.example.com/v1"
+# api_key = "your-api-key"
+# name = "remote-model"
+# api_format = "responses"
+
+[agent]
+# These limits are approximate characters, not model tokens. Raise them for
+# large-context models; lower them if your model/backend rejects long requests.
+max_steps = 20
+soft_context_limit = 200000
+hard_context_limit = 260000
+keep_last_messages = 8
+process_output = "clear"
+
+[logging]
+level = "info"
+file = "~/.tinypi/logs/agent.log"
+to_console = false
+
+[storage]
+sessions_root = "~/.tinypi/projects"
+
+[shell]
+# kind = "zsh"
+# path = "/bin/zsh"
+
+[tools.run_shell]
+# Shared tool safety mode: read_only, workspace_write, or full_access.
+# This is a guardrail against accidental writes, not strong isolation for untrusted code.
+mode = "workspace_write"

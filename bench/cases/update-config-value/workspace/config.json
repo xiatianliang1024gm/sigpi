@@ -1,0 +1,5 @@
+{
+	"featureEnabled": false,
+	"retryCount": 3,
+	"serviceName": "orders"
+}

@@ -1,0 +1,50 @@
+{
+  "name": "sigpi",
+  "version": "0.1.0-beta.2026070802",
+  "private": false,
+  "type": "module",
+  "bin": {
+    "sigpi": "dist/src/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "config.toml.example"
+  ],
+  "scripts": {
+    "build": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.build.json",
+    "dev": "pnpm run build && node dist/src/cli.js",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
+    "fix": "biome check --write .",
+    "check": "biome check . && pnpm run test",
+    "check:fix": "pnpm run fix && pnpm run test",
+    "test:compile": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json --outDir dist --rootDir .",
+    "test": "pnpm run test:compile && node --test dist/test/*.test.js",
+    "test:provider": "pnpm run test:compile && node --test dist/test/openai-compatible.test.js",
+    "test:cli": "pnpm run test:compile && node scripts/cli-integration.mjs",
+    "bench": "node bench/run-bench.mjs",
+    "bench:swebench-lite": "node bench/swebench-lite.mjs",
+    "prepack": "pnpm run build",
+    "pack:check": "npm_config_cache=.tmp/npm-cache npm pack --dry-run",
+    "pack:smoke": "pnpm run test:compile && node scripts/pack-smoke.mjs",
+    "release:check": "pnpm check && pnpm run test:provider && pnpm run test:cli && pnpm run pack:smoke",
+    "publishnochecks": "pnpm publish --no-git-checks",
+    "release": "bash scripts/release.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "smol-toml": "^1.7.0",
+    "yaml": "^2.6.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}

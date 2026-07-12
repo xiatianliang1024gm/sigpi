@@ -1,0 +1,404 @@
+import { stdin as processInput, stdout as processOutput } from "node:process";
+import { createInterface } from "node:readline/promises";
+import type { ReadStream, WriteStream } from "node:tty";
+import {
+	type ChatCommandMetadata,
+	getChatCommandSuggestions,
+} from "./chat-commands.js";
+import {
+	type Component,
+	Editor,
+	moveSelectedIndex,
+	ProcessTerminal,
+	parseKey,
+	type Terminal,
+	Tui,
+	truncateToWidth,
+} from "./tui/index.js";
+
+export interface ChatInputOptions {
+	prompt?: string;
+	input?: ReadStream;
+	output?: WriteStream;
+	commands?: readonly ChatCommandMetadata[];
+	maxSuggestions?: number;
+	statusBarText?: string;
+}
+
+export interface EscInterruptListenerOptions {
+	input?: ReadStream;
+	output?: WriteStream;
+	onEscape: () => void;
+}
+
+export interface RunningTurnInputListenerOptions {
+	prompt?: string;
+	input?: ReadStream;
+	output?: WriteStream;
+	statusBarText?: string;
+	onEscape: () => void;
+	onSubmit: (text: string) => void;
+}
+
+export interface RunningTurnInputListenerHandle {
+	stop(): void;
+	setStatusBarText(value: string | null): void;
+	withSuspendedRendering<T>(operation: () => T): T;
+}
+
+class InlineTerminal implements Terminal {
+	private renderedRows = 0;
+	private currentRow = 1;
+
+	constructor(private readonly inner: Terminal) {}
+
+	get columns(): number {
+		return this.inner.columns;
+	}
+
+	get rows(): number {
+		return Math.max(1, this.inner.rows - 1);
+	}
+
+	start(onInput: (data: string) => void, onResize: () => void): void {
+		this.inner.start(onInput, onResize);
+	}
+
+	stop(): void {
+		if (this.renderedRows > 0) {
+			this.moveTo(this.renderedRows + 1, 1);
+			this.inner.clearFromCursor();
+		}
+		this.inner.stop();
+	}
+
+	write(data: string): void {
+		this.inner.write(data);
+	}
+
+	hideCursor(): void {
+		this.inner.hideCursor();
+	}
+
+	showCursor(): void {
+		this.inner.showCursor();
+	}
+
+	clearScreen(): void {
+		this.inner.write("\r\x1B[J");
+		this.renderedRows = 0;
+		this.currentRow = 1;
+	}
+
+	clearFromCursor(): void {
+		this.inner.clearFromCursor();
+	}
+
+	clearRenderedRows(): void {
+		if (this.renderedRows === 0) {
+			return;
+		}
+
+		this.moveTo(1, 1);
+		this.inner.clearFromCursor();
+		this.renderedRows = 0;
+		this.currentRow = 1;
+	}
+
+	resetTracking(): void {
+		this.renderedRows = 0;
+		this.currentRow = 1;
+	}
+
+	moveTo(row: number, column: number): void {
+		const previousRenderedRows = this.renderedRows;
+		if (row > this.renderedRows) {
+			this.renderedRows = row;
+		}
+
+		this.inner.write("\r");
+		const rowDelta = row - this.currentRow;
+		if (rowDelta > 0) {
+			const existingRowsBelow = Math.max(
+				0,
+				previousRenderedRows - this.currentRow,
+			);
+			const existingMove = Math.min(rowDelta, existingRowsBelow);
+			if (existingMove > 0) {
+				this.inner.write(`\x1B[${existingMove}B`);
+			}
+			const newRows = rowDelta - existingMove;
+			if (newRows > 0) {
+				this.inner.write("\n".repeat(newRows));
+			}
+		} else if (rowDelta < 0) {
+			this.inner.write(`\x1B[${Math.abs(rowDelta)}A`);
+		}
+		this.currentRow = row;
+		if (column > 1) {
+			this.inner.write(`\x1B[${column - 1}C`);
+		}
+	}
+}
+
+class ChatInputComponent implements Component {
+	private readonly editor: Editor;
+	private selectedSuggestionIndex = 0;
+	private suggestionSelectionActive = false;
+
+	constructor(
+		private readonly args: {
+			prompt: string;
+			commands: readonly ChatCommandMetadata[];
+			maxSuggestions: number;
+			onFinish: (value: string | null) => void;
+		},
+	) {
+		this.editor = new Editor({ prompt: args.prompt });
+		this.editor.onSubmit = (text) => {
+			if (!text.trim()) {
+				this.editor.setText("");
+				return;
+			}
+			args.onFinish(text);
+		};
+		this.editor.onCancel = () => args.onFinish(null);
+		this.editor.onChange = () => {
+			this.selectedSuggestionIndex = 0;
+			this.suggestionSelectionActive = false;
+		};
+		this.editor.focused = true;
+	}
+
+	handleInput(data: string): void {
+		const key = parseKey(data);
+		const suggestions = this.getSuggestions();
+
+		if ((key === "up" || key === "down") && suggestions.length > 0) {
+			this.selectedSuggestionIndex = moveSelectedIndex(
+				this.selectedSuggestionIndex,
+				suggestions.length,
+				key === "up" ? -1 : 1,
+			);
+			this.suggestionSelectionActive = true;
+			return;
+		}
+
+		if (key === "enter" && this.suggestionSelectionActive) {
+			const selected = suggestions[this.selectedSuggestionIndex];
+			if (selected) {
+				this.args.onFinish(selected.name);
+				return;
+			}
+		}
+
+		if (key === "enter" && suggestions.length === 1) {
+			this.args.onFinish(suggestions[0].name);
+			return;
+		}
+
+		this.editor.handleInput(data);
+	}
+
+	render(width: number): string[] {
+		const text = this.editor.getText();
+		const lines = this.editor.render(width);
+		const suggestions = this.getSuggestions();
+
+		if (!text.includes("\n")) {
+			this.selectedSuggestionIndex = moveSelectedIndex(
+				this.selectedSuggestionIndex,
+				suggestions.length,
+				0,
+			);
+			for (const [index, suggestion] of suggestions.entries()) {
+				const marker = index === this.selectedSuggestionIndex ? "> " : "  ";
+				lines.push(
+					truncateToWidth(
+						`${marker}${suggestion.name} - ${suggestion.description}`,
+						width,
+					),
+				);
+			}
+		}
+
+		return lines;
+	}
+
+	private getSuggestions(): ChatCommandMetadata[] {
+		return getChatCommandSuggestions(
+			this.editor.getText(),
+			this.args.commands,
+			this.args.maxSuggestions,
+		);
+	}
+}
+
+class RunningTurnInputComponent implements Component {
+	private readonly editor: Editor;
+	private submittedText: string | null = null;
+
+	constructor(args: {
+		prompt: string;
+		onEscape: () => void;
+		onSubmit: (text: string) => void;
+	}) {
+		this.editor = new Editor({ prompt: args.prompt });
+		this.editor.onSubmit = (text) => {
+			if (!text.trim()) {
+				return;
+			}
+			this.submittedText = text;
+			this.editor.focused = false;
+			args.onSubmit(text);
+		};
+		this.editor.onCancel = args.onEscape;
+		this.editor.focused = true;
+	}
+
+	getText(): string {
+		return this.editor.getText();
+	}
+
+	hasSubmittedText(): boolean {
+		return this.submittedText !== null;
+	}
+
+	handleInput(data: string): void {
+		if (this.submittedText !== null) {
+			return;
+		}
+		this.editor.handleInput(data);
+	}
+
+	render(width: number): string[] {
+		if (this.submittedText !== null) {
+			return [];
+		}
+		if (!this.editor.getText()) {
+			return [];
+		}
+		return this.editor.render(width);
+	}
+
+	shouldRenderAfterInput(): boolean {
+		return this.submittedText === null;
+	}
+}
+
+export async function readChatInput(
+	args?: ChatInputOptions,
+): Promise<string | null> {
+	const prompt = args?.prompt ?? "> ";
+	const input = args?.input ?? processInput;
+	const output = args?.output ?? processOutput;
+	const commands = args?.commands ?? [];
+	const maxSuggestions = args?.maxSuggestions ?? 5;
+
+	if (!input.isTTY || !output.isTTY) {
+		const rl = createInterface({ input, output });
+		try {
+			return await rl.question(prompt);
+		} finally {
+			rl.close();
+		}
+	}
+
+	return new Promise<string | null>((resolve) => {
+		const terminal = new InlineTerminal(new ProcessTerminal(input, output));
+		const tui = new Tui(terminal, { clearOnStart: false, fillHeight: false });
+		let settled = false;
+		const finish = (value: string | null) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			terminal.clearRenderedRows();
+			tui.stop();
+			if (value !== null) {
+				output.write(`${prompt}${value}\n`);
+			}
+			resolve(value);
+		};
+		const component = new ChatInputComponent({
+			prompt,
+			commands,
+			maxSuggestions,
+			onFinish: finish,
+		});
+
+		tui.setStatusBar(args?.statusBarText ?? null);
+		tui.addChild(component);
+		tui.setFocus(component);
+		tui.start();
+	});
+}
+
+export function startEscInterruptListener(
+	options: EscInterruptListenerOptions,
+): (() => void) | null {
+	const handle = startRunningTurnInputListener({
+		...options,
+		onSubmit: () => {},
+	});
+	return handle ? () => handle.stop() : null;
+}
+
+export function startRunningTurnInputListener(
+	options: RunningTurnInputListenerOptions,
+): RunningTurnInputListenerHandle | null {
+	const input = options.input ?? processInput;
+	const output = options.output ?? processOutput;
+	const prompt = options.prompt ?? "> ";
+
+	if (!input.isTTY || !output.isTTY) {
+		return null;
+	}
+
+	const terminal = new InlineTerminal(new ProcessTerminal(input, output));
+	const tui = new Tui(terminal, { clearOnStart: false, fillHeight: false });
+	const component = new RunningTurnInputComponent({
+		prompt,
+		onEscape: options.onEscape,
+		onSubmit: (text) => {
+			terminal.clearRenderedRows();
+			output.write(`${prompt}${text}\n`);
+			options.onSubmit(text);
+		},
+	});
+
+	tui.setStatusBar(options.statusBarText ?? null);
+	tui.addChild(component);
+	tui.setFocus(component);
+	tui.start();
+
+	let stopped = false;
+	const stop = () => {
+		if (stopped) {
+			return;
+		}
+		stopped = true;
+		terminal.clearRenderedRows();
+		tui.stop();
+	};
+
+	return {
+		stop,
+		setStatusBarText: (value) => {
+			tui.setStatusBar(value);
+		},
+		withSuspendedRendering: (operation) => {
+			if (component.hasSubmittedText()) {
+				return operation();
+			}
+			terminal.clearRenderedRows();
+			const result = operation();
+			if (!stopped && !component.hasSubmittedText()) {
+				terminal.resetTracking();
+				tui.resetFrame();
+				tui.forceRender();
+			}
+			return result;
+		},
+	};
+}

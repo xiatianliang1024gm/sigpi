@@ -1,0 +1,17 @@
+{
+	"files": {
+		"includes": ["src/**/*.ts", "test/**/*.ts"]
+	},
+	"formatter": {
+		"enabled": true
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"suspicious": {
+				"noControlCharactersInRegex": "off",
+				"noShadowRestrictedNames": "off"
+			}
+		}
+	}
+}

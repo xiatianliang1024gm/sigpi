@@ -1,0 +1,5 @@
+{
+	"prompt": "Read package.json and answer with only the package name.",
+	"checker": "checker.mjs",
+	"timeoutMs": 30000
+}

@@ -1,0 +1,5 @@
+{
+	"prompt": "Update config.json so featureEnabled is true. Do not change any other setting.",
+	"checker": "checker.mjs",
+	"timeoutMs": 30000
+}

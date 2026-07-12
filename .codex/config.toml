@@ -1,0 +1,8 @@
+[[hooks.PostToolUse]]
+matcher = "apply_patch"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'node .codex/hooks/biome-check-post-tool-use.mjs'
+timeout = 5
+statusMessage = "biome check"

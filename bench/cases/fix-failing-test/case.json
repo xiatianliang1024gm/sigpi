@@ -1,0 +1,5 @@
+{
+	"prompt": "Run the tests, find the bug, and fix the implementation so the tests pass.",
+	"checker": "checker.mjs",
+	"timeoutMs": 60000
+}

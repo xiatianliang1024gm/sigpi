@@ -1,0 +1,65 @@
+import type { ChatReplState } from "./chat-repl.js";
+import {
+	estimateContextTokens,
+	estimateSystemPromptSections,
+	groupToolSchemas,
+	summarizeRecentMessagesByRole,
+} from "./context-window.js";
+
+export function formatContextWindowSummary(state: ChatReplState): string {
+	const recentMessages = state.context.getRecentMessages();
+	const systemPromptSections = estimateSystemPromptSections(
+		state.systemPromptSections,
+	);
+	const toolGroups = groupToolSchemas(state.toolSchemas);
+	const summary = state.context.getSummary();
+	const recentStats = summarizeRecentMessagesByRole(recentMessages);
+	const lastUsage = state.context.getLastUsage();
+	const tokens = estimateContextTokens({
+		systemPrompt: state.systemPromptSections
+			.map((section) => section.content)
+			.join(" "),
+		summary,
+		recentMessages,
+		toolSchemas: state.toolSchemas,
+		lastUsage: lastUsage?.usage ?? null,
+		lastUsageMessageIndex: lastUsage?.messageIndex ?? null,
+	});
+	const usedTokens = tokens.totalTokens;
+	const contextWindow = state.contextWindow.contextWindow;
+	const reserveTokens = state.contextWindow.reserveTokens;
+	const thresholdTokens = contextWindow - reserveTokens;
+	const remainingTokens = thresholdTokens - usedTokens;
+
+	return [
+		`Context window: ${usedTokens}/${thresholdTokens} tokens used (${formatPercent(usedTokens, thresholdTokens)}). Remaining: ${formatSignedTokens(remainingTokens)}.`,
+		`Reserve tokens: ${reserveTokens}. Trigger threshold: ${thresholdTokens} tokens (= context_window - reserve_tokens).`,
+		`System prompt: ${tokens.systemPromptTokens} tokens (${formatPercent(tokens.systemPromptTokens, usedTokens)} of total).`,
+		...systemPromptSections.map(
+			(section) => `  - ${section.label}: ${section.tokens} tokens.`,
+		),
+		`Tool definitions: ${tokens.toolSchemaTokens} tokens across ${state.toolSchemas.length} tool(s) (${formatPercent(tokens.toolSchemaTokens, usedTokens)} of total).`,
+		...toolGroups.map(
+			(group) =>
+				`  - ${group.label}: ${group.count} tool(s), ${group.tokens} tokens.`,
+		),
+		`Summary memory: ${tokens.summaryTokens} tokens sent, raw length ${summary?.length ?? 0} (${formatPercent(tokens.summaryTokens, usedTokens)} of total).`,
+		`Recent uncompressed messages: ${recentStats.totalTokens} tokens across ${recentStats.totalCount} message(s) (${formatPercent(recentStats.totalTokens, usedTokens)} of total).`,
+		...recentStats.byRole.map(
+			(role) =>
+				`  - ${role.role}: ${role.count} message(s), ${role.tokens} tokens.`,
+		),
+		`Loaded skills: ${state.loadedSkillNames.length > 0 ? state.loadedSkillNames.join(", ") : "(none)"}.`,
+	].join("\n");
+}
+
+function formatPercent(value: number, total: number): string {
+	if (total <= 0) {
+		return "0.0%";
+	}
+	return `${((value / total) * 100).toFixed(1)}%`;
+}
+
+function formatSignedTokens(value: number): string {
+	return `${value >= 0 ? value : `-${Math.abs(value)}`} tokens`;
+}

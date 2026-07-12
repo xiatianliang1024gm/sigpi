@@ -1,0 +1,17 @@
+node_modules
+.env
+dist
+.pnpm-store
+logs
+.DS_Store
+.idea/
+*.log
+coverage
+tmp
+.tmp
+.sigpi/
+bench/results
+bench/swebench-work
+bench/data
+.npmrc
+.agents/
