@@ -54,4 +54,4 @@ Gave the `ModelProvider` seam a home module in `src/model/`. Came from the archi
 
 | # | Title | Commit | One-liner |
 |---|-------|--------|-----------|
-| [0012](./0012-model-provider-seam-home.md) | Model provider seam gets a home module | `—` | `ModelProvider` defined + `createModelProvider` in `src/model/provider.ts`; `createRuntimeProvider` deleted; no consumer names the concrete class |
+| [0012](./0012-model-provider-seam-home.md) | Model provider seam gets a home module | `d2bcb2f` | `ModelProvider` defined + `createModelProvider` in `src/model/provider.ts`; `createRuntimeProvider` deleted; no consumer names the concrete class |
