@@ -48,7 +48,10 @@ export function estimateRecentMessagesTokens(
 export function estimateToolSchemaTokens(
 	schemas: readonly ToolSchema[],
 ): number {
-	return Math.ceil(estimateToolSchemaChars(schemas) / 4);
+	return groupToolSchemas(schemas).reduce(
+		(total, group) => total + group.tokens,
+		0,
+	);
 }
 
 export function estimateSystemPromptTokens(systemPrompt: string): number {
@@ -146,54 +149,6 @@ export function estimateContextTokens(args: {
 	};
 }
 
-export function estimateContextWindowChars(args: {
-	systemPrompt: string;
-	summary: string | null;
-	recentMessages: readonly Message[];
-	toolSchemas: readonly ToolSchema[];
-	pendingUserInput?: string;
-}): {
-	totalChars: number;
-	systemPromptChars: number;
-	summaryChars: number;
-	recentMessageChars: number;
-	toolSchemaChars: number;
-	pendingUserInputChars: number;
-} {
-	const systemPromptChars = estimateMessageChars({
-		role: "system",
-		content: args.systemPrompt,
-	});
-	const summaryChars = args.summary
-		? estimateMessageChars({
-				role: "system",
-				content: `${SUMMARY_PREFIX}${args.summary}`,
-			})
-		: 0;
-	const recentMessageChars = estimateRecentMessagesChars(args.recentMessages);
-	const toolSchemaChars = estimateToolSchemaChars(args.toolSchemas);
-	const pendingUserInputChars = args.pendingUserInput
-		? estimateMessageChars({
-				role: "user",
-				content: args.pendingUserInput,
-			})
-		: 0;
-
-	return {
-		totalChars:
-			systemPromptChars +
-			summaryChars +
-			recentMessageChars +
-			toolSchemaChars +
-			pendingUserInputChars,
-		systemPromptChars,
-		summaryChars,
-		recentMessageChars,
-		toolSchemaChars,
-		pendingUserInputChars,
-	};
-}
-
 export function estimateSystemPromptSections(
 	sections: readonly SystemPromptSection[],
 ): Array<{ label: string; chars: number; tokens: number }> {
@@ -228,24 +183,6 @@ export function groupToolSchemas(
 	}
 
 	return [...groups.values()].filter((group) => group.count > 0);
-}
-
-export function estimateToolSchemaChars(
-	schemas: readonly ToolSchema[],
-): number {
-	return groupToolSchemas(schemas).reduce(
-		(total, group) => total + group.chars,
-		0,
-	);
-}
-
-export function estimateRecentMessagesChars(
-	messages: readonly Message[],
-): number {
-	return messages.reduce(
-		(total, message) => total + estimateMessageChars(message),
-		0,
-	);
 }
 
 export function summarizeRecentMessagesByRole(messages: readonly Message[]): {

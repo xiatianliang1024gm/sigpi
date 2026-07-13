@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
 	estimateContextTokens,
-	estimateContextWindowChars,
 } from "../context-window.js";
 import type { TurnInterruptController } from "../interrupt.js";
 import { isTurnInterruptedError, TurnInterruptedError } from "../interrupt.js";
@@ -274,8 +273,6 @@ export class AgentRunner {
 				previousRecentMessageCount: recentMessages.length,
 				summaryChars: this.context.getSummary()?.length ?? 0,
 				previousSummaryChars: this.context.getSummary()?.length ?? 0,
-				estimatedCharsBefore: 0,
-				estimatedCharsAfter: 0,
 				tokensBefore: 0,
 				tokensAfter: 0,
 			};
@@ -297,16 +294,6 @@ export class AgentRunner {
 			return checkpointUpdated;
 		};
 
-		const estimateWorkingMessageChars = (): number =>
-			estimateContextWindowChars({
-				systemPrompt: this.systemPrompt,
-				summary: this.context.getSummary(),
-				recentMessages: workingMessages.filter(
-					(message) => message.role !== "system",
-				),
-				toolSchemas: this.toolSchemas,
-			}).totalChars;
-
 		const estimateWorkingMessageTokens = (): number => {
 			const lastUsage = this.context.getLastUsage();
 			return estimateContextTokens({
@@ -324,7 +311,6 @@ export class AgentRunner {
 		const reportProgress = (event: TurnProgressEvent): void => {
 			progress?.({
 				...event,
-				estimatedContextChars: estimateWorkingMessageChars(),
 				estimatedContextTokens: estimateWorkingMessageTokens(),
 			});
 		};
@@ -775,8 +761,6 @@ export class AgentRunner {
 								this.context.getRecentMessages().length,
 							summaryChars: this.context.getSummary()?.length ?? 0,
 							previousSummaryChars: this.context.getSummary()?.length ?? 0,
-							estimatedCharsBefore: 0,
-							estimatedCharsAfter: 0,
 							tokensBefore: 0,
 							tokensAfter: 0,
 							trigger: error.trigger,
@@ -903,8 +887,6 @@ export class AgentRunner {
 						previousRecentMessageCount: this.context.getRecentMessages().length,
 						summaryChars: this.context.getSummary()?.length ?? 0,
 						previousSummaryChars: this.context.getSummary()?.length ?? 0,
-						estimatedCharsBefore: 0,
-						estimatedCharsAfter: 0,
 						tokensBefore: 0,
 						tokensAfter: 0,
 						trigger: error.trigger,

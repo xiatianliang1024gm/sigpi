@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
 	estimateContextTokens,
-	estimateContextWindowChars,
 	estimateMessageTokens,
 } from "../context-window.js";
 import {
@@ -247,9 +246,6 @@ export class ConversationContext {
 			previousRecentMessageCount,
 			summaryChars: this.summary?.length ?? 0,
 			previousSummaryChars,
-			estimatedCharsBefore: estimated.totalChars,
-			estimatedCharsAfter: this.estimateRequest(systemPrompt, toolSchemas)
-				.totalChars,
 			tokensBefore: estimated.totalTokens,
 			tokensAfter: this.estimateRequest(systemPrompt, toolSchemas).totalTokens,
 			trigger: null,
@@ -387,18 +383,10 @@ export class ConversationContext {
 		toolSchemas: readonly ToolSchema[],
 		pendingUserInput?: string,
 	): {
-		totalChars: number;
 		totalTokens: number;
 		usedUsage: boolean;
 		threshold?: number;
 	} {
-		const chars = estimateContextWindowChars({
-			systemPrompt,
-			summary: this.summary,
-			recentMessages: this.recentMessages,
-			toolSchemas,
-			pendingUserInput,
-		});
 		const tokens = estimateContextTokens({
 			systemPrompt,
 			summary: this.summary,
@@ -421,7 +409,6 @@ export class ConversationContext {
 		}
 
 		return {
-			totalChars: chars.totalChars,
 			totalTokens: tokens.totalTokens,
 			usedUsage: tokens.usedUsage,
 			threshold,
@@ -444,7 +431,6 @@ export class ConversationContext {
 		const previousRecentMessageCount = this.recentMessages.length;
 		const previousSummaryChars = this.summary?.length ?? 0;
 		const estimatedBefore = this.estimateRequest(systemPrompt, toolSchemas);
-		const estimatedCharsBefore = estimatedBefore.totalChars;
 		const tokensBefore = estimatedBefore.totalTokens;
 		let summarized = false;
 		let trimmed = false;
@@ -495,7 +481,6 @@ export class ConversationContext {
 						turnId: requestContext?.turnId,
 						trigger,
 						messageCount: messagesToSummarize.length,
-						estimatedChars: estimatedBefore.totalChars,
 						estimatedTokens: estimatedBefore.totalTokens,
 						tokenThreshold: estimatedBefore.threshold,
 					});
@@ -506,7 +491,6 @@ export class ConversationContext {
 						const preparation = {
 							trigger: trigger ?? "force",
 							tokensBefore,
-							totalChars: estimatedBefore.totalChars,
 							summarizedMessages: messagesToSummarize,
 							keptMessages: this.recentMessages.slice(splitIndex),
 							recentMessages: [...this.recentMessages],
@@ -539,8 +523,6 @@ export class ConversationContext {
 								previousRecentMessageCount,
 								summaryChars: previousSummaryChars,
 								previousSummaryChars,
-								estimatedCharsBefore,
-								estimatedCharsAfter: estimatedBefore.totalChars,
 								tokensBefore,
 								tokensAfter: estimatedBefore.totalTokens,
 								trigger,
@@ -587,7 +569,6 @@ export class ConversationContext {
 							trigger,
 							error: error instanceof Error ? error.message : String(error),
 							messageCount: messagesToSummarize.length,
-							estimatedChars: estimatedBefore.totalChars,
 							estimatedTokens: estimatedBefore.totalTokens,
 						});
 						// No deterministic fallback (matches pi / Claude Code): the
@@ -623,8 +604,6 @@ export class ConversationContext {
 			previousRecentMessageCount,
 			summaryChars: this.summary?.length ?? 0,
 			previousSummaryChars,
-			estimatedCharsBefore,
-			estimatedCharsAfter: estimatedAfter.totalChars,
 			tokensBefore,
 			tokensAfter: estimatedAfter.totalTokens,
 			trigger,

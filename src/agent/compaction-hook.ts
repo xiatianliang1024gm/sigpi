@@ -9,12 +9,10 @@ export type CompactionPreparation = {
 	/**
 	 * Why compact was triggered:
 	 * - `"token"`  — provider-reported usage exceeded context window minus reserve
-	 * - `"chars"`  — character estimate exceeded `softLimitChars`
 	 * - `"force"`  — caller passed `options.force = true`
 	 */
 	trigger: "token" | "force";
 	tokensBefore: number;
-	totalChars: number;
 	summarizedMessages: Message[];
 	keptMessages: Message[];
 	recentMessages: Message[];

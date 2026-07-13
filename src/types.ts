@@ -212,7 +212,6 @@ export interface TurnProgressEvent {
 	failureType?: string;
 	interruptStage?: InterruptStage;
 	interruptSource?: InterruptSource;
-	estimatedContextChars?: number;
 	estimatedContextTokens?: number;
 }
 
@@ -408,8 +407,6 @@ export interface ContextUpdateResult {
 	previousRecentMessageCount: number;
 	summaryChars: number;
 	previousSummaryChars: number;
-	estimatedCharsBefore: number;
-	estimatedCharsAfter: number;
 	/**
 	 * Token-based snapshot. `tokensBefore` is computed as
 	 *   `lastUsage.totalTokens + sum(estimateMessageTokens for messages added after lastUsage)`,

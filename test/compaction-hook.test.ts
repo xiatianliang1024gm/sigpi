@@ -63,7 +63,6 @@ test("compaction hook registry merges field-by-field overrides and reports count
 		{
 			trigger: "token",
 			tokensBefore: 100,
-			totalChars: 0,
 			summarizedMessages: [],
 			keptMessages: [],
 			recentMessages: [],
@@ -92,7 +91,6 @@ test("cancel result from any hook returns null and short-circuits later hooks", 
 		{
 			trigger: "force",
 			tokensBefore: 0,
-			totalChars: 0,
 			summarizedMessages: [],
 			keptMessages: [],
 			recentMessages: [],
@@ -117,7 +115,6 @@ test("a throwing hook is swallowed but later hooks still run", async () => {
 		{
 			trigger: "token",
 			tokensBefore: 0,
-			totalChars: 0,
 			summarizedMessages: [],
 			keptMessages: [],
 			recentMessages: [],
@@ -147,7 +144,6 @@ test("register returns an unsubscribe that removes the hook", async () => {
 		{
 			trigger: "token",
 			tokensBefore: 0,
-			totalChars: 0,
 			summarizedMessages: [],
 			keptMessages: [],
 			recentMessages: [],

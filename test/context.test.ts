@@ -189,8 +189,8 @@ test("manual compaction can summarize older messages before soft limit is reache
 	assert.equal(result.recentMessageCount, 1);
 	assert.equal(result.previousSummaryChars, 0);
 	assert.equal(result.summaryChars, "compressed summary".length);
-	assert.ok(result.estimatedCharsBefore > 0);
-	assert.ok(result.estimatedCharsAfter > 0);
+	assert.ok(result.tokensBefore > 0);
+	assert.ok(result.tokensAfter > 0);
 	assert.equal(context.getSummary(), "compressed summary");
 	assert.deepEqual(context.getRecentMessages(), [
 		{ role: "user", content: "latest request" },
@@ -437,8 +437,8 @@ test("context compaction counts system prompt and tool schemas in the estimate",
 	);
 
 	assert.equal(result.summarized, true);
-	assert.ok(result.estimatedCharsBefore > 220);
-	assert.ok(result.tokensBefore > 0);
+	assert.ok(result.tokensBefore > 50);
+	assert.ok(result.tokensAfter > 0);
 	assert.ok(result.tokensAfter > 0);
 });
 
