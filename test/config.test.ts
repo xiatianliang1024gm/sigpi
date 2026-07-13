@@ -33,7 +33,7 @@ test("alias maps drive parseTomlConfig for every section", () => {
 			context_window: 1,
 			reserve_tokens: 1,
 			keep_recent_tokens: 1,
-			process_output: "full",
+			process_output: "detailed",
 		},
 		logging: {
 			level: "info",
@@ -112,7 +112,7 @@ name = "deep-model"
 
 [agent]
 max_steps = 9
-process_output = "full"
+process_output = "detailed"
 
 [logging]
 level = "debug"
@@ -151,7 +151,7 @@ mode = "read_only"
 		},
 		agent: {
 			maxSteps: 9,
-			processOutput: "full",
+			processOutput: "detailed",
 		},
 		logging: {
 			level: "debug",
@@ -238,7 +238,7 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 		homeDir,
 		env: {
 			MODEL_API_KEY: "env-key",
-			AGENT_PROCESS_OUTPUT: "quiet",
+			AGENT_PROCESS_OUTPUT: "compact",
 			AGENT_LOG_TO_CONSOLE: "true",
 			AGENT_SHELL_PATH: "/bin/custom-bash",
 			AGENT_RUN_SHELL_MODE: "full_access",
@@ -257,7 +257,7 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 	assert.equal(config.agent.maxSteps, 7);
 	assert.equal(config.agent.contextWindow, 100000);
 	assert.equal(config.agent.keepRecentTokens, 3000);
-	assert.equal(config.agent.processOutput, "quiet");
+	assert.equal(config.agent.processOutput, "compact");
 	assert.equal(config.logging.level, "warn");
 	assert.equal(config.logging.filePath, "user.log");
 	assert.equal(config.logging.toConsole, true);
@@ -528,13 +528,13 @@ test("default model config uses a 60 second timeout with 2 retries", async () =>
 
 	assert.equal(config.model.timeoutMs, 60000);
 	assert.equal(config.model.maxRetries, 2);
-	assert.equal(config.agent.processOutput, "clear");
+	assert.equal(config.agent.processOutput, "detailed");
 	assert.equal(config.logging.filePath, getDefaultLogFilePath(homeDir));
 	assert.match(renderDefaultConfigToml(), /\[models\.local\]/);
 	assert.match(renderDefaultConfigToml(), /default = "local"/);
 	assert.match(renderDefaultConfigToml(), /timeout_ms = 60000/);
 	assert.match(renderDefaultConfigToml(), /max_retries = 2/);
-	assert.match(renderDefaultConfigToml(), /process_output = "clear"/);
+	assert.match(renderDefaultConfigToml(), /process_output = "detailed"/);
 	assert.match(
 		renderDefaultConfigToml(),
 		/file = "~\/\.sigpi\/logs\/agent\.log"/,
@@ -564,4 +564,32 @@ test("loadAppConfig rejects removed verbose agent key", async () => {
 	);
 
 	assert.throws(() => loadAppConfig({ cwd, homeDir, env: {} }), /verbose/);
+});
+
+test("loadAppConfig rejects invalid process_output", async () => {
+	const cwd = await createTempDir("sigpi-config-invalid-output-");
+	const homeDir = await createTempDir("sigpi-config-invalid-output-home-");
+	const configDir = path.join(cwd, ".sigpi");
+	await mkdir(configDir, { recursive: true });
+	await writeFile(
+		path.join(configDir, "config.toml"),
+		[
+			"[model]",
+			'active = "demo"',
+			"",
+			"[models.demo]",
+			'base_url = "https://configured.example/v1"',
+			'api_key = "configured-key"',
+			'name = "configured-model"',
+			"",
+			"[agent]",
+			'process_output = "quiet"',
+		].join("\n"),
+		"utf8",
+	);
+
+	assert.throws(
+		() => loadAppConfig({ cwd, homeDir, env: {} }),
+		/compact|detailed/,
+	);
 });

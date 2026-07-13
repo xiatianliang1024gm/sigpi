@@ -44,7 +44,6 @@ import type { SessionStore } from "./session/store.js";
 import { InMemorySessionStore } from "./session/in-memory-store.js";
 import { detectShellRuntime } from "./shell.js";
 import type { ToolRegistry } from "./tools/registry.js";
-import { formatToolExecutionResult } from "./tools/render.js";
 import {
 	formatFileEditResultData,
 	formatFileEditSummaries,
@@ -122,9 +121,7 @@ async function runAsk(args: string[]): Promise<void> {
 	printResult(
 		result.outputText ?? "",
 		result.toolExecutions,
-		config.agent.processOutput,
-		runtime.tools,
-		config.agent.processOutput !== "quiet",
+		config.agent.processOutput !== "compact",
 	);
 }
 
@@ -193,37 +190,12 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 function printResult(
 	outputText: string,
 	toolExecutions: ExecutedToolCall[],
-	processOutputMode: ProcessOutputMode,
-	tools?: ToolRegistry,
 	toolResultsAlreadyStreamed = false,
 	writeLine: (line: string) => void = (line) => console.log(line),
 ): void {
 	if (!toolResultsAlreadyStreamed) {
 		for (const line of formatFileEditSummaries(toolExecutions)) {
 			writeLine(line);
-		}
-	}
-
-	if (
-		processOutputMode === "full" &&
-		!toolResultsAlreadyStreamed &&
-		toolExecutions.length > 0
-	) {
-		for (const execution of toolExecutions) {
-			const described = tools
-				? tools.describeProgress(execution.toolCall)
-				: { summary: execution.toolCall.name };
-			writeLine(`[tool] ${execution.toolCall.name} ${described.summary}`);
-			if (described.detail) {
-				writeLine(`[tool-detail] ${described.detail}`);
-			}
-			writeLine("[tool-result]");
-			for (const line of formatToolExecutionResult(
-				execution.toolCall.name,
-				execution.result,
-			).split("\n")) {
-				writeLine(line);
-			}
 		}
 	}
 
@@ -256,7 +228,7 @@ export interface RunChatReplLoopDependencies {
 }
 
 let activeRunningInput: RunningTurnInputListenerHandle | null = null;
-let quietHasPrintedTurn = false;
+const compactState: CompactProgressRenderState = { hasPrintedTurn: false, groupActive: false };
 let activeStatusBarProgressListener:
 	| ((event: TurnProgressEvent) => void)
 	| null = null;
@@ -274,6 +246,11 @@ const DEFAULT_RULE_WIDTH = 80;
 interface ClearProgressRenderState {
 	hasPrintedToolInTurn: boolean;
 	modelRequestCountInTurn: number;
+}
+
+interface CompactProgressRenderState {
+	hasPrintedTurn: boolean;
+	groupActive: boolean;
 }
 
 async function withActiveRunningInput<T>(
@@ -321,7 +298,7 @@ export async function runChatReplLoop(
 		});
 	const queuedLines: string[] = [];
 	let latestProgressEvent: TurnProgressEvent | null = null;
-	const processOutputMode = options.processOutputMode ?? "clear";
+	const processOutputMode = options.processOutputMode ?? "detailed";
 	let turnNumber = 0;
 
 	const refreshStatusBar = (
@@ -446,18 +423,16 @@ export async function runChatReplLoop(
 			continue;
 		}
 
-		if (processOutputMode === "quiet") {
+		if (processOutputMode === "compact") {
 			writeLine("");
 		}
 		printResult(
 			turn.outputText ?? "",
 			turn.toolExecutions,
-			processOutputMode,
-			options.tools,
-			Boolean(options.progressReporter) && processOutputMode !== "quiet",
+			Boolean(options.progressReporter) && processOutputMode !== "compact",
 			writeLine,
 		);
-		if (options.progressReporter && processOutputMode !== "quiet") {
+		if (options.progressReporter && processOutputMode !== "compact") {
 			turnNumber += 1;
 			writeLine(renderTurnDivider(turnNumber));
 		}
@@ -467,10 +442,11 @@ export async function runChatReplLoop(
 }
 
 export function createCliProgressReporter(
-	mode: ProcessOutputMode = "clear",
+	mode: ProcessOutputMode = "detailed",
 ): (event: TurnProgressEvent) => void {
-	if (mode === "quiet") {
-		quietHasPrintedTurn = false;
+	if (mode === "compact") {
+		compactState.hasPrintedTurn = false;
+		compactState.groupActive = false;
 	}
 	const clearState: ClearProgressRenderState = {
 		hasPrintedToolInTurn: false,
@@ -485,12 +461,12 @@ export function createCliProgressReporter(
 		) {
 			setCurrentPlan(parsePlanArgs(event.toolArguments));
 		}
-		if (mode === "quiet") {
-			renderQuietProgressEvent(event);
+		if (mode === "compact") {
+			renderCompactProgressEvent(event, compactState);
 			return;
 		}
 
-		renderClearProgressEvent(event, mode, clearState);
+		renderClearProgressEvent(event, clearState);
 	};
 }
 
@@ -559,19 +535,30 @@ function formatQuietElapsed(ms: number): string {
 	return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`;
 }
 
-function renderQuietProgressEvent(event: TurnProgressEvent): void {
+function renderCompactProgressEvent(
+	event: TurnProgressEvent,
+	state: CompactProgressRenderState,
+): void {
 	const suffix =
 		event.elapsedMs !== undefined
 			? ` (${formatQuietElapsed(event.elapsedMs)})`
 			: "";
 
 	writeWithActiveRunningInput(() => {
+		// A non-tool event ends an open parallel-tool-call group.
+		if (
+			event.type !== "tool_execution_started" &&
+			event.type !== "tool_execution_finished"
+		) {
+			state.groupActive = false;
+		}
+
 		switch (event.type) {
 			case "turn_started": {
-				if (quietHasPrintedTurn) {
+				if (state.hasPrintedTurn) {
 					console.log("");
 				}
-				quietHasPrintedTurn = true;
+				state.hasPrintedTurn = true;
 				if (event.userInput && !activeRunningInput) {
 					printPrefixedBlock(qBlue(`${QUIET_GLYPH_USER} `), event.userInput);
 				}
@@ -604,8 +591,15 @@ function renderQuietProgressEvent(event: TurnProgressEvent): void {
 				return;
 			case "model_request_finished":
 				return;
-			case "assistant_message":
+			case "assistant_message": {
+				const trimmed = event.assistantText?.trim();
+				if (trimmed && !isAssistantTextNoise(trimmed)) {
+					console.log(
+						`${qBlue(QUIET_GLYPH_CALL)} Assistant: ${quietStripInlineCode(trimmed)}`,
+					);
+				}
 				return;
+			}
 			case "context_checkpoint":
 				console.log(
 					qBlue(
@@ -614,12 +608,16 @@ function renderQuietProgressEvent(event: TurnProgressEvent): void {
 				);
 				return;
 			case "tool_calls_received":
+				if ((event.toolCallCount ?? 0) > 1) {
+					state.groupActive = true;
+				}
 				return;
 			case "tool_execution_started": {
 				const label = quietCapitalize(
 					quietStripInlineCode(event.message ?? `tool ${event.toolName}`),
 				);
-				console.log(qCyan(`${QUIET_GLYPH_CALL} ${label}`));
+				const indent = state.groupActive ? "  " : "";
+				console.log(`${indent}${qCyan(`${QUIET_GLYPH_CALL} ${label}`)}`);
 				return;
 			}
 			case "tool_execution_finished": {
@@ -634,8 +632,9 @@ function renderQuietProgressEvent(event: TurnProgressEvent): void {
 					raw.length > 0 ? raw : ok ? "done" : "error",
 					max,
 				);
+				const indent = state.groupActive ? "    " : "  ";
 				console.log(
-					`  ${
+					`${indent}${
 						ok ? qDim(QUIET_GLYPH_RESULT) : qRed(QUIET_GLYPH_RESULT)
 					} ${ok ? qDim(body) : qRed(body)}${suffix}`,
 				);
@@ -667,7 +666,6 @@ function renderQuietProgressEvent(event: TurnProgressEvent): void {
 
 function renderClearProgressEvent(
 	event: TurnProgressEvent,
-	mode: ProcessOutputMode,
 	state: ClearProgressRenderState,
 ): void {
 	const suffix = event.elapsedMs !== undefined ? ` (${event.elapsedMs}ms)` : "";
@@ -744,9 +742,7 @@ function renderClearProgressEvent(
 				}
 				if (event.toolResult) {
 					printIndentedBlock(
-						mode === "full"
-							? event.toolResult
-							: truncateToolResult(
+						truncateToolResult(
 									summarizeClearToolResult(
 										event.toolName,
 										event.toolResult,

@@ -20,6 +20,7 @@ deepening opportunities so future architecture reviews share one vocabulary.
 - **Agent turn** — one `runTurn()` pass in `src/agent/runner.ts`: user input → some number of tool-call steps → final answer. This is the concrete shape of the "agent loop" in this project; step count is bounded by `maxSteps`, and exceeding it falls back to a synthesis answer (`buildMaxStepsFallbackAnswer`).
 - **Function calling** — the mechanism by which the model emits `toolCalls` in its response, the runner dispatches them via `ToolRegistry`, and the results are fed back into the working context. Distinct from **Tool** (the capability definition): a Tool is "what can be done"; function calling is "how the model drives it".
 - **Context management** — see **Compaction**; this project keeps the working context within the token budget using a three-part scheme of "summary + recent messages + in-turn checkpoint", corresponding to one of the three teaching concepts claimed by the README.
+- **Process output mode** — the `[agent] process_output` config value that selects how the CLI renders a turn's progress. `compact`: dense, Claude-Code-style tier showing the user + assistant messages, grouping parallel tool calls returned in one model response, with reduced tool results. `detailed` (default): `compact` plus turn/model-run dividers, counts, and fuller tool-result rendering. _Avoid_: quiet, clear, full — prior names; `full` was removed.
 
 ## Conventions
 

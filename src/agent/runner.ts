@@ -688,7 +688,7 @@ export class AgentRunner {
 								: `Tool failed: ${toolCall.name}`,
 							toolResultData: result.data,
 							toolResult:
-								this.options.processOutputMode === "clear"
+								this.options.processOutputMode === "detailed"
 									? truncateProgressToolResult(renderedToolResult)
 									: renderedToolResult,
 						});

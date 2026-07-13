@@ -114,7 +114,7 @@ test("createCliProgressReporter clear mode prints readable process output", () =
 		"=== CONTENT END ===",
 		"STDERR: (empty)",
 	].join("\n");
-	const reporter = createCliProgressReporter("clear");
+	const reporter = createCliProgressReporter("detailed");
 
 	const lines = captureConsoleLog(() => {
 		reporter({
@@ -160,7 +160,7 @@ test("createCliProgressReporter clear mode prints readable process output", () =
 });
 
 test("createCliProgressReporter quiet mode preserves minimal agent output", () => {
-	const reporter = createCliProgressReporter("quiet");
+	const reporter = createCliProgressReporter("compact");
 
 	const lines = captureConsoleLog(() => {
 		reporter({
@@ -192,35 +192,72 @@ test("createCliProgressReporter quiet mode preserves minimal agent output", () =
 	]);
 });
 
-test("createCliProgressReporter full mode prints untruncated tool output", () => {
-	const reporter = createCliProgressReporter("full");
-	const lineCount = 100;
-	const result = [
-		"TOOL: bash",
-		"STATUS: ok",
-		"RESULT:",
-		...Array.from({ length: lineCount }, (_, index) => `line-${index}`),
-	].join("\n");
+test("createCliProgressReporter compact mode groups parallel tool calls from one model response", () => {
+	const reporter = createCliProgressReporter("compact");
 
 	const lines = captureConsoleLog(() => {
+		reporter({ type: "turn_started", userInput: "check the repo" });
+		reporter({
+			type: "assistant_message",
+			assistantText: "I will inspect a few files first.",
+		});
+		reporter({ type: "tool_calls_received", toolCallCount: 3 });
+		reporter({
+			type: "tool_execution_started",
+			toolName: "bash",
+			message: "shell pwd",
+		});
 		reporter({
 			type: "tool_execution_finished",
 			toolName: "bash",
 			toolOk: true,
-			toolResult: result,
+			toolResult: "TOOL: bash\nSTATUS: ok\nRESULT:\nhello1",
 		});
+		reporter({
+			type: "tool_execution_started",
+			toolName: "grep",
+			message: "grep x",
+		});
+		reporter({
+			type: "tool_execution_finished",
+			toolName: "grep",
+			toolOk: true,
+			toolResult: "RESULT:\nhello2",
+		});
+		reporter({
+			type: "tool_execution_started",
+			toolName: "read",
+			message: "read f",
+		});
+		reporter({
+			type: "tool_execution_finished",
+			toolName: "read",
+			toolOk: true,
+			toolResult: "RESULT:\nhello3",
+		});
+		reporter({ type: "turn_finished", elapsedMs: 1234 });
 	});
 	const visibleLines = lines.map((line) => stripAnsi(line));
 
-	assert.equal(visibleLines.includes("  line-99"), true);
-	assert.equal(
-		visibleLines.some((line) => line.includes("[tool result truncated]")),
-		false,
+	assert.equal(visibleLines[0], "> check the repo");
+	assert.ok(
+		visibleLines.some((line) => line.includes("I will inspect a few files first.")),
+		"compact shows the assistant thinking note",
 	);
+	const shellLine = visibleLines.find((line) => line.includes("Shell pwd"));
+	assert.ok(shellLine?.startsWith("  "), "grouped tool start is indented two spaces");
+	assert.ok(
+		!shellLine?.startsWith("    "),
+		"grouped tool start is not indented four spaces",
+	);
+	const hello1 = visibleLines.find((line) => line.includes("hello1"));
+	assert.ok(hello1?.startsWith("    "), "grouped tool result is indented four spaces");
+	const doneLine = visibleLines.at(-1);
+	assert.ok(doneLine?.includes("Done"), "turn still ends with Done");
 });
 
 test("createCliProgressReporter clear mode renders file edit diffs from structured results", () => {
-	const reporter = createCliProgressReporter("clear");
+	const reporter = createCliProgressReporter("detailed");
 
 	const lines = captureConsoleLog(() => {
 		reporter({
@@ -288,7 +325,7 @@ test("createCliProgressReporter clear mode renders file edit diffs from structur
 });
 
 test("createCliProgressReporter clear mode separates tool calls and model runs", () => {
-	const reporter = createCliProgressReporter("clear");
+	const reporter = createCliProgressReporter("detailed");
 
 	const lines = captureConsoleLog(() => {
 		reporter({
@@ -336,7 +373,7 @@ test("createCliProgressReporter clear mode separates tool calls and model runs",
 });
 
 test("createCliProgressReporter clear mode does not duplicate update_plan content", () => {
-	const reporter = createCliProgressReporter("clear");
+	const reporter = createCliProgressReporter("detailed");
 	const planDetail = [
 		"1. ✅ 运行 pnpm run release:check（lint + 测试 + 打包冒烟测试）",
 		"2. ✅ 运行 bash scripts/release.sh 发布新版本",
@@ -377,7 +414,7 @@ test("createCliProgressReporter clear mode does not duplicate update_plan conten
 });
 
 test("createCliProgressReporter clears a completed plan at turn start", () => {
-	const reporter = createCliProgressReporter("clear");
+	const reporter = createCliProgressReporter("detailed");
 	setCurrentPlan({
 		explanation: null,
 		items: [
@@ -1066,7 +1103,7 @@ test("runChatReplLoop prints the turn divider after the final answer", async () 
 				state: runtimeToChatReplState(runtime),
 				store: runtime.store,
 				progressReporter: () => {},
-				processOutputMode: "clear",
+				processOutputMode: "detailed",
 			},
 			{
 				readChatInput: async () =>
@@ -1584,7 +1621,7 @@ test("runChatReplLoop preserves draft input across progress output", async () =>
 });
 
 test("createCliProgressReporter skips assistant_message when text is only whitespace", () => {
-	const reporter = createCliProgressReporter("clear");
+	const reporter = createCliProgressReporter("detailed");
 
 	const lines = captureConsoleLog(() => {
 		reporter({ type: "turn_started", userInput: "hi" });
@@ -1601,7 +1638,7 @@ test("createCliProgressReporter skips assistant_message when text is only whites
 });
 
 test("createCliProgressReporter filters minimax-style end-of-thinking markers", () => {
-	const reporter = createCliProgressReporter("clear");
+	const reporter = createCliProgressReporter("detailed");
 
 	const lines = captureConsoleLog(() => {
 		reporter({ type: "turn_started", userInput: "hi" });
@@ -1625,7 +1662,7 @@ test("createCliProgressReporter filters minimax-style end-of-thinking markers", 
 });
 
 test("createCliProgressReporter filters bare XML-ish tags from assistant_message", () => {
-	const reporter = createCliProgressReporter("clear");
+	const reporter = createCliProgressReporter("detailed");
 
 	const lines = captureConsoleLog(() => {
 		reporter({ type: "turn_started", userInput: "hi" });
@@ -1648,7 +1685,7 @@ test("createCliProgressReporter filters bare XML-ish tags from assistant_message
 });
 
 test("createCliProgressReporter still prints assistant_message with real content", () => {
-	const reporter = createCliProgressReporter("clear");
+	const reporter = createCliProgressReporter("detailed");
 
 	const lines = captureConsoleLog(() => {
 		reporter({ type: "turn_started", userInput: "hi" });

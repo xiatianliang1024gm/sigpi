@@ -44,7 +44,14 @@ const agentConfigSchema = z.object({
 	reserveTokens: z.number().int().nonnegative().default(16_384),
 	/** Recent tokens to keep un-summarized when summarizing. */
 	keepRecentTokens: z.number().int().positive().default(20_000),
-	processOutput: z.enum(["clear", "quiet", "full"]).default("clear"),
+	processOutput: z
+		.enum(["compact", "detailed"], {
+			errorMap: () => ({
+				message:
+					'Invalid [agent] process_output. Valid values are "compact" or "detailed".',
+			}),
+		})
+		.default("detailed"),
 });
 
 const loggingConfigSchema = z.object({
@@ -447,7 +454,7 @@ export function renderDefaultConfigToml(): string {
 		"context_window = 200000",
 		"reserve_tokens = 16384",
 		"keep_recent_tokens = 20000",
-		'process_output = "clear"',
+		'process_output = "detailed"',
 		"",
 		"[logging]",
 		'level = "info"',
@@ -779,14 +786,8 @@ function parseOptionalRunShellMode(
 function parseOptionalProcessOutputMode(
 	raw: string | undefined,
 ): ProcessOutputMode | undefined {
-	switch (raw) {
-		case "clear":
-		case "quiet":
-		case "full":
-			return raw;
-		default:
-			return undefined;
-	}
+	if (raw === undefined) return undefined;
+	return raw as ProcessOutputMode;
 }
 
 function expandHomePath(rawPath: string, homeDir: string): string {

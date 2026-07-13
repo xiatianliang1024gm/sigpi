@@ -39,3 +39,11 @@ To mitigate "large responses time out easily", model requests were switched to S
 | [0006](./0006-streaming-unconditional-with-optout.md) | Streaming on unconditionally in transport + per-model `stream` opt-out + single-chunk JSON tolerance | `37f7373` | Provider constraints forced a reversal from "no new config" to a minimal `stream` switch |
 | [0007](./0007-both-adapters-delta-folding.md) | Both adapters do pure delta folding; `responses` does not rely on `response.completed` | `37f7373` | Chose robustness over the `response.completed` full-payload shortcut |
 | [0010](./0010-agent-turn-single-module.md) | Agent turn is a single deep module over a SessionStore interface | `—` | One-shot persists a session by default (`--no-session` = in-memory store); `AgentTurn` wraps `SessionRuntime`+`AgentRunner`; `SessionStore` becomes an interface |
+
+## Process output modes pass (2026-07-13)
+
+Renamed `[agent] process_output` from `quiet`/`clear`/`full` to `compact`/`detailed`, made `detailed` the default, removed `full`, and grouped parallel tool calls in `compact`. Came from a `/grilling` session (grill-with-docs).
+
+| # | Title | Commit | One-liner |
+|---|-------|--------|-----------|
+| [0011](./0011-process-output-modes-compact-detailed.md) | Process output modes renamed to compact/detailed; `full` removed | `—` | Two tiers: `compact` (dense, groups parallel tool calls) and `detailed` (adds dividers/counts); invalid values error; `full` gone |

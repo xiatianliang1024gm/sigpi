@@ -23,7 +23,7 @@ max_steps = 20
 soft_context_limit = 200000
 hard_context_limit = 260000
 keep_last_messages = 8
-process_output = "clear"
+process_output = "detailed"
 
 [logging]
 level = "info"
