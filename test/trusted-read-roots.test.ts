@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { createAgentRuntime } from "../src/runtime.js";
 import { globTool } from "../src/tools/builtin/glob.js";
 import { grepTool } from "../src/tools/builtin/grep.js";
 import { createReadTool } from "../src/tools/builtin/read.js";
@@ -275,5 +277,67 @@ test("listWorkspaceFilesFallback honors allowedRoots for an outside-cwd startPat
 	assert.ok(
 		files.some((file) => file.endsWith("SKILL.md")),
 		`expected SKILL.md in results: ${JSON.stringify(files)}`,
+	);
+});
+
+// ---------------------------------------------------------------------------
+// Runtime wiring: config.tools.allowed_roots must reach context.allowedReadRoots
+// ---------------------------------------------------------------------------
+
+test("config.tools.allowed_roots flows into read tool's trusted roots at runtime", async () => {
+	const scratch = await createTempDir("sigpi-runtime-trusted-");
+	const notePath = path.join(scratch, "note.txt");
+	writeFileSync(notePath, "hello from scratch\n");
+
+	// Write a real config file carrying allowed_roots, then let the runtime
+	// load it from disk — mirroring the actual user scenario.
+	const configDir = path.join(cwd, ".sigpi");
+	await mkdir(configDir, { recursive: true });
+	await writeFile(
+		path.join(configDir, "config.toml"),
+		[
+			"[model]",
+			'active = "test"',
+			"",
+			"[models.test]",
+			'base_url = "https://example.test/v1"',
+			'api_key = "test-key"',
+			'name = "test-model"',
+			"timeout_ms = 2000",
+			"max_retries = 0",
+			"retry_base_delay_ms = 10",
+			"",
+			"[tools]",
+			`allowed_roots = ["${scratch}"]`,
+		].join("\n"),
+		"utf8",
+	);
+
+	const runtime = await createAgentRuntime();
+	// The runner wires config.tools.allowed_roots into its trusted read roots.
+	const runnerOptions = (
+		runtime.runner as unknown as {
+			options: { allowedReadRoots: string[] };
+		}
+	).options;
+	assert.ok(
+		runnerOptions.allowedReadRoots.includes(scratch),
+		`expected ${scratch} in allowedReadRoots: ${JSON.stringify(runnerOptions.allowedReadRoots)}`,
+	);
+
+	const result = await runtime.tools.execute(
+		{
+			id: "runtime_read_trusted_1",
+			name: "read",
+			arguments: { file_path: notePath },
+			rawArguments: JSON.stringify({ file_path: notePath }),
+		},
+		{ cwd, allowedReadRoots: runnerOptions.allowedReadRoots },
+	);
+
+	assert.equal(result.ok, true);
+	assert.match(
+		(result.data as { rendered: string }).rendered,
+		/hello from scratch/,
 	);
 });

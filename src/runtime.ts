@@ -290,6 +290,7 @@ export async function createAgentRuntime(
 	const trustedReadRoots = await buildTrustedReadRoots([
 		bashOutputDir,
 		...skillCatalog.loadedSkills.map((skill) => skill.dir),
+		...config.tools.allowedRoots,
 	]);
 
 	const runner = new AgentRunner({
