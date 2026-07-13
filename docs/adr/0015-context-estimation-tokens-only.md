@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-07-13
-- **Commit**: (pending implementation)
+- **Commit**: `58bb157`
 
 ## Context and Problem
 
