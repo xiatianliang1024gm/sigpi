@@ -17,7 +17,8 @@ export type RequestFailureKind =
 	| "invalid_response"
 	| "body_read_failed"
 	| "empty_response"
-	| "stream_error";
+	| "stream_error"
+	| "truncated";
 
 /** Error thrown for any failed model request, tagged with a failure kind. */
 export class ModelRequestError extends Error {
@@ -48,6 +49,10 @@ function normalizeRequestError(error: unknown): ModelRequestError {
 }
 
 function isRetryableRequestError(error: ModelRequestError): boolean {
+	if (error.kind === "truncated") {
+		return false;
+	}
+
 	if (error.kind === "timeout" || error.kind === "network_error") {
 		return true;
 	}
@@ -244,6 +249,22 @@ export class ModelTransport {
 		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
 			try {
 				const response = await this.performRequest(url, request, makeAdapter());
+				// A hard truncation (max_tokens / content filter) is not recoverable
+				// by retrying with the same limit, so surface it as an error rather
+				// than returning a partial answer. The summarizer and checkpoint
+				// paths handle their own truncation (purpose "summary"), so leave
+				// those responses untouched.
+				if (
+					(response.finishReason === "length" ||
+						response.finishReason === "content_filter") &&
+					request.context?.purpose !== "summary"
+				) {
+					throw new ModelRequestError(
+						`Model response was truncated (finish_reason=${response.finishReason}) and is not usable.`,
+						"truncated",
+						{ finishReason: response.finishReason },
+					);
+				}
 				this.logger?.info("model_request_succeeded", {
 					runId: request.context?.runId,
 					sessionId: request.context?.sessionId,
@@ -480,8 +501,9 @@ export class ModelTransport {
 			}
 
 			if (frameCount > 0) {
+				let partial: ModelResponse;
 				try {
-					return adapter.finalize();
+					partial = adapter.finalize();
 				} catch (error) {
 					throw new ModelRequestError(
 						`Model SSE stream ended before a complete response could be assembled: ${error instanceof Error ? error.message : String(error)}`,
@@ -489,6 +511,20 @@ export class ModelTransport {
 						{ httpStatus: response.status, frameCount },
 					);
 				}
+				// The [DONE] sentinel was never received. If the provider already
+				// signalled completion via finish_reason, the accumulated content
+				// is intact and usable (only the sentinel was dropped). Otherwise
+				// the response was truncated mid-stream and must be surfaced as a
+				// failed (retryable) stream so the turn loop does not silently
+				// persist a partial answer.
+				if (partial.finishReason) {
+					return partial;
+				}
+				throw new ModelRequestError(
+					"Model SSE stream ended before [DONE] with an incomplete response (missing finish_reason).",
+					"stream_error",
+					{ httpStatus: response.status, frameCount },
+				);
 			}
 
 			throw new ModelRequestError(

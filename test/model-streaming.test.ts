@@ -282,6 +282,66 @@ test("SSE error event is surfaced as a retryable stream_error", async () => {
 	);
 });
 
+test("stream ends after data frames but before [DONE] is a stream_error, not partial text", async () => {
+	// A connection that delivers a content frame then closes without the
+	// [DONE] sentinel must be a failed (retryable) stream. Otherwise the
+	// partial text is silently accepted as a completed turn and the agent
+	// stops mid-answer with no error surfaced.
+	const frames = ['data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'];
+	const transport = new ModelTransport(
+		config({ timeoutMs: 50, maxRetries: 0 }),
+		undefined,
+		fetchImpl(() => sseResponse(frames)),
+	);
+	await assert.rejects(
+		() =>
+			transport.generate(request(), () => new ChatCompletionsAdapter(config())),
+		(error) =>
+			error instanceof ModelRequestError && error.kind === "stream_error",
+	);
+});
+
+test("finish_reason length on a turn response is surfaced as a truncated error", async () => {
+	const frames = [
+		'data: {"choices":[{"delta":{"content":"hel"}}]}\n\n',
+		'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
+		'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n',
+		"data: [DONE]\n\n",
+	];
+	const transport = new ModelTransport(
+		config({ timeoutMs: 50, maxRetries: 0 }),
+		undefined,
+		fetchImpl(() => sseResponse(frames)),
+	);
+	await assert.rejects(
+		() =>
+			transport.generate(
+				{ ...request(), context: { purpose: "turn" } },
+				() => new ChatCompletionsAdapter(config()),
+			),
+		(error) => error instanceof ModelRequestError && error.kind === "truncated",
+	);
+});
+
+test("finish_reason length on a summary response is left for the caller to handle", async () => {
+	const frames = [
+		'data: {"choices":[{"delta":{"content":"hel"}}]}\n\n',
+		'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n',
+		"data: [DONE]\n\n",
+	];
+	const transport = new ModelTransport(
+		config({ timeoutMs: 50, maxRetries: 0 }),
+		undefined,
+		fetchImpl(() => sseResponse(frames)),
+	);
+	const result = await transport.generate(
+		{ ...request(), context: { purpose: "summary" } },
+		() => new ChatCompletionsAdapter(config()),
+	);
+	assert.equal(result.assistantText, "hel");
+	assert.equal(result.finishReason, "length");
+});
+
 test("premature EOF with no data frames is a stream_error", async () => {
 	const empty = new ReadableStream<Uint8Array>({
 		start(controller) {

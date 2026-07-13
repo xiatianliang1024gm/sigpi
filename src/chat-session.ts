@@ -1,5 +1,6 @@
 import type { AgentRunner } from "./agent/runner.js";
 import type { TurnInterruptController } from "./interrupt.js";
+import { formatModelErrorMessage } from "./model/error-format.js";
 import type { SessionRuntime } from "./session/runtime.js";
 import type { ExecutedToolCall, RuntimeLogger } from "./types.js";
 
@@ -29,14 +30,14 @@ export async function executeChatTurn(
 			toolExecutions: result.toolExecutions,
 		};
 	} catch (error) {
-		const errorMessage = error instanceof Error ? error.message : String(error);
+		const rawMessage = error instanceof Error ? error.message : String(error);
 		logger.error("chat_turn_failed", {
 			input,
-			errorMessage,
+			errorMessage: rawMessage,
 		});
 		return {
 			ok: false,
-			errorMessage,
+			errorMessage: formatModelErrorMessage(error),
 		};
 	}
 }

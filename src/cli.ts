@@ -422,7 +422,7 @@ export async function runChatReplLoop(
 
 		if (!turn.ok) {
 			latestProgressEvent = null;
-			writeError(`Request failed: ${turn.errorMessage}`);
+			writeError(turn.errorMessage);
 			continue;
 		}
 
