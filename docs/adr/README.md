@@ -56,3 +56,4 @@ Gave the `ModelProvider` seam a home module in `src/model/`. Came from the archi
 |---|-------|--------|-----------|
 | [0012](./0012-model-provider-seam-home.md) | Model provider seam gets a home module | `d2bcb2f` | `ModelProvider` defined + `createModelProvider` in `src/model/provider.ts`; `createRuntimeProvider` deleted; no consumer names the concrete class |
 | [0013](./0013-entry-stream-owner-already-resolved.md) | Entry-stream builders already have one owner (candidate 5, no change) | `—` | ADR-0004 (`db809cd`) already unified `hydrateState` + `resolveEntriesForPersist` on `buildEntriesFromContextState`; report premise was stale |
+| [0014](./0014-skill-discovery-helpers-not-collapsed.md) | Skill-discovery helpers not collapsed (candidate 6, no change) | `—` | Rated Speculative; `catalog.ts`/`manifest.ts`/`format.ts` are already a clean orchestrator + 2 pure-helper split, no drift risk |
