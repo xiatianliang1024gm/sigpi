@@ -29,6 +29,8 @@ import {
 import { TurnInterruptController } from "./interrupt.js";
 import { resolveDatedLogFilePath } from "./logger.js";
 import {
+	formatPlanCompletion,
+	formatPlanInProgress,
 	formatPlanProgressSummary,
 	getCurrentPlan,
 	parsePlanArgs,
@@ -622,6 +624,27 @@ function renderCompactProgressEvent(
 			}
 			case "tool_execution_finished": {
 				const ok = event.toolOk === true;
+				if (event.toolName === "update_plan") {
+					const plan = getCurrentPlan();
+					const completion =
+						plan && ok ? formatPlanCompletion(plan) : null;
+					const inProgress =
+						plan && ok ? formatPlanInProgress(plan) : null;
+					const indent = state.groupActive ? "    " : "  ";
+					const body = completion
+						? completion
+						: inProgress
+							? `Plan updated — ${inProgress}`
+							: ok
+								? "Plan updated"
+								: "error";
+					console.log(
+						`${indent}${
+							ok ? qDim(QUIET_GLYPH_RESULT) : qRed(QUIET_GLYPH_RESULT)
+						} ${ok ? qDim(body) : qRed(body)}${suffix}`,
+					);
+					return;
+				}
 				const max =
 					typeof process.stdout.columns === "number" &&
 					process.stdout.columns > 20

@@ -56,6 +56,32 @@ export function formatPlanProgressSummary(view: PlanView): string {
 }
 
 /**
+ * One-line completion message for the compact progress renderer, e.g.
+ * "✅ All 3 steps complete". Returns null when the plan is not fully done so
+ * callers can fall back to the normal progress line.
+ */
+export function formatPlanCompletion(view: PlanView): string | null {
+	if (!view.items.every((item) => item.status === "completed")) {
+		return null;
+	}
+	const total = view.items.length;
+	return `✅ All ${total} step${total === 1 ? "" : "s"} complete`;
+}
+
+/**
+ * Label of the step currently in progress, preferring its `activeForm` (e.g.
+ * "Running the test suite") and falling back to the step text. Returns null
+ * when no step is in progress, so callers can fall back to a generic message.
+ */
+export function formatPlanInProgress(view: PlanView): string | null {
+	const inProgress = view.items.find((item) => item.status === "in_progress");
+	if (!inProgress) {
+		return null;
+	}
+	return inProgress.activeForm?.trim() || inProgress.step;
+}
+
+/**
  * Full numbered checklist, used as a banner in the non-TUI CLI.
  */
 export function renderPlanFull(view: PlanView): string {
