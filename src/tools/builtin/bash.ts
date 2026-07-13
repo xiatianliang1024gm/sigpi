@@ -83,6 +83,7 @@ export function createBashTool(
 	shellRuntime: ShellRuntime,
 	config: RunShellConfig = { mode: "workspace_write" },
 	tracker: ReadTracker,
+	allowedRoots: string[] = [],
 ): ToolDefinition<BashArgs> {
 	return {
 		name: "bash",
@@ -150,7 +151,12 @@ export function createBashTool(
 			const outputDir =
 				bash?.outputDir ?? path.join(os.tmpdir(), "sigpi-bash-outputs");
 			const mode = config.mode;
-			const denial = evaluateCommandPolicy(command, workingDir.current, mode);
+			const denial = evaluateCommandPolicy(
+				command,
+				workingDir.current,
+				mode,
+				allowedRoots,
+			);
 
 			if (denial) {
 				context.logger?.warn("tool_execution_failed", {

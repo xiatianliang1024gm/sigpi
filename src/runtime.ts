@@ -8,6 +8,7 @@ import {
 } from "./agent/compaction-hook.js";
 import { ConversationContext } from "./agent/context.js";
 import { AgentRunner } from "./agent/runner.js";
+import { type AgentTurn, createAgentTurn } from "./agent/turn.js";
 import {
 	type AppConfig,
 	getDefaultSessionsRoot,
@@ -21,7 +22,6 @@ import {
 	hydrateRuntimeFromSession,
 	SessionRuntime,
 } from "./session/runtime.js";
-import { type AgentTurn, createAgentTurn } from "./agent/turn.js";
 import {
 	createSystemPromptFingerprint,
 	DiskSessionStore,
@@ -221,7 +221,11 @@ export async function createAgentRuntime(
 			logger: runLogger,
 		});
 	const compactionHooks = createCompactionHookRegistry();
-	const tools = createDefaultToolRegistry(shellRuntime, config.tools.bash);
+	const tools = createDefaultToolRegistry(
+		shellRuntime,
+		config.tools.bash,
+		config.tools.allowedRoots,
+	);
 	const conversationContext = new ConversationContext({
 		summaryEnabled: true,
 		contextWindow: config.agent.contextWindow,

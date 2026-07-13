@@ -23,6 +23,7 @@ type WriteArgs = z.infer<typeof writeSchema>;
 export function createWriteTool(
 	config: RunShellConfig = { mode: "workspace_write" },
 	tracker: ReadTracker,
+	allowedRoots: string[] = [],
 ): ToolDefinition<WriteArgs> {
 	return {
 		name: "write",
@@ -58,6 +59,7 @@ export function createWriteTool(
 					file_path,
 					config.mode,
 					"write",
+					allowedRoots,
 				));
 			} catch (error) {
 				if (error instanceof SandboxPolicyError) {

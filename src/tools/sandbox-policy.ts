@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { RunShellMode } from "../types.js";
-import { resolveWorkspacePath } from "./path-utils.js";
+import { isWithin, resolveWorkspacePath } from "./path-utils.js";
 
 export interface SandboxDenial {
 	reason: string;
@@ -42,18 +42,20 @@ export function resolveWritableWorkspacePath(
 	relativePath: string,
 	mode: RunShellMode,
 	toolName: MutatingToolName,
+	allowedRoots: string[] = [],
 ): { resolved: string; relative: string } {
 	const denial = evaluateMutatingToolPolicy(toolName, mode);
 	if (denial) {
 		throw new SandboxPolicyError(denial.reason);
 	}
-	return resolveWorkspacePath(cwd, relativePath);
+	return resolveWorkspacePath(cwd, relativePath, allowedRoots);
 }
 
 export function evaluateCommandPolicy(
 	command: string,
 	cwd: string,
 	mode: RunShellMode,
+	allowedRoots: string[] = [],
 ): SandboxDenial | null {
 	if (mode === "full_access") {
 		return null;
@@ -76,7 +78,10 @@ export function evaluateCommandPolicy(
 	}
 
 	for (const target of collectWriteTargets(command)) {
-		if (!isPathWithinWorkspace(target, cwd)) {
+		if (
+			!isPathWithinWorkspace(target, cwd) &&
+			!isWithinTrustedRoot(target, allowedRoots)
+		) {
 			return {
 				reason: `workspace_write mode blocks writes outside the workspace: ${target}`,
 			};
@@ -84,6 +89,10 @@ export function evaluateCommandPolicy(
 	}
 
 	return null;
+}
+
+function isWithinTrustedRoot(target: string, allowedRoots: string[]): boolean {
+	return allowedRoots.some((root) => isWithin(path.resolve(target), root));
 }
 
 export class SandboxPolicyError extends Error {

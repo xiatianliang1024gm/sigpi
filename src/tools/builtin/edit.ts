@@ -24,6 +24,7 @@ type EditArgs = z.infer<typeof editSchema>;
 export function createEditTool(
 	config: RunShellConfig = { mode: "workspace_write" },
 	tracker: ReadTracker,
+	allowedRoots: string[] = [],
 ): ToolDefinition<EditArgs> {
 	return {
 		name: "edit",
@@ -78,6 +79,7 @@ export function createEditTool(
 					file_path,
 					config.mode,
 					"edit",
+					allowedRoots,
 				));
 			} catch (error) {
 				if (error instanceof SandboxPolicyError) {

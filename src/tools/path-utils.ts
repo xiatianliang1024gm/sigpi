@@ -25,7 +25,7 @@ export function resolveWorkspacePath(
 	return { resolved, relative };
 }
 
-function isWithin(target: string, root: string): boolean {
+export function isWithin(target: string, root: string): boolean {
 	const resolvedTarget = path.resolve(target);
 	const resolvedRoot = path.resolve(root);
 	return (

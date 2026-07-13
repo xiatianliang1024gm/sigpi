@@ -1934,3 +1934,142 @@ test("read result object omits the path field", async () => {
 	assert.equal(result.ok, true);
 	assert.equal("path" in (result.data as Record<string, unknown>), false);
 });
+
+// --- Trusted roots (tools.allowed_roots) ---
+
+test("write tool permits a path under an allowed root outside the workspace", async () => {
+	const cwd = await createTempDir("sigpi-write-trusted-root-");
+	const scratch = await createTempDir("sigpi-write-trusted-scratch-");
+	const tools = new ToolRegistry([
+		createWriteTool({ mode: "workspace_write" }, new ReadTracker(), [scratch]),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_write_trusted_1",
+			name: "write",
+			arguments: {
+				file_path: path.join(scratch, "note.txt"),
+				content: "hi",
+			},
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+
+	assert.equal(result.ok, true);
+	assert.equal(existsSync(path.join(scratch, "note.txt")), true);
+});
+
+test("write tool still rejects a path outside both cwd and allowed roots", async () => {
+	const cwd = await createTempDir("sigpi-write-blocked-");
+	const scratch = await createTempDir("sigpi-write-blocked-scratch-");
+	const tools = new ToolRegistry([
+		createWriteTool({ mode: "workspace_write" }, new ReadTracker(), [scratch]),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_write_blocked_1",
+			name: "write",
+			arguments: {
+				file_path: path.join(cwd, "..", "escape.txt"),
+				content: "hi",
+			},
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+
+	assert.equal(result.ok, false);
+	assert.match(result.error ?? "", /working directory/);
+});
+
+test("edit tool permits a path under an allowed root outside the workspace", async () => {
+	const cwd = await createTempDir("sigpi-edit-trusted-root-");
+	const scratch = await createTempDir("sigpi-edit-trusted-scratch-");
+	const notePath = path.join(scratch, "note.txt");
+	await writeFile(notePath, "old\n");
+	const tracker = new ReadTracker();
+	const tools = new ToolRegistry([
+		createReadTool(tracker),
+		createEditTool({ mode: "workspace_write" }, tracker, [scratch]),
+	]);
+
+	// Read-before-edit must be satisfied even for trusted-root paths.
+	await tools.execute(
+		{
+			id: "call_edit_trusted_read",
+			name: "read",
+			arguments: { file_path: notePath },
+			rawArguments: "{}",
+		},
+		{ cwd, allowedReadRoots: [scratch] },
+	);
+
+	const result = await tools.execute(
+		{
+			id: "call_edit_trusted_1",
+			name: "edit",
+			arguments: {
+				file_path: notePath,
+				old_string: "old",
+				new_string: "new",
+			},
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+
+	assert.equal(result.ok, true);
+	assert.equal(await readFile(notePath, "utf8"), "new\n");
+});
+
+test("bash workspace_write mode permits writes under an allowed root", async () => {
+	const shellRuntime = createShellRuntime("sh", "linux");
+	const scratch = await createTempDir("sigpi-bash-trusted-scratch-");
+	const tools = new ToolRegistry([
+		createBashTool(
+			shellRuntime,
+			{ mode: "workspace_write" },
+			new ReadTracker(),
+			[scratch],
+		),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_bash_trusted_1",
+			name: "bash",
+			arguments: { command: `touch ${path.join(scratch, "out.txt")}` },
+			rawArguments: "{}",
+		},
+		{ cwd: process.cwd(), shell: shellRuntime },
+	);
+
+	assert.equal(result.ok, true);
+	assert.equal(existsSync(path.join(scratch, "out.txt")), true);
+});
+
+test("bash read_only mode still blocks writes even under an allowed root", async () => {
+	const shellRuntime = createShellRuntime("sh", "linux");
+	const scratch = await createTempDir("sigpi-bash-ro-scratch-");
+	const tools = new ToolRegistry([
+		createBashTool(shellRuntime, { mode: "read_only" }, new ReadTracker(), [
+			scratch,
+		]),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_bash_ro_1",
+			name: "bash",
+			arguments: { command: `touch ${path.join(scratch, "out.txt")}` },
+			rawArguments: "{}",
+		},
+		{ cwd: process.cwd(), shell: shellRuntime },
+	);
+
+	assert.equal(result.ok, false);
+	assert.match(result.error ?? "", /read_only/);
+});

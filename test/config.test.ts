@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -63,6 +64,11 @@ test("alias maps drive parseTomlConfig for every section", () => {
 	};
 
 	for (const [section, aliases] of Object.entries(CONFIG_ALIASES)) {
+		// `tools` carries an array-valued alias (allowed_roots) which this
+		// scalar-sentinel harness can't emit; it is covered by a dedicated test.
+		if (section === "tools") {
+			continue;
+		}
 		const lines = [`[${tomlSections[section]}]`];
 		for (const [, snake] of Object.entries(aliases)) {
 			const value = sentinels[section][snake];
@@ -171,6 +177,23 @@ mode = "read_only"
 			},
 		},
 	});
+});
+
+test("parseTomlConfig maps tools.allowed_roots into tools.allowedRoots", () => {
+	const parsed = parseTomlConfig(`
+[tools]
+allowed_roots = ["/tmp", "/var/scratch"]
+`);
+	assert.deepEqual(parsed.tools?.allowedRoots, ["/tmp", "/var/scratch"]);
+});
+
+test("renderDefaultConfigToml seeds allowed_roots with the OS temp dir", () => {
+	const rendered = renderDefaultConfigToml();
+	assert.match(rendered, /\[tools\]/);
+	assert.ok(
+		rendered.includes(`allowed_roots = ["${os.tmpdir()}"]`),
+		`expected init template to seed allowed_roots with ${os.tmpdir()}`,
+	);
 });
 
 test("loadAppConfig merges user config, project config, and env overrides", async () => {

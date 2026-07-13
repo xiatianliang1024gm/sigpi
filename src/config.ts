@@ -106,6 +106,7 @@ const appConfigSchema = z.object({
 	tools: z
 		.object({
 			bash: bashConfigSchema.default({}),
+			allowedRoots: z.array(z.string()).default([]),
 		})
 		.default({}),
 });
@@ -159,6 +160,9 @@ const BASH_ALIASES: Record<string, string> = {
 	maintainProjectWorkingDir: "maintain_project_working_dir",
 	envFile: "env_file",
 };
+const TOOLS_ALIASES: Record<string, string> = {
+	allowedRoots: "allowed_roots",
+};
 
 /**
  * The six section alias maps, grouped as the canonical camelCase ↔ snake_case
@@ -173,6 +177,7 @@ export const CONFIG_ALIASES = {
 	storage: STORAGE_ALIASES,
 	shell: SHELL_ALIASES,
 	bash: BASH_ALIASES,
+	tools: TOOLS_ALIASES,
 };
 
 /**
@@ -229,6 +234,7 @@ const tomlRootSchema = z.object({
 	tools: z
 		.object({
 			bash: snakeFields(bashConfigSchema, BASH_ALIASES).optional(),
+			allowed_roots: z.array(z.string()).optional(),
 		})
 		.partial()
 		.optional(),
@@ -287,6 +293,12 @@ export interface RunShellConfig {
 
 export interface ToolsConfig {
 	bash: RunShellConfig;
+	/**
+	 * Absolute paths trusted for both reading and writing, in addition to the
+	 * working directory. Seeded by `init` with the OS temp dir; the schema
+	 * default is `[]` so the code's safety default stays strict.
+	 */
+	allowedRoots: string[];
 }
 
 export interface AppConfig {
@@ -302,6 +314,7 @@ export interface AppConfig {
 
 interface PartialToolsConfig {
 	bash?: Partial<RunShellConfig>;
+	allowedRoots?: string[];
 }
 
 interface PartialConfig {
@@ -381,7 +394,10 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
 					? expandHomePath(merged.shell.path, homeDir)
 					: undefined,
 			},
-			tools: merged.tools,
+			tools: {
+				...merged.tools,
+				allowedRoots: merged.tools?.allowedRoots ?? [],
+			},
 		});
 
 		return config;
@@ -485,6 +501,13 @@ export function renderDefaultConfigToml(): string {
 		"# Optional shell script sourced before each command so env vars persist.",
 		'# env_file = "~/.sigpi/bash-env.sh"',
 		"",
+		"[tools]",
+		"# Trusted paths for both reading and writing, in addition to the",
+		"# working directory. Lets the agent use a scratch location (e.g. the",
+		"# OS temp dir) without dropping to full_access. Defaults to the OS",
+		"# temp dir; remove or edit to tighten or widen the sandbox.",
+		`allowed_roots = ["${os.tmpdir()}"]`,
+		"",
 	].join("\n");
 }
 
@@ -548,8 +571,15 @@ export function parseTomlConfig(content: string): PartialConfig {
 		logging: mapSection<LoggingConfig>(validated.logging, LOGGING_ALIASES),
 		storage: mapSection<StorageConfig>(validated.storage, STORAGE_ALIASES),
 		shell: mapSection<ShellConfig>(validated.shell, SHELL_ALIASES),
-		tools: validated.tools?.bash
-			? { bash: mapSection<RunShellConfig>(validated.tools.bash, BASH_ALIASES) }
+		tools: validated.tools
+			? {
+					bash: validated.tools.bash
+						? mapSection<RunShellConfig>(validated.tools.bash, BASH_ALIASES)
+						: undefined,
+					...(validated.tools.allowed_roots
+						? { allowedRoots: validated.tools.allowed_roots }
+						: {}),
+				}
 			: undefined,
 	};
 }
@@ -813,5 +843,6 @@ function mergeToolConfig(
 			...(base?.bash ?? {}),
 			...(override.bash ?? {}),
 		},
+		allowedRoots: override.allowedRoots ?? base?.allowedRoots,
 	};
 }
