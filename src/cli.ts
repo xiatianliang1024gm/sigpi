@@ -17,10 +17,9 @@ import {
 	type ChatReplState,
 	formatStatusBar,
 	formatStatusBarForEvent,
-	getActiveTurnRunner,
 	runtimeToChatReplState,
 } from "./chat-repl.js";
-import { executeChatTurn } from "./chat-session.js";
+import type { TurnResult } from "./agent/turn.js";
 import {
 	getDefaultProjectConfigPath,
 	getDefaultUserConfigPath,
@@ -36,9 +35,13 @@ import {
 	renderPlanFull,
 	setCurrentPlan,
 } from "./plan-tracker.js";
-import { createAgentRuntime, createRuntimeSessionStore } from "./runtime.js";
+import {
+	createAgentRuntime,
+	createRuntimeSessionStore,
+} from "./runtime.js";
 import { formatSessionDetails } from "./session/format.js";
 import type { SessionStore } from "./session/store.js";
+import { InMemorySessionStore } from "./session/in-memory-store.js";
 import { detectShellRuntime } from "./shell.js";
 import type { ToolRegistry } from "./tools/registry.js";
 import { formatToolExecutionResult } from "./tools/render.js";
@@ -49,6 +52,7 @@ import {
 import type {
 	ExecutedToolCall,
 	ProcessOutputMode,
+	RuntimeLogger,
 	TurnProgressEvent,
 } from "./types.js";
 
@@ -85,19 +89,29 @@ async function runAsk(args: string[]): Promise<void> {
 	const progressReporter = createCliProgressReporter(
 		config.agent.processOutput,
 	);
+	// One-shot prompts persist a session by default (aligns with Claude Code /
+	// Codex / Pi). `--no-session` opts out via an in-memory store.
+	const store: SessionStore | undefined = parsed.noSession
+		? new InMemorySessionStore()
+		: undefined;
 	const runtime = await createAgentRuntime({
 		config,
 		progressReporter,
 		sessionId: parsed.sessionId,
-		createSession: parsed.createSession,
+		createSession: parsed.createSession || (!parsed.sessionId && !parsed.noSession),
 		sessionTitle: parsed.sessionTitle,
+		store,
 	});
 	printSkillBootstrap(
 		runtime.loadedSkills.length,
 		runtime.skillWarnings.map((warning) => warning.message),
 	);
-	const turnRunner = runtime.sessionRuntime ?? runtime.runner;
-	const result = await turnRunner.runTurn(prompt);
+	const result = await runtime.turn.runTurn(prompt, runtime.logger);
+
+	if (!result.ok) {
+		console.error(result.errorMessage);
+		return;
+	}
 
 	if (runtime.sessionRuntime) {
 		console.log(
@@ -150,10 +164,8 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 	if (prunedSessionCount > 0) {
 		console.log(`Pruned ${prunedSessionCount} empty session(s).`);
 	}
-	if (state.sessionRuntime) {
-		console.log(
-			`Session: ${state.sessionRuntime.getCurrentSession().sessionId}`,
-		);
+	if (runtime.session) {
+		console.log(`Session: ${runtime.session.sessionId}`);
 	}
 	for (const warning of state.sessionWarnings) {
 		console.log(`[session-warning] ${warning}`);
@@ -231,7 +243,12 @@ export interface RunChatReplLoopOptions {
 
 export interface RunChatReplLoopDependencies {
 	readChatInput?: typeof readChatInput;
-	executeChatTurn?: typeof executeChatTurn;
+	executeTurn?: (
+		state: ChatReplState,
+		input: string,
+		logger: RuntimeLogger,
+		interruptController?: TurnInterruptController,
+	) => Promise<TurnResult>;
 	commands?: readonly ChatCommandDefinition[];
 	writeLine?: (line: string) => void;
 	writeError?: (line: string) => void;
@@ -287,7 +304,10 @@ export async function runChatReplLoop(
 ): Promise<ChatReplState> {
 	let state = options.state;
 	const readInput = dependencies.readChatInput ?? readChatInput;
-	const executeTurn = dependencies.executeChatTurn ?? executeChatTurn;
+	const executeTurn =
+		dependencies.executeTurn ??
+		((state, input, logger, interruptController) =>
+			state.turn.runTurn(input, logger, interruptController));
 	const writeLine =
 		dependencies.writeLine ??
 		((line: string) => writeWithActiveRunningInput(() => console.log(line)));
@@ -408,12 +428,7 @@ export async function runChatReplLoop(
 			? statusBarProgressListener
 			: null;
 		const turn = await withActiveRunningInput(runningInput, () =>
-			executeTurn(
-				getActiveTurnRunner(state),
-				turnInput,
-				state.logger,
-				interruptController,
-			),
+			executeTurn(state, turnInput, state.logger, interruptController),
 		).finally(() => {
 			activeStatusBarProgressListener = null;
 			runningInput?.stop();
@@ -1034,12 +1049,14 @@ function printSkillBootstrap(skillCount: number, warnings: string[]): void {
 function parseSessionArgs(args: string[]): {
 	sessionId?: string;
 	createSession: boolean;
+	noSession: boolean;
 	sessionTitle?: string;
 	rest: string[];
 } {
 	const rest: string[] = [];
 	let sessionId: string | undefined;
 	let createSession = false;
+	let noSession = false;
 	let sessionTitle: string | undefined;
 
 	for (let index = 0; index < args.length; index += 1) {
@@ -1053,6 +1070,11 @@ function parseSessionArgs(args: string[]): {
 
 		if (value === "--new") {
 			createSession = true;
+			continue;
+		}
+
+		if (value === "--no-session") {
+			noSession = true;
 			continue;
 		}
 
@@ -1071,9 +1093,16 @@ function parseSessionArgs(args: string[]): {
 		throw new Error("Use either --session or --new, not both.");
 	}
 
+	if (noSession && (sessionId || createSession)) {
+		throw new Error(
+			"--no-session cannot be combined with --session or --new.",
+		);
+	}
+
 	return {
 		sessionId,
 		createSession,
+		noSession,
 		sessionTitle,
 		rest,
 	};

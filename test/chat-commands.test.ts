@@ -35,7 +35,7 @@ test("/history defaults to the latest 5 saved turns", async () => {
 	await executeChatCommand("/history", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				sessionRuntime: {
+				turn: {
 					getCurrentSession: () => createHistorySession(6),
 				},
 			}) as never,
@@ -58,7 +58,7 @@ test("/history count limits output to the latest requested turns", async () => {
 	await executeChatCommand("/history 1", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				sessionRuntime: {
+				turn: {
 					getCurrentSession: () => createHistorySession(3),
 				},
 			}) as never,
@@ -78,7 +78,7 @@ test("/history all includes every saved turn", async () => {
 	await executeChatCommand("/history all", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				sessionRuntime: {
+				turn: {
 					getCurrentSession: () => createHistorySession(6),
 				},
 			}) as never,
@@ -97,7 +97,7 @@ test("/history reports failed turns and missing assistant output", async () => {
 	await executeChatCommand("/history all", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				sessionRuntime: {
+				turn: {
 					getCurrentSession: () =>
 						createHistorySession(1, {
 							status: "failed",
@@ -125,7 +125,7 @@ test("/history reports failed turns and missing assistant output", async () => {
 test("/history reports when there is no active session", async () => {
 	const outputs: string[] = [];
 	await executeChatCommand("/history", createChatCommandDefinitions(), {
-		getState: () => ({ sessionRuntime: null }) as never,
+		getState: () => ({ turn: { getCurrentSession: () => null } }) as never,
 		setState: () => {},
 		store: {} as never,
 		writeLine: (line: string) => outputs.push(line),
@@ -139,7 +139,7 @@ test("/history reports when the active session has no saved turns", async () => 
 	await executeChatCommand("/history", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				sessionRuntime: {
+				turn: {
 					getCurrentSession: () => createHistorySession(0),
 				},
 			}) as never,
@@ -156,7 +156,7 @@ test("/history rejects invalid arguments", async () => {
 	await executeChatCommand("/history newest", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				sessionRuntime: {
+				turn: {
 					getCurrentSession: () => createHistorySession(1),
 				},
 			}) as never,
@@ -216,7 +216,7 @@ test("executeChatCommand compacts context through the active session runtime", a
 		{
 			getState: () =>
 				({
-					sessionRuntime: {
+					turn: {
 						compactContext: async () => ({
 							summarized: true,
 							trimmed: false,
@@ -266,7 +266,7 @@ test("executeChatCommand forwards /compact <instructions> to compactContext", as
 		{
 			getState: () =>
 				({
-					runner: {
+					turn: {
 						compactContext: async (options: unknown) => {
 							captured.options = options;
 							return {
@@ -306,7 +306,7 @@ test("executeChatCommand omits options.abortSignal when no interrupt signal is a
 	await executeChatCommand("/compact", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				runner: {
+				turn: {
 					compactContext: async (options: unknown) => {
 						captured.options = options;
 						return {
@@ -348,7 +348,7 @@ test("executeChatCommand forwards an interrupt signal to /compact", async () => 
 	await executeChatCommand("/compact", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				runner: {
+				turn: {
 					compactContext: async (options: unknown) => {
 						captured.options = options;
 						return {
@@ -389,7 +389,7 @@ test("executeChatCommand reports when manual compaction is a no-op", async () =>
 	await executeChatCommand("/compact", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				runner: {
+				turn: {
 					compactContext: async () => ({
 						summarized: false,
 						trimmed: false,
@@ -478,7 +478,7 @@ test("/model switches to the interactively selected model", async () => {
 					modelId: "fast",
 					modelName: "fast-model",
 					logger: {},
-					runner: {
+					turn: {
 						setProvider: () => {
 							providerUpdated = true;
 						},
@@ -537,7 +537,7 @@ test("/model switches the active provider for the current chat state", async () 
 					modelId: "fast",
 					modelName: "fast-model",
 					logger: {},
-					runner: {
+					turn: {
 						setProvider: () => {
 							providerUpdated = true;
 						},
@@ -596,7 +596,7 @@ test("/model remembers a successful model switch", async () => {
 					modelId: "fast",
 					modelName: "fast-model",
 					logger: {},
-					runner: {
+					turn: {
 						setProvider: () => {},
 					},
 					models: {
@@ -644,7 +644,7 @@ test("/model does not remember an unknown model", async () => {
 					modelId: "fast",
 					modelName: "fast-model",
 					logger: {},
-					runner: {
+					turn: {
 						setProvider: () => {},
 					},
 					models: {
@@ -672,10 +672,10 @@ test("/new starts a fresh session and replaces the active state", async () => {
 	const outputs: string[] = [];
 	let updatedState: unknown = "unchanged";
 	const previousState = {
-		sessionRuntime: { getCurrentSession: () => ({ sessionId: "old-session" }) },
+		turn: { getCurrentSession: () => ({ sessionId: "old-session" }) },
 	} as never;
 	const freshState = {
-		sessionRuntime: {
+		turn: {
 			getCurrentSession: () => ({ sessionId: "fresh-session" }),
 		},
 	} as never;
@@ -714,7 +714,7 @@ test("/exit prints the active session title and id before quitting", async () =>
 		{
 			getState: () =>
 				({
-					sessionRuntime: {
+					turn: {
 						getCurrentSession: () => ({
 							sessionId: "11111111-1111-4111-8111-111111111111",
 							title: "demo session",
@@ -741,7 +741,7 @@ test("/exit prints only the session id when no title is set", async () => {
 		{
 			getState: () =>
 				({
-					sessionRuntime: {
+					turn: {
 						getCurrentSession: () => ({
 							sessionId: "22222222-2222-4222-8222-222222222222",
 							title: null,
@@ -766,7 +766,7 @@ test("/exit reports when there is no active session", async () => {
 		"/exit",
 		createChatCommandDefinitions(),
 		{
-			getState: () => ({}) as never,
+			getState: () => ({ turn: { getCurrentSession: () => null } }) as never,
 			setState: () => {},
 			store: {} as never,
 			writeLine: (line: string) => outputs.push(line),

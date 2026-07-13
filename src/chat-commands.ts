@@ -176,9 +176,7 @@ export function createChatCommandDefinitions(
 				};
 				let result: ContextUpdateResult;
 				try {
-					result =
-						(await state.sessionRuntime?.compactContext(compactOptions)) ??
-						(await state.runner.compactContext(compactOptions));
+					result = await state.turn.compactContext(compactOptions);
 				} catch (error) {
 					if (error instanceof CompactionFailedError) {
 						context.writeLine(
@@ -209,9 +207,7 @@ export function createChatCommandDefinitions(
 				}
 
 				context.writeLine(
-					`Context compacted: ${changes.join(", ")}.${
-						state.sessionRuntime ? " Snapshot saved." : ""
-					}`,
+					`Context compacted: ${changes.join(", ")}. Snapshot saved.`,
 				);
 				if (instructions) {
 					context.writeLine(`Custom instructions applied to summary.`);
@@ -282,7 +278,7 @@ export function createChatCommandDefinitions(
 			name: "/session",
 			description: "Show current session JSON",
 			handler: (context) => {
-				const session = context.getState().sessionRuntime?.getCurrentSession();
+				const session = context.getState().turn.getCurrentSession();
 
 				if (!session) {
 					context.writeLine("(no active session)");
@@ -316,7 +312,7 @@ export function createChatCommandDefinitions(
 					return { action: "continue" };
 				}
 
-				const session = context.getState().sessionRuntime?.getCurrentSession();
+				const session = context.getState().turn.getCurrentSession();
 				if (!session) {
 					context.writeLine("(no active session)");
 					return { action: "continue" };
@@ -379,7 +375,7 @@ export function createChatCommandDefinitions(
 			aliases: ["/quit", "exit", "quit"],
 			description: "Exit interactive chat",
 			handler: (context) => {
-				const session = context.getState().sessionRuntime?.getCurrentSession();
+				const session = context.getState().turn.getCurrentSession();
 				if (session) {
 					const title = session.title?.trim();
 					context.writeLine(
@@ -574,7 +570,7 @@ function switchActiveModel(
 		return Promise.resolve(false);
 	}
 
-	state.runner.setProvider(new OpenAICompatibleProvider(model, state.logger));
+	state.turn.setProvider(new OpenAICompatibleProvider(model, state.logger));
 	context.setState({
 		...state,
 		modelId: requestedModelId,

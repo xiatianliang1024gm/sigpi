@@ -1,11 +1,10 @@
 import { homedir } from "node:os";
 import type { ConversationContext } from "./agent/context.js";
-import type { AgentRunner } from "./agent/runner.js";
+import type { AgentTurn } from "./agent/turn.js";
 import type { ModelConfig } from "./config.js";
 import { estimateContextTokens } from "./context-window.js";
 import { setCurrentPlan } from "./plan-tracker.js";
 import { type AgentRuntime, createAgentRuntime } from "./runtime.js";
-import type { SessionRuntime } from "./session/runtime.js";
 import type { SessionStore } from "./session/store.js";
 import {
 	prepareSessionChoices,
@@ -23,11 +22,10 @@ import type {
 } from "./types.js";
 
 export interface ChatReplState {
-	runner: AgentRunner;
+	turn: AgentTurn;
 	context: ConversationContext;
 	logger: RuntimeLogger;
 	shellRuntime: ShellRuntime;
-	sessionRuntime: SessionRuntime | null;
 	sessionWarnings: string[];
 	systemPromptSections: readonly SystemPromptSection[];
 	toolSchemas: readonly ToolSchema[];
@@ -110,11 +108,10 @@ export function runtimeToChatReplState(runtime: AgentRuntime): ChatReplState {
 	setCurrentPlan(null);
 
 	return {
-		runner: runtime.runner,
+		turn: runtime.turn,
 		context: runtime.context,
 		logger: runtime.logger,
 		shellRuntime: runtime.shellRuntime,
-		sessionRuntime: runtime.sessionRuntime,
 		sessionWarnings: runtime.sessionWarnings,
 		systemPromptSections: runtime.systemPromptSections,
 		toolSchemas: runtime.toolSchemas,
@@ -138,16 +135,10 @@ export function getResumeAvailability(
 	return { ok: true };
 }
 
-export function getActiveTurnRunner(
-	state: ChatReplState,
-): AgentRunner | SessionRuntime {
-	return state.sessionRuntime ?? state.runner;
-}
-
 export function getActiveSessionSummary(
 	state: ChatReplState,
 ): SessionSummary | null {
-	const session = state.sessionRuntime?.getCurrentSession();
+	const session = state.turn.getCurrentSession();
 	if (!session) {
 		return null;
 	}
@@ -181,9 +172,7 @@ export function formatStatusBar(state: ChatReplState): string {
 }
 
 export function getCurrentWorkingDirectory(state: ChatReplState): string {
-	return (
-		state.sessionRuntime?.getCurrentSession().cwd ?? state.workingDirectory
-	);
+	return state.turn.getCurrentSession()?.cwd ?? state.workingDirectory;
 }
 
 export function formatStatusBarForEvent(

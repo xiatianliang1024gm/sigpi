@@ -637,7 +637,7 @@ test("attachSessionById hydrates context from the selected session snapshot", as
 		const attached = await attachSessionById(session.sessionId);
 
 		assert.equal(
-			attached.updatedState.sessionRuntime?.getCurrentSession().sessionId,
+			attached.updatedState.turn.getCurrentSession().sessionId,
 			session.sessionId,
 		);
 		assert.equal(
@@ -683,7 +683,7 @@ test("attachSessionById returns interrupted and system prompt warnings from sess
 		const attached = await attachSessionById(session.sessionId);
 
 		assert.equal(
-			attached.updatedState.sessionRuntime?.getCurrentSession().status,
+			attached.updatedState.turn.getCurrentSession().status,
 			"interrupted",
 		);
 		assert.equal(attached.warnings.length, 2);
@@ -813,7 +813,7 @@ test("attachSessionById can switch from one bound session to another", async () 
 			first.sessionId,
 		);
 		assert.equal(
-			switched.updatedState.sessionRuntime?.getCurrentSession().sessionId,
+			switched.updatedState.turn.getCurrentSession().sessionId,
 			second.sessionId,
 		);
 		assert.equal(
@@ -863,7 +863,7 @@ test("runChatReplLoop handles slash commands and ignores legacy command forms", 
 			},
 			{
 				readChatInput: async () => prompts[promptIndex++] ?? null,
-				executeChatTurn: async (_runner, line) => {
+				executeTurn: async (_runner, line) => {
 					executedLines.push(line);
 					return {
 						ok: true,
@@ -916,7 +916,7 @@ test("runChatReplLoop exits on legacy exit alias without calling the model", asy
 			{
 				readChatInput: async () =>
 					["exit", "should-not-run"][promptIndex++] ?? null,
-				executeChatTurn: async (_runner, line) => {
+				executeTurn: async (_runner, line) => {
 					executedLines.push(line);
 					return {
 						ok: true,
@@ -969,7 +969,7 @@ test("runChatReplLoop /resume refreshes state through the command layer", async 
 			{
 				commands,
 				readChatInput: async () => ["/resume", "/exit"][promptIndex++] ?? null,
-				executeChatTurn: async () => {
+				executeTurn: async () => {
 					throw new Error("should not execute chat turn");
 				},
 				writeLine: (line) => outputs.push(line),
@@ -1003,7 +1003,7 @@ test("runChatReplLoop /resume reports empty session list before selector", async
 		},
 		modelName: "test-model",
 		workingDirectory: "/tmp/test",
-		sessionRuntime: null,
+		turn: { getCurrentSession: () => null } as never,
 	} as never;
 	let promptIndex = 0;
 	const commands: readonly ChatCommandDefinition[] =
@@ -1023,7 +1023,7 @@ test("runChatReplLoop /resume reports empty session list before selector", async
 		{
 			commands,
 			readChatInput: async () => ["/resume", "/exit"][promptIndex++] ?? null,
-			executeChatTurn: async () => {
+			executeTurn: async () => {
 				throw new Error("should not execute chat turn");
 			},
 			writeLine: (line) => outputs.push(line),
@@ -1058,7 +1058,7 @@ test("runChatReplLoop prints the turn divider after the final answer", async () 
 			{
 				readChatInput: async () =>
 					["explain hooks", "/exit"][promptIndex++] ?? null,
-				executeChatTurn: async () => ({
+				executeTurn: async () => ({
 					ok: true,
 					completionStatus: "completed",
 					outputText: "Answer.",
@@ -1103,7 +1103,7 @@ test("runChatReplLoop prints file edit summaries in clear mode", async () => {
 			{
 				readChatInput: async () =>
 					["update docs", "/exit"][promptIndex++] ?? null,
-				executeChatTurn: async () => ({
+				executeTurn: async () => ({
 					ok: true,
 					completionStatus: "completed",
 					outputText: "Done.",
@@ -1224,7 +1224,7 @@ test("runChatReplLoop prints full file edit content for review", async () => {
 			{
 				readChatInput: async () =>
 					["review full edit", "/exit"][promptIndex++] ?? null,
-				executeChatTurn: async () => ({
+				executeTurn: async () => ({
 					ok: true,
 					completionStatus: "completed",
 					outputText: "Done.",
@@ -1327,7 +1327,7 @@ test("runChatReplLoop does not print edit summaries for patch validation", async
 			{
 				readChatInput: async () =>
 					["validate patch", "/exit"][promptIndex++] ?? null,
-				executeChatTurn: async () => ({
+				executeTurn: async () => ({
 					ok: true,
 					completionStatus: "completed",
 					outputText: "Patch validates.",
@@ -1399,7 +1399,7 @@ test("runChatReplLoop listens for Esc while a turn is running", async () => {
 			{
 				readChatInput: async () =>
 					["inspect repo", "/exit"][promptIndex++] ?? null,
-				executeChatTurn: async (
+				executeTurn: async (
 					_runner,
 					_line,
 					_logger,
@@ -1468,7 +1468,7 @@ test("runChatReplLoop queues visible input typed while a turn is running", async
 			{
 				readChatInput: async () =>
 					["first request", "/exit"][promptIndex++] ?? null,
-				executeChatTurn: async (_runner, line) => {
+				executeTurn: async (_runner, line) => {
 					executedLines.push(line);
 					if (line === "first request") {
 						input.write("second request");
@@ -1527,7 +1527,7 @@ test("runChatReplLoop preserves draft input across progress output", async () =>
 			{
 				readChatInput: async () =>
 					["first request", "/exit"][promptIndex++] ?? null,
-				executeChatTurn: async (_runner, line) => {
+				executeTurn: async (_runner, line) => {
 					executedLines.push(line);
 					if (line === "first request") {
 						input.write("second request");

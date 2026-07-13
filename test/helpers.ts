@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDefaultSessionsRoot } from "../src/config.js";
 import { resolveSessionStoragePaths } from "../src/session/paths.js";
-import { SessionStore } from "../src/session/store.js";
+import { DiskSessionStore } from "../src/session/store.js";
 import type {
 	ExecutedToolCall,
 	ModelProvider,
@@ -102,8 +102,8 @@ export async function createTempDir(prefix: string): Promise<string> {
 export function createTestSessionStore(args: {
 	cwd: string;
 	homeDir?: string;
-}): SessionStore {
-	return new SessionStore({
+}): DiskSessionStore {
+	return new DiskSessionStore({
 		storagePaths: resolveSessionStoragePaths({
 			cwd: args.cwd,
 			sessionsRoot: getDefaultSessionsRoot(args.homeDir),

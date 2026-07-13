@@ -21,6 +21,10 @@ deepening opportunities so future architecture reviews share one vocabulary.
 - **Function calling** — the mechanism by which the model emits `toolCalls` in its response, the runner dispatches them via `ToolRegistry`, and the results are fed back into the working context. Distinct from **Tool** (the capability definition): a Tool is "what can be done"; function calling is "how the model drives it".
 - **Context management** — see **Compaction**; this project keeps the working context within the token budget using a three-part scheme of "summary + recent messages + in-turn checkpoint", corresponding to one of the three teaching concepts claimed by the README.
 
+## Conventions
+
+- **One-shot prompts persist a session by default.** A `sigpi "prompt"` with no flags creates and persists a Session (mirroring `claude -p`, `codex exec`, and Pi, which all keep a session by default). Ephemeral, fire-and-forget execution is the explicit exception, reached via a `--no-session` opt-out — not the default. Consequence for the architecture: every `Agent turn` is a Session turn, so the runtime need not keep a parallel bare `AgentRunner` alongside `SessionRuntime`; the opt-out path is the only place a non-persisted runner is constructed.
+
 ## Seam artifacts
 
 - **Tool seam** — the `ToolDefinition` interface. Deepened so each tool may carry its own progress/ledger adapters instead of tool-specific code living elsewhere.

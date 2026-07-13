@@ -21,9 +21,11 @@ import {
 	hydrateRuntimeFromSession,
 	SessionRuntime,
 } from "./session/runtime.js";
+import { type AgentTurn, createAgentTurn } from "./agent/turn.js";
 import {
 	createSystemPromptFingerprint,
-	SessionStore,
+	DiskSessionStore,
+	type SessionStore,
 } from "./session/store.js";
 import { captureRcDefinitions, detectShellRuntime } from "./shell.js";
 import { loadSkillCatalog } from "./skills/catalog.js";
@@ -53,9 +55,10 @@ export interface AgentRuntime {
 	systemPromptSections: SystemPromptSection[];
 	systemPromptFingerprint: string;
 	toolSchemas: ToolSchema[];
-	store: SessionStore;
+	store: SessionStore; // interface; concrete DiskSessionStore in production
 	session: PersistedSession | null;
 	sessionRuntime: SessionRuntime | null;
+	turn: AgentTurn;
 	sessionWarnings: string[];
 	loadedSkills: LoadedSkill[];
 	skillWarnings: SkillWarning[];
@@ -72,6 +75,8 @@ export interface CreateAgentRuntimeArgs {
 	sessionTitle?: string;
 	createSession?: boolean;
 	config?: AppConfig;
+	/** Override the session store (e.g. an in-memory store for `--no-session`). */
+	store?: SessionStore;
 }
 
 export function createRuntimeLogger(config: AppConfig): RuntimeLogger {
@@ -91,7 +96,7 @@ export function createRuntimeSessionStore(args?: {
 		args?.config?.storage.sessionsRoot ??
 		getDefaultSessionsRoot(args?.homeDir);
 
-	return new SessionStore({
+	return new DiskSessionStore({
 		storagePaths: resolveSessionStoragePaths({
 			cwd,
 			sessionsRoot,
@@ -216,11 +221,13 @@ export async function createAgentRuntime(
 		config.tools.bash,
 	);
 	const systemPromptFingerprint = createSystemPromptFingerprint(systemPrompt);
-	const store = createRuntimeSessionStore({
-		cwd,
-		config,
-		logger: runLogger,
-	});
+	const store =
+		args.store ??
+		createRuntimeSessionStore({
+			cwd,
+			config,
+			logger: runLogger,
+		});
 	const compactionHooks = createCompactionHookRegistry();
 	const tools = createDefaultToolRegistry(shellRuntime, config.tools.bash);
 	const conversationContext = new ConversationContext({
@@ -316,6 +323,20 @@ export async function createAgentRuntime(
 			)
 		: null;
 
+	const turn = createAgentTurn({
+		runner,
+		context: conversationContext,
+		store,
+		session:
+			sessionState.session ??
+			(await store.createSession({
+				cwd,
+				systemPromptFingerprint,
+				loadedSkillNames: skillCatalog.loadedSkills.map((skill) => skill.name),
+				skillsFingerprint: skillCatalog.fingerprint,
+			})),
+	});
+
 	return {
 		runner,
 		context: conversationContext,
@@ -331,6 +352,7 @@ export async function createAgentRuntime(
 		store,
 		session: sessionState.session,
 		sessionRuntime,
+		turn,
 		sessionWarnings: sessionState.warnings,
 		loadedSkills: skillCatalog.loadedSkills,
 		skillWarnings: skillCatalog.warnings,

@@ -238,7 +238,67 @@ const sessionIndexSchema = z.object({
 	sessions: z.array(sessionSummarySchema),
 });
 
-export class SessionStore {
+/**
+ * Persistence contract for a session. `DiskSessionStore` writes to disk;
+ * `InMemorySessionStore` (used for `--no-session`) keeps everything in a Map.
+ * `SessionRuntime` / `AgentTurn` depend on this interface, not the disk class.
+ */
+export interface SessionStore {
+	createSession(args: {
+		cwd: string;
+		systemPromptFingerprint: string;
+		title?: string;
+		loadedSkillNames?: string[];
+		skillsFingerprint?: string | null;
+	}): Promise<PersistedSession>;
+	loadSession(args: {
+		sessionId: string;
+		cwd: string;
+		systemPromptFingerprint: string;
+		loadedSkillNames?: string[];
+		skillsFingerprint?: string | null;
+	}): Promise<LoadedSession>;
+	listSessions(): Promise<SessionSummary[]>;
+	getSession(sessionId: string): Promise<PersistedSession>;
+	pruneEmptySessions(): Promise<number>;
+	markTurnStarted(args: {
+		sessionId: string;
+		userInput: string;
+	}): Promise<PersistedSession>;
+	markTurnCompleted(args: {
+		sessionId: string;
+		userInput: string;
+		assistantOutput: string;
+		steps: number;
+		toolExecutions: ExecutedToolCall[];
+		contextState: ConversationContextState;
+	}): Promise<PersistedSession>;
+	markTurnFailed(args: {
+		sessionId: string;
+		userInput: string;
+		errorMessage: string;
+		assistantOutput?: string | null;
+		steps?: number;
+		toolExecutions?: ExecutedToolCall[];
+		contextState?: ConversationContextState;
+	}): Promise<PersistedSession>;
+	markTurnInterrupted(args: {
+		sessionId: string;
+		userInput: string;
+		steps?: number;
+		toolExecutions?: ExecutedToolCall[];
+		contextState?: ConversationContextState;
+		assistantOutput?: string | null;
+		interruptSource: InterruptSource;
+		interruptStage: InterruptStage;
+	}): Promise<PersistedSession>;
+	updateSnapshot(args: {
+		sessionId: string;
+		contextState: ConversationContextState;
+	}): Promise<PersistedSession>;
+}
+
+export class DiskSessionStore implements SessionStore {
 	private readonly cwd: string;
 	private readonly rootDir: string;
 	private readonly indexPath: string;
@@ -1035,12 +1095,12 @@ function normalizeTitle(title: string | undefined): string | null {
 	return trimmed ? trimmed : null;
 }
 
-function deriveTitle(userInput: string): string {
+export function deriveTitle(userInput: string): string {
 	const normalized = userInput.replace(/\s+/gu, " ").trim();
 	return normalized.length <= 80 ? normalized : `${normalized.slice(0, 77)}...`;
 }
 
-function nextTurnId(turns: PersistedSession["turns"]): number {
+export function nextTurnId(turns: PersistedSession["turns"]): number {
 	return (turns.at(-1)?.turnId ?? 0) + 1;
 }
 

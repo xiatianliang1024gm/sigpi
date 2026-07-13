@@ -4,7 +4,6 @@ import test from "node:test";
 import { z } from "zod";
 import { ConversationContext } from "../src/agent/context.js";
 import { AgentRunner } from "../src/agent/runner.js";
-import { executeChatTurn } from "../src/chat-session.js";
 import { TurnInterruptController } from "../src/interrupt.js";
 import { createShellRuntime } from "../src/shell.js";
 import { createDefaultToolRegistry } from "../src/tools/index.js";
@@ -12,7 +11,6 @@ import { ToolRegistry } from "../src/tools/registry.js";
 import type { TurnProgressEvent } from "../src/types.js";
 import {
 	createTempDir,
-	MemoryLogger,
 	MockProvider,
 	stripMessageIds,
 	writeWorkspaceFile,
@@ -721,25 +719,6 @@ test("checkpoint goal uses prior task when the user says continue", async () => 
 	);
 	assert.match(checkpointEvent?.message ?? "", /goal: 分析当前项目/);
 	assert.doesNotMatch(checkpointEvent?.message ?? "", /goal: 继续/);
-});
-
-test("executeChatTurn returns an error result instead of throwing", async () => {
-	const provider = new MockProvider(() => {
-		throw new Error("Model request failed: 500 Internal Server Error");
-	});
-	const runner = new AgentRunner({
-		provider,
-		tools: createDefaultToolRegistry(),
-		context: new ConversationContext(),
-		systemPrompt: "You are a test agent.",
-	});
-	const logger = new MemoryLogger();
-
-	const result = await executeChatTurn(runner, "trigger error", logger);
-
-	assert.equal(result.ok, false);
-	assert.match(result.errorMessage, /500 Internal Server Error/);
-	assert.equal(logger.entries.at(-1)?.event, "chat_turn_failed");
 });
 
 test("runner emits progress events during multi-step execution", async () => {
