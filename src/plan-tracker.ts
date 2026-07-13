@@ -82,6 +82,32 @@ export function formatPlanInProgress(view: PlanView): string | null {
 }
 
 /**
+ * Body text for a compact `update_plan` result line. Prefers the completion
+ * message when the plan is fully done, then the in-progress step label, then a
+ * generic "Plan updated", and finally "error" on failure. Keeps the
+ * success/failure wording in one place so the renderer only handles colouring.
+ */
+export function formatUpdatePlanBody(
+	view: PlanView | null,
+	ok: boolean,
+): string {
+	if (!ok) {
+		return "error";
+	}
+	if (view) {
+		const completion = formatPlanCompletion(view);
+		if (completion) {
+			return completion;
+		}
+		const inProgress = formatPlanInProgress(view);
+		if (inProgress) {
+			return `Plan updated — ${inProgress}`;
+		}
+	}
+	return "Plan updated";
+}
+
+/**
  * Full numbered checklist, used as a banner in the non-TUI CLI.
  */
 export function renderPlanFull(view: PlanView): string {
