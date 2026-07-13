@@ -47,6 +47,15 @@ against silent mismatches:
 A mismatch does not crash; it produces a **warning** (`loadedSession.warnings`) so you know the
 resumed context may be stale.
 
+## Ephemeral runs (`--no-session`)
+
+By default every turn is a *session* turn — `chat` and `ask` both persist a session (mirroring
+Claude Code / Codex / Pi). The explicit opt-out is `--no-session`: it swaps in an in-memory
+`SessionStore` so the turn runs and is discarded when the process exits, leaving nothing on disk.
+It cannot be combined with `--session` or `--new`. This is the only place a non-persisted runner is
+constructed; the runtime still goes through `SessionRuntime`, so there is no second turn type to
+maintain.
+
 ## Key takeaways
 
 - Live state (`ConversationContext`) and persisted state (`SessionStore`) are separate concerns.

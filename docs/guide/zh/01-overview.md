@@ -34,6 +34,7 @@ SigPi 约 80 个源文件，但教学核心很小。理解 agent 真正要看的
 | 路径 | 角色 |
 |------|------|
 | `src/agent/runner.ts` | **Agent loop。** `runTurn()` 是一切的 spine。 |
+| `src/agent/turn.ts` | `AgentTurn`——在 `SessionRuntime` + `AgentRunner` 之上编排的一轮。 |
 | `src/agent/context.ts` | 持有工作上下文：摘要、近期消息、压缩（compaction）。 |
 | `src/agent/messages.ts` | 消息/工具调用的构造，以及用于摘要的转录渲染。 |
 | `src/model/openai-compatible.ts` | 模型 provider：HTTP transport + 线格式适配器。 |

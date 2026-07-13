@@ -37,6 +37,7 @@ for understanding the agent are:
 | Path | Role |
 |------|------|
 | `src/agent/runner.ts` | **The agent loop.** `runTurn()` is the spine of everything. |
+| `src/agent/turn.ts` | `AgentTurn` — one orchestrated turn over a `SessionRuntime` + `AgentRunner`. |
 | `src/agent/context.ts` | Owns the working context: summary, recent messages, compaction. |
 | `src/agent/messages.ts` | Message/tool-call constructors and the transcript rendering used for summaries. |
 | `src/model/openai-compatible.ts` | The model provider: HTTP transport + wire-format adapters. |

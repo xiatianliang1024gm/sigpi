@@ -55,7 +55,7 @@ You can optionally add a project-local override at `.sigpi/config.toml`.
 pnpm dev chat
 ```
 
-`chat` now creates and attaches a session automatically. If you only want a one-off prompt without saving a session, use `pnpm dev ask`.
+`chat` now creates and attaches a session automatically. Both `chat` and `ask` persist a session by default (mirroring Claude Code / Codex / Pi); pass `--no-session` for a fire-and-forget run that is discarded when the process exits.
 
 To create and resume a persistent session:
 
@@ -105,6 +105,7 @@ pnpm dev ask "What time is it in UTC?"
 - `chat --session <id>` and `ask --session <id>` continue using the saved context
 - `pnpm dev chat` creates a new session automatically unless you pass `--session <id>`
 - `pnpm dev chat --new` is an explicit alias for starting a fresh session-backed chat
+- `pnpm dev chat --no-session` / `pnpm dev ask --no-session` run without persisting anything — the turn uses an in-memory store and is discarded when the process exits. This is the explicit opt-out; by default both `chat` and `ask` persist a session (mirroring Claude Code / Codex / Pi). `--no-session` cannot be combined with `--session` or `--new`.
 - Starting `chat` prunes session files that never recorded any turns, so abandoned empty sessions do not accumulate
 - Inside the chat REPL, use `/summary`, `/compact`, `/session`, `/history`, `/resume`, `/exit`
 - `/resume` opens the session selector and switches the current REPL to the selected saved session

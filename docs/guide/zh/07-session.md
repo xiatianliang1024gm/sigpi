@@ -41,6 +41,13 @@ stream，`deriveContextStateFromEntries` 重建活动上下文。两个指纹防
 
 失配不会崩溃；它产生一条**警告**（`loadedSession.warnings`），让你知道续接的上下文可能已过时。
 
+## 一次性运行（`--no-session`）
+
+默认情况下每一轮都是*会话*轮——`chat` 与 `ask` 都会持久化会话（与 Claude Code / Codex / Pi 一致）。
+显式的例外是 `--no-session`：它换上一个内存版 `SessionStore`，于是这一轮运行完、进程退出即被丢弃，
+不在磁盘留下任何东西。它不能与 `--session` 或 `--new` 同时使用。这是唯一构造「非持久化 runner」的地方；
+运行时仍然走 `SessionRuntime`，因此不需要维护第二种轮次类型。
+
 ## 关键收获
 
 - 活动状态（`ConversationContext`）与持久化状态（`SessionStore`）是分离的关注点。
