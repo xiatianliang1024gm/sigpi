@@ -1,4 +1,3 @@
-import type { AgentRunner } from "./runner.js";
 import type { TurnInterruptController } from "../interrupt.js";
 import { formatModelErrorMessage } from "../model/error-format.js";
 import type { ModelProvider } from "../model/provider.js";
@@ -9,6 +8,7 @@ import type {
 	PersistedSession,
 	RuntimeLogger,
 } from "../types.js";
+import type { AgentRunner } from "./runner.js";
 
 export type TurnResult =
 	| {

@@ -154,7 +154,8 @@ export function formatStatusBar(state: ChatReplState): string {
 
 export function getCurrentWorkingDirectory(state: ChatReplState): string {
 	return (
-		state.runtime.turn.getCurrentSession()?.cwd ?? state.runtime.workingDirectory
+		state.runtime.turn.getCurrentSession()?.cwd ??
+		state.runtime.workingDirectory
 	);
 }
 

@@ -2,6 +2,7 @@
 
 import { stdin as input, stdout as output } from "node:process";
 import type { ReadStream, WriteStream } from "node:tty";
+import type { TurnResult } from "./agent/turn.js";
 import {
 	type ChatCommandDefinition,
 	createChatCommandDefinitions,
@@ -19,7 +20,6 @@ import {
 	formatStatusBarForEvent,
 	runtimeToChatReplState,
 } from "./chat-repl.js";
-import type { TurnResult } from "./agent/turn.js";
 import {
 	getDefaultProjectConfigPath,
 	getDefaultUserConfigPath,
@@ -36,13 +36,10 @@ import {
 	renderPlanFull,
 	setCurrentPlan,
 } from "./plan-tracker.js";
-import {
-	createAgentRuntime,
-	createRuntimeSessionStore,
-} from "./runtime.js";
+import { createAgentRuntime, createRuntimeSessionStore } from "./runtime.js";
 import { formatSessionDetails } from "./session/format.js";
-import type { SessionStore } from "./session/store.js";
 import { InMemorySessionStore } from "./session/in-memory-store.js";
+import type { SessionStore } from "./session/store.js";
 import { detectShellRuntime } from "./shell.js";
 import type { ToolRegistry } from "./tools/registry.js";
 import {
@@ -98,7 +95,8 @@ async function runAsk(args: string[]): Promise<void> {
 		config,
 		progressReporter,
 		sessionId: parsed.sessionId,
-		createSession: parsed.createSession || (!parsed.sessionId && !parsed.noSession),
+		createSession:
+			parsed.createSession || (!parsed.sessionId && !parsed.noSession),
 		sessionTitle: parsed.sessionTitle,
 		store,
 	});
@@ -229,7 +227,10 @@ export interface RunChatReplLoopDependencies {
 }
 
 let activeRunningInput: RunningTurnInputListenerHandle | null = null;
-const compactState: CompactProgressRenderState = { hasPrintedTurn: false, groupActive: false };
+const compactState: CompactProgressRenderState = {
+	hasPrintedTurn: false,
+	groupActive: false,
+};
 let activeStatusBarProgressListener:
 	| ((event: TurnProgressEvent) => void)
 	| null = null;
@@ -754,13 +755,13 @@ function renderClearProgressEvent(
 				if (event.toolResult) {
 					printIndentedBlock(
 						truncateToolResult(
-									summarizeClearToolResult(
-										event.toolName,
-										event.toolResult,
-										event.toolOk,
-										event.toolResultData,
-									),
-								),
+							summarizeClearToolResult(
+								event.toolName,
+								event.toolResult,
+								event.toolOk,
+								event.toolResultData,
+							),
+						),
 					);
 				}
 				return;
@@ -1101,9 +1102,7 @@ function parseSessionArgs(args: string[]): {
 	}
 
 	if (noSession && (sessionId || createSession)) {
-		throw new Error(
-			"--no-session cannot be combined with --session or --new.",
-		);
+		throw new Error("--no-session cannot be combined with --session or --new.");
 	}
 
 	return {

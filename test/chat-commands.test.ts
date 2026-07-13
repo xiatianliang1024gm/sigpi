@@ -36,9 +36,9 @@ test("/history defaults to the latest 5 saved turns", async () => {
 		getState: () =>
 			({
 				runtime: {
-				    turn: {
-					getCurrentSession: () => createHistorySession(6),
-				},
+					turn: {
+						getCurrentSession: () => createHistorySession(6),
+					},
 				},
 			}) as never,
 		setState: () => {},
@@ -61,9 +61,9 @@ test("/history count limits output to the latest requested turns", async () => {
 		getState: () =>
 			({
 				runtime: {
-				    turn: {
-					getCurrentSession: () => createHistorySession(3),
-				},
+					turn: {
+						getCurrentSession: () => createHistorySession(3),
+					},
 				},
 			}) as never,
 		setState: () => {},
@@ -83,9 +83,9 @@ test("/history all includes every saved turn", async () => {
 		getState: () =>
 			({
 				runtime: {
-				    turn: {
-					getCurrentSession: () => createHistorySession(6),
-				},
+					turn: {
+						getCurrentSession: () => createHistorySession(6),
+					},
 				},
 			}) as never,
 		setState: () => {},
@@ -104,15 +104,15 @@ test("/history reports failed turns and missing assistant output", async () => {
 		getState: () =>
 			({
 				runtime: {
-				    turn: {
-					getCurrentSession: () =>
-						createHistorySession(1, {
-							status: "failed",
-							assistantOutput: null,
-							toolExecutions: [],
-							errorMessage: "model failed",
-						}),
-				},
+					turn: {
+						getCurrentSession: () =>
+							createHistorySession(1, {
+								status: "failed",
+								assistantOutput: null,
+								toolExecutions: [],
+								errorMessage: "model failed",
+							}),
+					},
 				},
 			}) as never,
 		setState: () => {},
@@ -149,9 +149,9 @@ test("/history reports when the active session has no saved turns", async () => 
 		getState: () =>
 			({
 				runtime: {
-				    turn: {
-					getCurrentSession: () => createHistorySession(0),
-				},
+					turn: {
+						getCurrentSession: () => createHistorySession(0),
+					},
 				},
 			}) as never,
 		setState: () => {},
@@ -168,9 +168,9 @@ test("/history rejects invalid arguments", async () => {
 		getState: () =>
 			({
 				runtime: {
-				    turn: {
-					getCurrentSession: () => createHistorySession(1),
-				},
+					turn: {
+						getCurrentSession: () => createHistorySession(1),
+					},
 				},
 			}) as never,
 		setState: () => {},
@@ -230,19 +230,19 @@ test("executeChatCommand compacts context through the active session runtime", a
 			getState: () =>
 				({
 					runtime: {
-					    turn: {
-						compactContext: async () => ({
-							summarized: true,
-							trimmed: false,
-							summary: "summary",
-							recentMessageCount: 2,
-							previousRecentMessageCount: 5,
-							summaryChars: 7,
-							previousSummaryChars: 0,
-							tokensBefore: 45,
-							tokensAfter: 18,
-						}),
-					},
+						turn: {
+							compactContext: async () => ({
+								summarized: true,
+								trimmed: false,
+								summary: "summary",
+								recentMessageCount: 2,
+								previousRecentMessageCount: 5,
+								summaryChars: 7,
+								previousSummaryChars: 0,
+								tokensBefore: 45,
+								tokensAfter: 18,
+							}),
+						},
 					},
 					contextWindow: {
 						softLimitChars: 0,
@@ -280,22 +280,22 @@ test("executeChatCommand forwards /compact <instructions> to compactContext", as
 			getState: () =>
 				({
 					runtime: {
-					    turn: {
-						compactContext: async (options: unknown) => {
-							captured.options = options;
-							return {
-								summarized: true,
-								trimmed: false,
-								summary: "summary",
-								recentMessageCount: 2,
-								previousRecentMessageCount: 5,
-								summaryChars: 7,
-								previousSummaryChars: 0,
-								tokensBefore: 45,
-								tokensAfter: 18,
-							};
+						turn: {
+							compactContext: async (options: unknown) => {
+								captured.options = options;
+								return {
+									summarized: true,
+									trimmed: false,
+									summary: "summary",
+									recentMessageCount: 2,
+									previousRecentMessageCount: 5,
+									summaryChars: 7,
+									previousSummaryChars: 0,
+									tokensBefore: 45,
+									tokensAfter: 18,
+								};
+							},
 						},
-					},
 					},
 					contextWindow: {
 						contextWindow: 200_000,
@@ -320,22 +320,22 @@ test("executeChatCommand omits options.abortSignal when no interrupt signal is a
 		getState: () =>
 			({
 				runtime: {
-				    turn: {
-					compactContext: async (options: unknown) => {
-						captured.options = options;
-						return {
-							summarized: true,
-							trimmed: false,
-							summary: "summary",
-							recentMessageCount: 2,
-							previousRecentMessageCount: 5,
-							summaryChars: 7,
-							previousSummaryChars: 0,
-							tokensBefore: 45,
-							tokensAfter: 18,
-						};
+					turn: {
+						compactContext: async (options: unknown) => {
+							captured.options = options;
+							return {
+								summarized: true,
+								trimmed: false,
+								summary: "summary",
+								recentMessageCount: 2,
+								previousRecentMessageCount: 5,
+								summaryChars: 7,
+								previousSummaryChars: 0,
+								tokensBefore: 45,
+								tokensAfter: 18,
+							};
+						},
 					},
-				},
 				},
 				contextWindow: {
 					contextWindow: 200_000,
@@ -362,22 +362,22 @@ test("executeChatCommand forwards an interrupt signal to /compact", async () => 
 		getState: () =>
 			({
 				runtime: {
-				    turn: {
-					compactContext: async (options: unknown) => {
-						captured.options = options;
-						return {
-							summarized: false,
-							trimmed: false,
-							summary: null,
-							recentMessageCount: 1,
-							previousRecentMessageCount: 1,
-							summaryChars: 0,
-							previousSummaryChars: 0,
-							tokensBefore: 6,
-							tokensAfter: 6,
-						};
+					turn: {
+						compactContext: async (options: unknown) => {
+							captured.options = options;
+							return {
+								summarized: false,
+								trimmed: false,
+								summary: null,
+								recentMessageCount: 1,
+								previousRecentMessageCount: 1,
+								summaryChars: 0,
+								previousSummaryChars: 0,
+								tokensBefore: 6,
+								tokensAfter: 6,
+							};
+						},
 					},
-				},
 				},
 				contextWindow: {
 					contextWindow: 200_000,
@@ -403,19 +403,19 @@ test("executeChatCommand reports when manual compaction is a no-op", async () =>
 		getState: () =>
 			({
 				runtime: {
-				    turn: {
-					compactContext: async () => ({
-						summarized: false,
-						trimmed: false,
-						summary: null,
-						recentMessageCount: 1,
-						previousRecentMessageCount: 1,
-						summaryChars: 0,
-						previousSummaryChars: 0,
-						tokensBefore: 6,
-						tokensAfter: 6,
-					}),
-				},
+					turn: {
+						compactContext: async () => ({
+							summarized: false,
+							trimmed: false,
+							summary: null,
+							recentMessageCount: 1,
+							previousRecentMessageCount: 1,
+							summaryChars: 0,
+							previousSummaryChars: 0,
+							tokensBefore: 6,
+							tokensAfter: 6,
+						}),
+					},
 				},
 				contextWindow: {
 					contextWindow: 200_000,
@@ -492,11 +492,11 @@ test("/model switches to the interactively selected model", async () => {
 					modelName: "fast-model",
 					logger: {},
 					runtime: {
-					    turn: {
-						setProvider: () => {
-							providerUpdated = true;
+						turn: {
+							setProvider: () => {
+								providerUpdated = true;
+							},
 						},
-					},
 					},
 					models: {
 						fast: {
@@ -553,11 +553,11 @@ test("/model switches the active provider for the current chat state", async () 
 					modelName: "fast-model",
 					logger: {},
 					runtime: {
-					    turn: {
-						setProvider: () => {
-							providerUpdated = true;
+						turn: {
+							setProvider: () => {
+								providerUpdated = true;
+							},
 						},
-					},
 					},
 					models: {
 						fast: {
@@ -614,9 +614,9 @@ test("/model remembers a successful model switch", async () => {
 					modelName: "fast-model",
 					logger: {},
 					runtime: {
-					    turn: {
-						setProvider: () => {},
-					},
+						turn: {
+							setProvider: () => {},
+						},
 					},
 					models: {
 						fast: {
@@ -664,9 +664,9 @@ test("/model does not remember an unknown model", async () => {
 					modelName: "fast-model",
 					logger: {},
 					runtime: {
-					    turn: {
-						setProvider: () => {},
-					},
+						turn: {
+							setProvider: () => {},
+						},
 					},
 					models: {
 						fast: {
@@ -694,14 +694,14 @@ test("/new starts a fresh session and replaces the active state", async () => {
 	let updatedState: unknown = "unchanged";
 	const previousState = {
 		runtime: {
-		    turn: { getCurrentSession: () => ({ sessionId: "old-session" }) },
+			turn: { getCurrentSession: () => ({ sessionId: "old-session" }) },
 		},
 	} as never;
 	const freshState = {
 		runtime: {
-		    turn: {
-			getCurrentSession: () => ({ sessionId: "fresh-session" }),
-		},
+			turn: {
+				getCurrentSession: () => ({ sessionId: "fresh-session" }),
+			},
 		},
 	} as never;
 
@@ -740,12 +740,12 @@ test("/exit prints the active session title and id before quitting", async () =>
 			getState: () =>
 				({
 					runtime: {
-					    turn: {
-						getCurrentSession: () => ({
-							sessionId: "11111111-1111-4111-8111-111111111111",
-							title: "demo session",
-						}),
-					},
+						turn: {
+							getCurrentSession: () => ({
+								sessionId: "11111111-1111-4111-8111-111111111111",
+								title: "demo session",
+							}),
+						},
 					},
 				}) as never,
 			setState: () => {},
@@ -769,12 +769,12 @@ test("/exit prints only the session id when no title is set", async () => {
 			getState: () =>
 				({
 					runtime: {
-					    turn: {
-						getCurrentSession: () => ({
-							sessionId: "22222222-2222-4222-8222-222222222222",
-							title: null,
-						}),
-					},
+						turn: {
+							getCurrentSession: () => ({
+								sessionId: "22222222-2222-4222-8222-222222222222",
+								title: null,
+							}),
+						},
 					},
 				}) as never,
 			setState: () => {},
@@ -937,10 +937,7 @@ function createHistorySession(
 
 test("/tasks lists running background tasks", async () => {
 	const manager = new BackgroundTaskManager();
-	const logPath = path.join(
-		await createTempDir("sigpi-tasks-test-"),
-		"t1.log",
-	);
+	const logPath = path.join(await createTempDir("sigpi-tasks-test-"), "t1.log");
 	manager.spawn({
 		id: "task-1",
 		command: "sleep 2",
@@ -972,10 +969,7 @@ test("/tasks lists running background tasks", async () => {
 
 test("/tasks stop ends a background task and reports it", async () => {
 	const manager = new BackgroundTaskManager();
-	const logPath = path.join(
-		await createTempDir("sigpi-tasks-test-"),
-		"t2.log",
-	);
+	const logPath = path.join(await createTempDir("sigpi-tasks-test-"), "t2.log");
 	manager.spawn({
 		id: "task-2",
 		command: "sleep 5",

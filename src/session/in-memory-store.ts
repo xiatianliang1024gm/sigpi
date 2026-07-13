@@ -9,8 +9,8 @@ import type {
 	PersistedSession,
 	SessionSummary,
 } from "../types.js";
-import { deriveTitle, nextTurnId } from "./store.js";
 import type { SessionStore } from "./store.js";
+import { deriveTitle, nextTurnId } from "./store.js";
 
 /**
  * In-memory `SessionStore` used for `--no-session` runs. It satisfies the same

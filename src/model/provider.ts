@@ -1,9 +1,5 @@
 import type { ModelConfig } from "../config.js";
-import type {
-	ModelRequest,
-	ModelResponse,
-	RuntimeLogger,
-} from "../types.js";
+import type { ModelRequest, ModelResponse, RuntimeLogger } from "../types.js";
 import { OpenAICompatibleProvider } from "./openai-compatible.js";
 
 /**

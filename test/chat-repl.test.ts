@@ -241,17 +241,25 @@ test("createCliProgressReporter compact mode groups parallel tool calls from one
 
 	assert.equal(visibleLines[0], "> check the repo");
 	assert.ok(
-		visibleLines.some((line) => line.includes("I will inspect a few files first.")),
+		visibleLines.some((line) =>
+			line.includes("I will inspect a few files first."),
+		),
 		"compact shows the assistant thinking note",
 	);
 	const shellLine = visibleLines.find((line) => line.includes("Shell pwd"));
-	assert.ok(shellLine?.startsWith("  "), "grouped tool start is indented two spaces");
+	assert.ok(
+		shellLine?.startsWith("  "),
+		"grouped tool start is indented two spaces",
+	);
 	assert.ok(
 		!shellLine?.startsWith("    "),
 		"grouped tool start is not indented four spaces",
 	);
 	const hello1 = visibleLines.find((line) => line.includes("hello1"));
-	assert.ok(hello1?.startsWith("    "), "grouped tool result is indented four spaces");
+	assert.ok(
+		hello1?.startsWith("    "),
+		"grouped tool result is indented four spaces",
+	);
 	const doneLine = visibleLines.at(-1);
 	assert.ok(doneLine?.includes("Done"), "turn still ends with Done");
 });
@@ -682,7 +690,9 @@ test("attachSessionById hydrates context from the selected session snapshot", as
 			"conversation summary",
 		);
 		assert.deepEqual(
-			stripMessageIds(attached.updatedState.runtime.context.getRecentMessages()),
+			stripMessageIds(
+				attached.updatedState.runtime.context.getRecentMessages(),
+			),
 			[
 				{ role: "user", content: "inspect repo" },
 				{ role: "assistant", content: "done" },
@@ -858,7 +868,9 @@ test("attachSessionById can switch from one bound session to another", async () 
 			"second session summary",
 		);
 		assert.deepEqual(
-			stripMessageIds(switched.updatedState.runtime.context.getRecentMessages()),
+			stripMessageIds(
+				switched.updatedState.runtime.context.getRecentMessages(),
+			),
 			[
 				{ role: "user", content: "switch here" },
 				{ role: "assistant", content: "done" },
@@ -1449,12 +1461,7 @@ test("runChatReplLoop listens for Esc while a turn is running", async () => {
 			{
 				readChatInput: async () =>
 					["inspect repo", "/exit"][promptIndex++] ?? null,
-				executeTurn: async (
-					_runner,
-					_line,
-					_logger,
-					interruptController,
-				) => {
+				executeTurn: async (_runner, _line, _logger, interruptController) => {
 					interruptController?.beginTurn();
 					interruptController?.enterModel();
 					setTimeout(() => {

@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-	estimateContextTokens,
-} from "../context-window.js";
+import { estimateContextTokens } from "../context-window.js";
 import type { TurnInterruptController } from "../interrupt.js";
 import { isTurnInterruptedError, TurnInterruptedError } from "../interrupt.js";
 import { summarizeAssistantProgressText } from "../progress.js";

@@ -570,7 +570,9 @@ function switchActiveModel(
 		return Promise.resolve(false);
 	}
 
-	state.runtime.turn.setProvider(createModelProvider(model, state.runtime.logger));
+	state.runtime.turn.setProvider(
+		createModelProvider(model, state.runtime.logger),
+	);
 	context.setState({
 		...state,
 		modelId: requestedModelId,
