@@ -151,25 +151,23 @@ export function estimateContextTokens(args: {
 
 export function estimateSystemPromptSections(
 	sections: readonly SystemPromptSection[],
-): Array<{ label: string; chars: number; tokens: number }> {
-	return sections.map((section, index) => {
-		const chars =
-			section.content.length + (index < sections.length - 1 ? 1 : 0);
+): Array<{ label: string; tokens: number }> {
+	return sections.map((section) => {
+		const tokens = estimateSystemPromptTokens(section.content);
 		return {
 			label: section.label,
-			chars,
-			tokens: Math.ceil(chars / 4),
+			tokens,
 		};
 	});
 }
 
 export function groupToolSchemas(
 	schemas: readonly ToolSchema[],
-): Array<{ label: string; count: number; chars: number; tokens: number }> {
+): Array<{ label: string; count: number; tokens: number }> {
 	const groups = new Map<
 		string,
-		{ label: string; count: number; chars: number; tokens: number }
-	>([["built_in", { label: "Built-in tools", count: 0, chars: 0, tokens: 0 }]]);
+		{ label: string; count: number; tokens: number }
+	>([["built_in", { label: "Built-in tools", count: 0, tokens: 0 }]]);
 
 	for (const schema of schemas) {
 		const group = groups.get("built_in");
@@ -178,7 +176,6 @@ export function groupToolSchemas(
 		}
 		const chars = JSON.stringify(schema).length;
 		group.count += 1;
-		group.chars += chars;
 		group.tokens += Math.ceil(chars / 4);
 	}
 
@@ -186,13 +183,11 @@ export function groupToolSchemas(
 }
 
 export function summarizeRecentMessagesByRole(messages: readonly Message[]): {
-	totalChars: number;
 	totalTokens: number;
 	totalCount: number;
 	byRole: Array<{
 		role: Message["role"];
 		count: number;
-		chars: number;
 		tokens: number;
 	}>;
 } {
@@ -201,32 +196,25 @@ export function summarizeRecentMessagesByRole(messages: readonly Message[]): {
 		{
 			role: Message["role"];
 			count: number;
-			chars: number;
 			tokens: number;
 		}
 	>();
-	let totalChars = 0;
 	let totalTokens = 0;
 
 	for (const message of messages) {
-		const chars = estimateMessageChars(message);
-		const tokens = Math.ceil(chars / 4);
-		totalChars += chars;
+		const tokens = estimateMessageTokens(message);
 		totalTokens += tokens;
 		const current = byRole.get(message.role) ?? {
 			role: message.role,
 			count: 0,
-			chars: 0,
 			tokens: 0,
 		};
 		current.count += 1;
-		current.chars += chars;
 		current.tokens += tokens;
 		byRole.set(message.role, current);
 	}
 
 	return {
-		totalChars,
 		totalTokens,
 		totalCount: messages.length,
 		byRole: MESSAGE_ROLE_ORDER.map((role) => byRole.get(role)).filter(
