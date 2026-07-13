@@ -8,7 +8,7 @@ import {
 	getResumeAvailability as defaultGetResumeAvailability,
 } from "./chat-repl.js";
 import { formatContextWindowSummary } from "./context-summary.js";
-import { OpenAICompatibleProvider } from "./model/openai-compatible.js";
+import { createModelProvider } from "./model/provider.js";
 import type { SessionStore } from "./session/store.js";
 import { setLastModelId } from "./state.js";
 import type { BackgroundTaskManager } from "./tools/background.js";
@@ -570,9 +570,7 @@ function switchActiveModel(
 		return Promise.resolve(false);
 	}
 
-	state.runtime.turn.setProvider(
-		new OpenAICompatibleProvider(model, state.runtime.logger),
-	);
+	state.runtime.turn.setProvider(createModelProvider(model, state.runtime.logger));
 	context.setState({
 		...state,
 		modelId: requestedModelId,

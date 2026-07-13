@@ -5,7 +5,7 @@ to an OpenAI-compatible model **and** supports two wire formats without forking 
 
 ## The provider seam
 
-`ModelProvider` (`src/types.ts`) is one method:
+`ModelProvider` (`src/model/provider.ts`) is one method:
 
 ```ts
 interface ModelProvider {
@@ -14,7 +14,9 @@ interface ModelProvider {
 ```
 
 Everything the loop needs is behind this interface. Swapping providers (or mocking them in tests)
-means swapping one object. `OpenAICompatibleProvider` is the concrete implementation.
+means swapping one object. The interface is defined and constructed in the model module; consumers
+obtain one through `createModelProvider(config, logger)` and never name the concrete class.
+`OpenAICompatibleProvider` is the concrete implementation.
 
 ## A thin composer
 

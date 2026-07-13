@@ -338,16 +338,10 @@ export interface ModelRequestContext {
 	purpose?: "turn" | "summary";
 }
 
-export interface ModelProvider {
-	/**
-	 * Model's maximum output tokens, if known. Compaction uses this as a
-	 * hard cap when sizing the summary request so we never ask for more
-	 * tokens than the model can produce. Optional; consumers should
-	 * default to a sensible internal cap (2048) when absent.
-	 */
-	readonly maxTokens?: number;
-	generate(request: ModelRequest): Promise<ModelResponse>;
-}
+// The ModelProvider seam is defined and constructed in the model module
+// (src/model/provider.ts); re-exported here so shared-type consumers keep a
+// single import site.
+export type { ModelProvider } from "./model/provider.js";
 
 export interface ContextManagerOptions {
 	/**

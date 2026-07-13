@@ -47,3 +47,11 @@ Renamed `[agent] process_output` from `quiet`/`clear`/`full` to `compact`/`detai
 | # | Title | Commit | One-liner |
 |---|-------|--------|-----------|
 | [0011](./0011-process-output-modes-compact-detailed.md) | Process output modes renamed to compact/detailed; `full` removed | `—` | Two tiers: `compact` (dense, groups parallel tool calls) and `detailed` (adds dividers/counts); invalid values error; `full` gone |
+
+## Model provider seam pass (2026-07-13)
+
+Gave the `ModelProvider` seam a home module in `src/model/`. Came from the architecture-review deepening pass (candidate 4).
+
+| # | Title | Commit | One-liner |
+|---|-------|--------|-----------|
+| [0012](./0012-model-provider-seam-home.md) | Model provider seam gets a home module | `—` | `ModelProvider` defined + `createModelProvider` in `src/model/provider.ts`; `createRuntimeProvider` deleted; no consumer names the concrete class |

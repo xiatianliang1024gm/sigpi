@@ -15,7 +15,7 @@ import {
 } from "./config.js";
 import { buildSystemPrompt, buildSystemPromptSections } from "./defaults.js";
 import { createChildLogger, createLogger } from "./logger.js";
-import { OpenAICompatibleProvider } from "./model/openai-compatible.js";
+import { createModelProvider } from "./model/provider.js";
 import { resolveSessionStoragePaths } from "./session/paths.js";
 import {
 	hydrateRuntimeFromSession,
@@ -35,7 +35,6 @@ import { buildTrustedReadRoots } from "./tools/path-utils.js";
 import type {
 	LoadedSession,
 	LoadedSkill,
-	ModelProvider,
 	PersistedSession,
 	ProgressReporter,
 	RuntimeLogger,
@@ -103,13 +102,6 @@ export function createRuntimeSessionStore(args?: {
 		}),
 		logger: args?.logger,
 	});
-}
-
-export function createRuntimeProvider(
-	config: AppConfig,
-	logger?: RuntimeLogger,
-): ModelProvider {
-	return new OpenAICompatibleProvider(config.model, logger);
 }
 
 export async function loadRuntimeSkillCatalog(args: {
@@ -258,7 +250,7 @@ export async function createAgentRuntime(
 	const runtimeLogger = createChildLogger(runLogger, {
 		sessionId: sessionState.session?.sessionId ?? null,
 	});
-	const provider = createRuntimeProvider(config, runtimeLogger);
+	const provider = createModelProvider(config.model, runtimeLogger);
 	const toolSchemas = tools.getSchemas();
 
 	const sessionStoragePaths = resolveSessionStoragePaths({
