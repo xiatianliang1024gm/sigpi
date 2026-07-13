@@ -637,15 +637,15 @@ test("attachSessionById hydrates context from the selected session snapshot", as
 		const attached = await attachSessionById(session.sessionId);
 
 		assert.equal(
-			attached.updatedState.turn.getCurrentSession().sessionId,
+			attached.updatedState.runtime.turn.getCurrentSession().sessionId,
 			session.sessionId,
 		);
 		assert.equal(
-			attached.updatedState.context.getSummary(),
+			attached.updatedState.runtime.context.getSummary(),
 			"conversation summary",
 		);
 		assert.deepEqual(
-			stripMessageIds(attached.updatedState.context.getRecentMessages()),
+			stripMessageIds(attached.updatedState.runtime.context.getRecentMessages()),
 			[
 				{ role: "user", content: "inspect repo" },
 				{ role: "assistant", content: "done" },
@@ -683,7 +683,7 @@ test("attachSessionById returns interrupted and system prompt warnings from sess
 		const attached = await attachSessionById(session.sessionId);
 
 		assert.equal(
-			attached.updatedState.turn.getCurrentSession().status,
+			attached.updatedState.runtime.turn.getCurrentSession().status,
 			"interrupted",
 		);
 		assert.equal(attached.warnings.length, 2);
@@ -813,15 +813,15 @@ test("attachSessionById can switch from one bound session to another", async () 
 			first.sessionId,
 		);
 		assert.equal(
-			switched.updatedState.turn.getCurrentSession().sessionId,
+			switched.updatedState.runtime.turn.getCurrentSession().sessionId,
 			second.sessionId,
 		);
 		assert.equal(
-			switched.updatedState.context.getSummary(),
+			switched.updatedState.runtime.context.getSummary(),
 			"second session summary",
 		);
 		assert.deepEqual(
-			stripMessageIds(switched.updatedState.context.getRecentMessages()),
+			stripMessageIds(switched.updatedState.runtime.context.getRecentMessages()),
 			[
 				{ role: "user", content: "switch here" },
 				{ role: "assistant", content: "done" },
@@ -950,7 +950,10 @@ test("runChatReplLoop /resume refreshes state through the command layer", async 
 		const outputs: string[] = [];
 		const updatedState = {
 			...runtimeToChatReplState(runtime),
-			sessionWarnings: ["restored warning"],
+			runtime: {
+				...runtime,
+				sessionWarnings: ["restored warning"],
+			},
 		};
 		const commands = createChatCommandDefinitions({
 			attachSessionFromSelector: async () => ({
@@ -976,7 +979,7 @@ test("runChatReplLoop /resume refreshes state through the command layer", async 
 			},
 		);
 
-		assert.equal(finalState.sessionWarnings[0], "restored warning");
+		assert.equal(finalState.runtime.sessionWarnings[0], "restored warning");
 		assert.equal(outputs[0], "Attached session: session-2");
 		assert.equal(outputs[1], "[session-warning] restored warning");
 		assert.match(outputs[2] ?? "", /^Exiting session: [0-9a-f-]{36}$/);
@@ -1003,7 +1006,17 @@ test("runChatReplLoop /resume reports empty session list before selector", async
 		},
 		modelName: "test-model",
 		workingDirectory: "/tmp/test",
-		turn: { getCurrentSession: () => null } as never,
+		runtime: {
+			context: {
+				getLastUsage: () => null,
+				getSummary: () => "",
+				getRecentMessages: () => [],
+			},
+			systemPromptSections: [],
+			toolSchemas: [],
+			turn: { getCurrentSession: () => null },
+			workingDirectory: "/tmp/test",
+		} as never,
 	} as never;
 	let promptIndex = 0;
 	const commands: readonly ChatCommandDefinition[] =

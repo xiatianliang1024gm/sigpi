@@ -167,7 +167,7 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 	if (runtime.session) {
 		console.log(`Session: ${runtime.session.sessionId}`);
 	}
-	for (const warning of state.sessionWarnings) {
+	for (const warning of state.runtime.sessionWarnings) {
 		console.log(`[session-warning] ${warning}`);
 	}
 
@@ -307,7 +307,7 @@ export async function runChatReplLoop(
 	const executeTurn =
 		dependencies.executeTurn ??
 		((state, input, logger, interruptController) =>
-			state.turn.runTurn(input, logger, interruptController));
+			state.runtime.turn.runTurn(input, logger, interruptController));
 	const writeLine =
 		dependencies.writeLine ??
 		((line: string) => writeWithActiveRunningInput(() => console.log(line)));
@@ -317,7 +317,7 @@ export async function runChatReplLoop(
 	const commands =
 		dependencies.commands ??
 		createChatCommandDefinitions({
-			loadedSkills: options.state.loadedSkills,
+			loadedSkills: options.state.runtime.loadedSkills,
 		});
 	const queuedLines: string[] = [];
 	let latestProgressEvent: TurnProgressEvent | null = null;
@@ -428,7 +428,7 @@ export async function runChatReplLoop(
 			? statusBarProgressListener
 			: null;
 		const turn = await withActiveRunningInput(runningInput, () =>
-			executeTurn(state, turnInput, state.logger, interruptController),
+			executeTurn(state, turnInput, state.runtime.logger, interruptController),
 		).finally(() => {
 			activeStatusBarProgressListener = null;
 			runningInput?.stop();

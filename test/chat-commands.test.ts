@@ -35,8 +35,10 @@ test("/history defaults to the latest 5 saved turns", async () => {
 	await executeChatCommand("/history", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				turn: {
+				runtime: {
+				    turn: {
 					getCurrentSession: () => createHistorySession(6),
+				},
 				},
 			}) as never,
 		setState: () => {},
@@ -58,8 +60,10 @@ test("/history count limits output to the latest requested turns", async () => {
 	await executeChatCommand("/history 1", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				turn: {
+				runtime: {
+				    turn: {
 					getCurrentSession: () => createHistorySession(3),
+				},
 				},
 			}) as never,
 		setState: () => {},
@@ -78,8 +82,10 @@ test("/history all includes every saved turn", async () => {
 	await executeChatCommand("/history all", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				turn: {
+				runtime: {
+				    turn: {
 					getCurrentSession: () => createHistorySession(6),
+				},
 				},
 			}) as never,
 		setState: () => {},
@@ -97,7 +103,8 @@ test("/history reports failed turns and missing assistant output", async () => {
 	await executeChatCommand("/history all", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				turn: {
+				runtime: {
+				    turn: {
 					getCurrentSession: () =>
 						createHistorySession(1, {
 							status: "failed",
@@ -105,6 +112,7 @@ test("/history reports failed turns and missing assistant output", async () => {
 							toolExecutions: [],
 							errorMessage: "model failed",
 						}),
+				},
 				},
 			}) as never,
 		setState: () => {},
@@ -125,7 +133,8 @@ test("/history reports failed turns and missing assistant output", async () => {
 test("/history reports when there is no active session", async () => {
 	const outputs: string[] = [];
 	await executeChatCommand("/history", createChatCommandDefinitions(), {
-		getState: () => ({ turn: { getCurrentSession: () => null } }) as never,
+		getState: () =>
+			({ runtime: { turn: { getCurrentSession: () => null } } }) as never,
 		setState: () => {},
 		store: {} as never,
 		writeLine: (line: string) => outputs.push(line),
@@ -139,8 +148,10 @@ test("/history reports when the active session has no saved turns", async () => 
 	await executeChatCommand("/history", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				turn: {
+				runtime: {
+				    turn: {
 					getCurrentSession: () => createHistorySession(0),
+				},
 				},
 			}) as never,
 		setState: () => {},
@@ -156,8 +167,10 @@ test("/history rejects invalid arguments", async () => {
 	await executeChatCommand("/history newest", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				turn: {
+				runtime: {
+				    turn: {
 					getCurrentSession: () => createHistorySession(1),
+				},
 				},
 			}) as never,
 		setState: () => {},
@@ -216,7 +229,8 @@ test("executeChatCommand compacts context through the active session runtime", a
 		{
 			getState: () =>
 				({
-					turn: {
+					runtime: {
+					    turn: {
 						compactContext: async () => ({
 							summarized: true,
 							trimmed: false,
@@ -230,6 +244,7 @@ test("executeChatCommand compacts context through the active session runtime", a
 							tokensBefore: 45,
 							tokensAfter: 18,
 						}),
+					},
 					},
 					contextWindow: {
 						softLimitChars: 0,
@@ -266,7 +281,8 @@ test("executeChatCommand forwards /compact <instructions> to compactContext", as
 		{
 			getState: () =>
 				({
-					turn: {
+					runtime: {
+					    turn: {
 						compactContext: async (options: unknown) => {
 							captured.options = options;
 							return {
@@ -283,6 +299,7 @@ test("executeChatCommand forwards /compact <instructions> to compactContext", as
 								tokensAfter: 18,
 							};
 						},
+					},
 					},
 					contextWindow: {
 						contextWindow: 200_000,
@@ -306,7 +323,8 @@ test("executeChatCommand omits options.abortSignal when no interrupt signal is a
 	await executeChatCommand("/compact", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				turn: {
+				runtime: {
+				    turn: {
 					compactContext: async (options: unknown) => {
 						captured.options = options;
 						return {
@@ -323,6 +341,7 @@ test("executeChatCommand omits options.abortSignal when no interrupt signal is a
 							tokensAfter: 18,
 						};
 					},
+				},
 				},
 				contextWindow: {
 					contextWindow: 200_000,
@@ -348,7 +367,8 @@ test("executeChatCommand forwards an interrupt signal to /compact", async () => 
 	await executeChatCommand("/compact", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				turn: {
+				runtime: {
+				    turn: {
 					compactContext: async (options: unknown) => {
 						captured.options = options;
 						return {
@@ -365,6 +385,7 @@ test("executeChatCommand forwards an interrupt signal to /compact", async () => 
 							tokensAfter: 6,
 						};
 					},
+				},
 				},
 				contextWindow: {
 					contextWindow: 200_000,
@@ -389,7 +410,8 @@ test("executeChatCommand reports when manual compaction is a no-op", async () =>
 	await executeChatCommand("/compact", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				turn: {
+				runtime: {
+				    turn: {
 					compactContext: async () => ({
 						summarized: false,
 						trimmed: false,
@@ -403,6 +425,7 @@ test("executeChatCommand reports when manual compaction is a no-op", async () =>
 						tokensBefore: 6,
 						tokensAfter: 6,
 					}),
+				},
 				},
 				contextWindow: {
 					contextWindow: 200_000,
@@ -478,10 +501,12 @@ test("/model switches to the interactively selected model", async () => {
 					modelId: "fast",
 					modelName: "fast-model",
 					logger: {},
-					turn: {
+					runtime: {
+					    turn: {
 						setProvider: () => {
 							providerUpdated = true;
 						},
+					},
 					},
 					models: {
 						fast: {
@@ -537,10 +562,12 @@ test("/model switches the active provider for the current chat state", async () 
 					modelId: "fast",
 					modelName: "fast-model",
 					logger: {},
-					turn: {
+					runtime: {
+					    turn: {
 						setProvider: () => {
 							providerUpdated = true;
 						},
+					},
 					},
 					models: {
 						fast: {
@@ -596,8 +623,10 @@ test("/model remembers a successful model switch", async () => {
 					modelId: "fast",
 					modelName: "fast-model",
 					logger: {},
-					turn: {
+					runtime: {
+					    turn: {
 						setProvider: () => {},
+					},
 					},
 					models: {
 						fast: {
@@ -644,8 +673,10 @@ test("/model does not remember an unknown model", async () => {
 					modelId: "fast",
 					modelName: "fast-model",
 					logger: {},
-					turn: {
+					runtime: {
+					    turn: {
 						setProvider: () => {},
+					},
 					},
 					models: {
 						fast: {
@@ -672,11 +703,15 @@ test("/new starts a fresh session and replaces the active state", async () => {
 	const outputs: string[] = [];
 	let updatedState: unknown = "unchanged";
 	const previousState = {
-		turn: { getCurrentSession: () => ({ sessionId: "old-session" }) },
+		runtime: {
+		    turn: { getCurrentSession: () => ({ sessionId: "old-session" }) },
+		},
 	} as never;
 	const freshState = {
-		turn: {
+		runtime: {
+		    turn: {
 			getCurrentSession: () => ({ sessionId: "fresh-session" }),
+		},
 		},
 	} as never;
 
@@ -714,11 +749,13 @@ test("/exit prints the active session title and id before quitting", async () =>
 		{
 			getState: () =>
 				({
-					turn: {
+					runtime: {
+					    turn: {
 						getCurrentSession: () => ({
 							sessionId: "11111111-1111-4111-8111-111111111111",
 							title: "demo session",
 						}),
+					},
 					},
 				}) as never,
 			setState: () => {},
@@ -741,11 +778,13 @@ test("/exit prints only the session id when no title is set", async () => {
 		{
 			getState: () =>
 				({
-					turn: {
+					runtime: {
+					    turn: {
 						getCurrentSession: () => ({
 							sessionId: "22222222-2222-4222-8222-222222222222",
 							title: null,
 						}),
+					},
 					},
 				}) as never,
 			setState: () => {},
@@ -766,7 +805,8 @@ test("/exit reports when there is no active session", async () => {
 		"/exit",
 		createChatCommandDefinitions(),
 		{
-			getState: () => ({ turn: { getCurrentSession: () => null } }) as never,
+			getState: () =>
+				({ runtime: { turn: { getCurrentSession: () => null } } }) as never,
 			setState: () => {},
 			store: {} as never,
 			writeLine: (line: string) => outputs.push(line),
@@ -782,43 +822,45 @@ test("/summary reports context structure instead of recent message bodies", asyn
 	await executeChatCommand("/summary", createChatCommandDefinitions(), {
 		getState: () =>
 			({
-				context: {
-					getSummary: () => "compressed memory",
-					getLastUsage: () => null,
-					getRecentMessages: () => [
-						{ role: "user", content: "secret user text" },
-						{ role: "assistant", content: "assistant body" },
+				runtime: {
+					context: {
+						getSummary: () => "compressed memory",
+						getLastUsage: () => null,
+						getRecentMessages: () => [
+							{ role: "user", content: "secret user text" },
+							{ role: "assistant", content: "assistant body" },
+							{
+								role: "tool",
+								name: "read",
+								toolCallId: "call_1",
+								content: '{"ok":true}',
+							},
+						],
+					},
+					systemPromptSections: [
+						{ id: "core", label: "Core instructions", content: "Be concise." },
 						{
-							role: "tool",
-							name: "read",
-							toolCallId: "call_1",
-							content: '{"ok":true}',
+							id: "tools",
+							label: "Tool guidance",
+							content: "Use tools carefully.",
+						},
+						{
+							id: "skills",
+							label: "Skill guidance",
+							content: "No skills loaded.",
+						},
+					],
+					toolSchemas: [
+						{
+							type: "function",
+							function: {
+								name: "glob",
+								description: "List files",
+								parameters: { type: "object" },
+							},
 						},
 					],
 				},
-				systemPromptSections: [
-					{ id: "core", label: "Core instructions", content: "Be concise." },
-					{
-						id: "tools",
-						label: "Tool guidance",
-						content: "Use tools carefully.",
-					},
-					{
-						id: "skills",
-						label: "Skill guidance",
-						content: "No skills loaded.",
-					},
-				],
-				toolSchemas: [
-					{
-						type: "function",
-						function: {
-							name: "glob",
-							description: "List files",
-							parameters: { type: "object" },
-						},
-					},
-				],
 				loadedSkillNames: [],
 				contextWindow: {
 					contextWindow: 200_000,

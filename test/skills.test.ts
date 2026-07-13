@@ -240,7 +240,9 @@ test("buildSystemPromptSections surfaces the skill index", () => {
 
 test("/skill lists loaded skills", async () => {
 	const state = {
-		loadedSkills: [minimalSkill({ name: "demo", description: "Demo skill" })],
+		runtime: {
+			loadedSkills: [minimalSkill({ name: "demo", description: "Demo skill" })],
+		},
 	} as unknown as ChatReplState;
 	const lines: string[] = [];
 	const context: ChatCommandContext = {
@@ -264,7 +266,9 @@ test("/skill lists loaded skills", async () => {
 
 test("/skill <name> with a space lists skills and hints at /skill:<name>", async () => {
 	const state = {
-		loadedSkills: [minimalSkill({ name: "demo", description: "Demo skill" })],
+		runtime: {
+			loadedSkills: [minimalSkill({ name: "demo", description: "Demo skill" })],
+		},
 	} as unknown as ChatReplState;
 	const lines: string[] = [];
 	const context: ChatCommandContext = {
@@ -295,7 +299,8 @@ test("/skill:<name> injects a skill's name, directory, and body as a turn", asyn
 		body: "Follow these instructions.",
 	});
 	const context: ChatCommandContext = {
-		getState: () => ({ loadedSkills: [skill] }) as unknown as ChatReplState,
+		getState: () =>
+			({ runtime: { loadedSkills: [skill] } }) as unknown as ChatReplState,
 		setState: () => {},
 		store: {} as ChatCommandContext["store"],
 		writeLine: () => {},
@@ -326,7 +331,8 @@ test("/skill:<name> <message> injects the skill body and a User request", async 
 		body: "Follow these instructions.",
 	});
 	const context: ChatCommandContext = {
-		getState: () => ({ loadedSkills: [skill] }) as unknown as ChatReplState,
+		getState: () =>
+			({ runtime: { loadedSkills: [skill] } }) as unknown as ChatReplState,
 		setState: () => {},
 		store: {} as ChatCommandContext["store"],
 		writeLine: () => {},

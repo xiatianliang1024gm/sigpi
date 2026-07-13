@@ -7,21 +7,21 @@ import {
 } from "./context-window.js";
 
 export function formatContextWindowSummary(state: ChatReplState): string {
-	const recentMessages = state.context.getRecentMessages();
+	const recentMessages = state.runtime.context.getRecentMessages();
 	const systemPromptSections = estimateSystemPromptSections(
-		state.systemPromptSections,
+		state.runtime.systemPromptSections,
 	);
-	const toolGroups = groupToolSchemas(state.toolSchemas);
-	const summary = state.context.getSummary();
+	const toolGroups = groupToolSchemas(state.runtime.toolSchemas);
+	const summary = state.runtime.context.getSummary();
 	const recentStats = summarizeRecentMessagesByRole(recentMessages);
-	const lastUsage = state.context.getLastUsage();
+	const lastUsage = state.runtime.context.getLastUsage();
 	const tokens = estimateContextTokens({
-		systemPrompt: state.systemPromptSections
+		systemPrompt: state.runtime.systemPromptSections
 			.map((section) => section.content)
 			.join(" "),
 		summary,
 		recentMessages,
-		toolSchemas: state.toolSchemas,
+		toolSchemas: state.runtime.toolSchemas,
 		lastUsage: lastUsage?.usage ?? null,
 		lastUsageMessageIndex: lastUsage?.messageIndex ?? null,
 	});
@@ -38,7 +38,7 @@ export function formatContextWindowSummary(state: ChatReplState): string {
 		...systemPromptSections.map(
 			(section) => `  - ${section.label}: ${section.tokens} tokens.`,
 		),
-		`Tool definitions: ${tokens.toolSchemaTokens} tokens across ${state.toolSchemas.length} tool(s) (${formatPercent(tokens.toolSchemaTokens, usedTokens)} of total).`,
+		`Tool definitions: ${tokens.toolSchemaTokens} tokens across ${state.runtime.toolSchemas.length} tool(s) (${formatPercent(tokens.toolSchemaTokens, usedTokens)} of total).`,
 		...toolGroups.map(
 			(group) =>
 				`  - ${group.label}: ${group.count} tool(s), ${group.tokens} tokens.`,

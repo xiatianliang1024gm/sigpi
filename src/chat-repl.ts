@@ -1,6 +1,4 @@
 import { homedir } from "node:os";
-import type { ConversationContext } from "./agent/context.js";
-import type { AgentTurn } from "./agent/turn.js";
 import type { ModelConfig } from "./config.js";
 import { estimateContextTokens } from "./context-window.js";
 import { setCurrentPlan } from "./plan-tracker.js";
@@ -11,30 +9,20 @@ import {
 	selectSessionInteractive,
 } from "./session-selector.js";
 import type {
-	LoadedSkill,
 	ProgressReporter,
-	RuntimeLogger,
 	SessionSummary,
 	ShellRuntime,
-	SystemPromptSection,
-	ToolSchema,
 	TurnProgressEvent,
 } from "./types.js";
 
 export interface ChatReplState {
-	turn: AgentTurn;
-	context: ConversationContext;
-	logger: RuntimeLogger;
+	/** The agent runtime this REPL session is driving. Most state lives here. */
+	runtime: AgentRuntime;
 	shellRuntime: ShellRuntime;
-	sessionWarnings: string[];
-	systemPromptSections: readonly SystemPromptSection[];
-	toolSchemas: readonly ToolSchema[];
-	loadedSkills: readonly LoadedSkill[];
 	loadedSkillNames: readonly string[];
 	modelId: string;
 	modelName: string;
 	models: Record<string, ModelConfig>;
-	workingDirectory: string;
 	contextWindow: {
 		contextWindow: number;
 		reserveTokens: number;
@@ -108,19 +96,12 @@ export function runtimeToChatReplState(runtime: AgentRuntime): ChatReplState {
 	setCurrentPlan(null);
 
 	return {
-		turn: runtime.turn,
-		context: runtime.context,
-		logger: runtime.logger,
+		runtime,
 		shellRuntime: runtime.shellRuntime,
-		sessionWarnings: runtime.sessionWarnings,
-		systemPromptSections: runtime.systemPromptSections,
-		toolSchemas: runtime.toolSchemas,
-		loadedSkills: runtime.loadedSkills,
 		loadedSkillNames: runtime.loadedSkills.map((skill) => skill.name),
 		modelId: runtime.config.modelId,
 		modelName: runtime.config.model.name,
 		models: runtime.config.models,
-		workingDirectory: runtime.workingDirectory,
 		contextWindow: {
 			contextWindow: runtime.config.agent.contextWindow,
 			reserveTokens: runtime.config.agent.reserveTokens,
@@ -138,7 +119,7 @@ export function getResumeAvailability(
 export function getActiveSessionSummary(
 	state: ChatReplState,
 ): SessionSummary | null {
-	const session = state.turn.getCurrentSession();
+	const session = state.runtime.turn.getCurrentSession();
 	if (!session) {
 		return null;
 	}
@@ -157,14 +138,14 @@ export function getActiveSessionSummary(
 }
 
 export function formatStatusBar(state: ChatReplState): string {
-	const lastUsage = state.context.getLastUsage();
+	const lastUsage = state.runtime.context.getLastUsage();
 	const tokens = estimateContextTokens({
-		systemPrompt: state.systemPromptSections
+		systemPrompt: state.runtime.systemPromptSections
 			.map((section) => section.content)
 			.join(" "),
-		summary: state.context.getSummary(),
-		recentMessages: state.context.getRecentMessages(),
-		toolSchemas: state.toolSchemas,
+		summary: state.runtime.context.getSummary(),
+		recentMessages: state.runtime.context.getRecentMessages(),
+		toolSchemas: state.runtime.toolSchemas,
 		lastUsage: lastUsage?.usage ?? null,
 		lastUsageMessageIndex: lastUsage?.messageIndex ?? null,
 	});
@@ -172,7 +153,9 @@ export function formatStatusBar(state: ChatReplState): string {
 }
 
 export function getCurrentWorkingDirectory(state: ChatReplState): string {
-	return state.turn.getCurrentSession()?.cwd ?? state.workingDirectory;
+	return (
+		state.runtime.turn.getCurrentSession()?.cwd ?? state.runtime.workingDirectory
+	);
 }
 
 export function formatStatusBarForEvent(

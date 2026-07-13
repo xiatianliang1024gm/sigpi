@@ -176,7 +176,7 @@ export function createChatCommandDefinitions(
 				};
 				let result: ContextUpdateResult;
 				try {
-					result = await state.turn.compactContext(compactOptions);
+					result = await state.runtime.turn.compactContext(compactOptions);
 				} catch (error) {
 					if (error instanceof CompactionFailedError) {
 						context.writeLine(
@@ -278,7 +278,7 @@ export function createChatCommandDefinitions(
 			name: "/session",
 			description: "Show current session JSON",
 			handler: (context) => {
-				const session = context.getState().turn.getCurrentSession();
+				const session = context.getState().runtime.turn.getCurrentSession();
 
 				if (!session) {
 					context.writeLine("(no active session)");
@@ -312,7 +312,7 @@ export function createChatCommandDefinitions(
 					return { action: "continue" };
 				}
 
-				const session = context.getState().turn.getCurrentSession();
+				const session = context.getState().runtime.turn.getCurrentSession();
 				if (!session) {
 					context.writeLine("(no active session)");
 					return { action: "continue" };
@@ -375,7 +375,7 @@ export function createChatCommandDefinitions(
 			aliases: ["/quit", "exit", "quit"],
 			description: "Exit interactive chat",
 			handler: (context) => {
-				const session = context.getState().turn.getCurrentSession();
+				const session = context.getState().runtime.turn.getCurrentSession();
 				if (session) {
 					const title = session.title?.trim();
 					context.writeLine(
@@ -453,7 +453,7 @@ export function createChatCommandDefinitions(
 			description:
 				"List loaded skills (use /skill:<name> to load one; /skill:<name> <message> loads and chats)",
 			handler: (context, args) => {
-				const skills = context.getState().loadedSkills;
+				const skills = context.getState().runtime.loadedSkills;
 				if (skills.length === 0) {
 					context.writeLine("No skills are loaded.");
 					return { action: "continue" };
@@ -570,7 +570,9 @@ function switchActiveModel(
 		return Promise.resolve(false);
 	}
 
-	state.turn.setProvider(new OpenAICompatibleProvider(model, state.logger));
+	state.runtime.turn.setProvider(
+		new OpenAICompatibleProvider(model, state.runtime.logger),
+	);
 	context.setState({
 		...state,
 		modelId: requestedModelId,
@@ -580,7 +582,7 @@ function switchActiveModel(
 	return rememberModelSelection(requestedModelId)
 		.then(() => true)
 		.catch((error: unknown) => {
-			state.logger?.warn?.("model_selection_state_save_failed", {
+			state.runtime.logger?.warn?.("model_selection_state_save_failed", {
 				modelId: requestedModelId,
 				error: error instanceof Error ? error.message : String(error),
 			});
