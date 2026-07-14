@@ -77,9 +77,13 @@ reader would otherwise wonder why arrows behave this way.
 - **Key bindings are context-dependent, not key-dependent.** `↑`/`↓` recall
   history by default; they navigate command suggestions only when the current
   line is a `/` chat command with suggestions open (the existing behavior).
-- **The context rule is stateless.** Arrows navigate suggestions exactly when
-  `getChatCommandSuggestions` would return non-empty (buffer matches
-  `/^\/\S*$/`); otherwise they recall history. No extra "recalling" mode flag.
+- **The context rule is stateless *at the draft slot*.** At the draft slot, arrows
+  navigate suggestions exactly when `getChatCommandSuggestions` would return
+  non-empty (buffer matches `/^\/\S*$/`); otherwise they recall history. Once an
+  `↑`/`↓` enters the recall context (a recalled entry is showing, or the user is
+  mid-edit of a recalled line), slash suggestions are suppressed so the arrows
+  keep walking history instead of getting trapped in the suggestion menu — see
+  **Decision refinement (2026-07-15)** below.
 - **In-memory, process-scoped, global.** A single `InputHistory` buffer for the
   CLI run, discarded on exit. Not persisted to disk, not tied to a `Session`.
 - **Entries: only model-reaching inputs.** Natural-language prompts and
@@ -125,3 +129,32 @@ reader would otherwise wonder why arrows behave this way.
   - Component: arrows recall history by default; arrows navigate suggestions when
     the buffer matches `/^\/\S*$/`; editing a recalled line returns arrows to
     cursor movement.
+
+## Decision refinement (2026-07-15)
+
+**Problem.** Recalling a `/`-command entry such as `/skill:foo` via `↑` left the
+buffer matching `/^\/\S*$/`, so the *next* `↑`/`↓` was swallowed by the suggestion
+menu instead of continuing to walk history — the arrows got "stuck" on a recalled
+slash command. Worse, the original implementation set a permanent
+`editedSinceRecall` flag the moment a recalled line was edited; once set, `↑`/`↓`
+never recalled again, even after the line was fully cleared back to the draft
+slot.
+
+**Resolution.** Introduce a bounded *recall context* instead of a permanent flag:
+
+- `HistoryNavigator.isRecalling()` is true while a recalled entry is showing
+  (`!history.isAtDraft`) **or** while the user is mid-edit of a recalled line
+  (`editingRecalled`).
+- While recalling, `ChatInputComponent` suppresses slash suggestions in both
+  `handleInput` (arrow navigation) and `render` (suggestion list), so `↑`/`↓`
+  keep walking history. This mirrors the multiline case, where arrows are already
+  suppressed for suggestions.
+- The `editingRecalled` flag is cleared as soon as the buffer returns to the clean
+  draft slot (`history.isAtDraft`), so clearing a recalled line fully restores
+  recall — it is no longer permanently stuck. Editing a recalled line still drops
+  it back to the draft slot and hands arrows to in-editor vertical cursor movement
+  (Story 13), which is preserved.
+
+This keeps the draft-slot behavior stateless (suggestions still open when you
+type `/` from an empty line) while fixing the stuck-arrows regression on recalled
+slash commands.
