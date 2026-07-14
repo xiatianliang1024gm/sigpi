@@ -36,7 +36,7 @@
     "release": "bash scripts/release.sh"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19.0"
   },
   "dependencies": {
     "smol-toml": "^1.7.0",
