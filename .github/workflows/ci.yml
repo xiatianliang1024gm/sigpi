@@ -25,4 +25,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # The bash tool defaults to zsh on POSIX platforms; ubuntu-latest does
+      # not ship zsh by default, so install it before running the suite.
+      - run: sudo apt-get update && sudo apt-get install -y zsh
+
       - run: pnpm release:check

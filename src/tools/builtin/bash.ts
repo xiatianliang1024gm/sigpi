@@ -309,7 +309,12 @@ export function createBashTool(
 						return {
 							ok: false as const,
 							stdout: error.stdout ?? "",
-							stderr: error.stderr ?? error.message,
+							// Use `||` (not `??`): when the shell binary is
+							// missing (e.g. zsh not installed), `error.stderr`
+							// is `""`, so `??` would keep the empty string and
+							// hide the failure reason. `||` falls back to the
+							// error message instead.
+							stderr: error.stderr || error.message,
 							exitCode: typeof error.code === "number" ? error.code : null,
 							signal: error.signal ?? null,
 							timedOut: error.killed === true && error.signal === "SIGTERM",
