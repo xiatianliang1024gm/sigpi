@@ -887,6 +887,61 @@ test("readChatInput navigates slash suggestions instead of history while typing 
 	assert.match(getVisibleOutput(await outputText), /> \//);
 });
 
+test("readChatInput keeps walking history after recalling a slash command instead of trapping in suggestions", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const history = new InputHistory();
+	history.push("first prompt");
+	history.push("/skill:foo");
+
+	const resultPromise = readChatInput({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		commands: createChatCommandDefinitions(),
+		inputHistory: history,
+	});
+
+	process.nextTick(() => {
+		input.write("\x1B[A"); // recall "/skill:foo"
+		input.write("\x1B[A"); // should walk to "first prompt", not suggestions
+		input.write("\r");
+		output.end();
+	});
+
+	assert.equal(await resultPromise, "first prompt");
+});
+
+test("readChatInput resumes history recall after a recalled line is cleared", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const history = new InputHistory();
+	history.push("first prompt");
+	history.push("/skill:foo");
+
+	const resultPromise = readChatInput({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		commands: createChatCommandDefinitions(),
+		inputHistory: history,
+	});
+
+	process.nextTick(() => {
+		input.write("\x1B[A"); // recall "/skill:foo"
+		// Delete the whole recalled line back to an empty draft slot.
+		for (let i = 0; i < "/skill:foo".length; i++) {
+			input.write("\x1B[D"); // move left
+			input.write("\u007F"); // backspace
+		}
+		input.write("\x1B[A"); // should recall again (not stuck), not suggestions
+		input.write("\r");
+		output.end();
+	});
+
+	assert.equal(await resultPromise, "/skill:foo");
+});
+
 test("running turn input listener recalls history with Up", async () => {
 	const input = new FakeInput();
 	const output = new FakeOutput();

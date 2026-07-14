@@ -36,16 +36,34 @@ export interface ChatInputOptions {
  */
 class HistoryNavigator {
 	private draft = "";
-	private editedSinceRecall = false;
+	/**
+	 * Set when the user edits a recalled line. While true, `↑`/`↓` fall through
+	 * to in-editor vertical cursor movement (so multiline editing still works,
+	 * Story 13) and slash suggestions stay suppressed. It clears once the user
+	 * returns to a clean draft slot, so recall is never permanently stuck.
+	 */
+	private editingRecalled = false;
 
 	constructor(
 		private readonly editor: Editor,
 		private readonly history: InputHistory,
 	) {}
 
+	/**
+	 * Whether the component is currently in the recall context — i.e. the last
+	 * `↑`/`↓` entered history navigation, or the user is mid-edit of a recalled
+	 * line. While recalling, slash-command suggestions are suppressed so the
+	 * arrows keep walking history instead of getting trapped in the suggestion
+	 * menu (e.g. a recalled `/skill:foo`).
+	 */
+	isRecalling(): boolean {
+		return !this.history.isAtDraft || this.editingRecalled;
+	}
+
 	/** Handle an up/down arrow. Returns `true` when the arrow was consumed for recall. */
 	handleArrow(direction: "up" | "down"): boolean {
-		if (this.editedSinceRecall) {
+		if (this.editingRecalled) {
+			// Editing a recalled line: arrows move the cursor, not history.
 			return false;
 		}
 
@@ -54,7 +72,6 @@ class HistoryNavigator {
 		if (entry !== null) {
 			this.editor.setText(entry);
 		} else if (direction === "down") {
-			this.editedSinceRecall = false;
 			this.editor.setText(this.draft);
 		}
 
@@ -63,14 +80,19 @@ class HistoryNavigator {
 
 	/** Track draft/edited state from the editor's `onChange`. */
 	notifyTextChanged(): void {
+		if (this.history.isAtDraft) {
+			// Back on the clean draft slot: leave the recall context entirely.
+			this.editingRecalled = false;
+			this.draft = this.editor.getText();
+			return;
+		}
+
 		const current = this.history.current();
 		if (current !== null && this.editor.getText() !== current) {
 			// Editing a recalled line drops it back to the draft slot (Story 13).
-			this.editedSinceRecall = true;
+			this.editingRecalled = true;
 			this.draft = this.editor.getText();
 			this.history.resetToDraft();
-		} else if (current === null) {
-			this.draft = this.editor.getText();
 		}
 	}
 }
@@ -230,7 +252,7 @@ class ChatInputComponent implements Component {
 
 	handleInput(data: string): void {
 		const key = parseKey(data);
-		const suggestions = this.getSuggestions();
+		const suggestions = this.getActiveSuggestions();
 
 		if ((key === "up" || key === "down") && suggestions.length > 0) {
 			this.selectedSuggestionIndex = moveSelectedIndex(
@@ -279,7 +301,7 @@ class ChatInputComponent implements Component {
 	render(width: number): string[] {
 		const text = this.editor.getText();
 		const lines = this.editor.render(width);
-		const suggestions = this.getSuggestions();
+		const suggestions = this.getActiveSuggestions();
 
 		if (!text.includes("\n")) {
 			this.selectedSuggestionIndex = moveSelectedIndex(
@@ -307,6 +329,19 @@ class ChatInputComponent implements Component {
 			this.args.commands,
 			this.args.maxSuggestions,
 		);
+	}
+
+	/**
+	 * Suggestions to show right now. While recalling history (a recalled entry is
+	 * showing or being edited) slash suggestions are suppressed so `↑`/`↓` keep
+	 * walking history instead of getting trapped in the suggestion menu.
+	 */
+	private getActiveSuggestions(): ChatCommandMetadata[] {
+		if (this.history?.isRecalling() ?? false) {
+			return [];
+		}
+
+		return this.getSuggestions();
 	}
 }
 

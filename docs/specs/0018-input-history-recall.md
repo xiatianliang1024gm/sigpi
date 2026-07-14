@@ -76,9 +76,14 @@ process. It is distinct from the existing `/history` command, which shows the sa
 - **Key-binding rule is context-dependent, not key-dependent.** `↑`/`↓` recall
   history by default; they navigate command suggestions only when the current line
   is a `/` chat command with suggestions open (the existing behavior, unchanged).
-- **The context rule is stateless.** Arrows navigate suggestions exactly when
-  `getChatCommandSuggestions` would return non-empty (buffer matches `/^\/\S*$/`);
-  otherwise they recall history. No extra "recalling" mode flag is introduced.
+- **The context rule is stateless at the draft slot.** At the draft slot, arrows
+  navigate suggestions exactly when `getChatCommandSuggestions` would return
+  non-empty (buffer matches `/^\/\S*$/`); otherwise they recall history. Once an
+  `↑`/`↓` enters the recall context (a recalled entry is showing, or the user is
+  mid-edit of a recalled line), slash suggestions are suppressed so the arrows keep
+  walking history instead of getting trapped on a recalled `/`-command such as
+  `/skill:foo`. The recall context clears when the buffer returns to the clean
+  draft slot, so clearing a recalled line fully restores recall.
 - **In-memory, process-scoped, global.** A single buffer for the CLI run, discarded
   on exit. Not persisted to disk, not tied to a `Session`.
 - **Entries: only model-reaching inputs.** Natural-language prompts and model-driving
