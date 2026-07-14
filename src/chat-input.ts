@@ -5,6 +5,7 @@ import {
 	type ChatCommandMetadata,
 	getChatCommandSuggestions,
 } from "./chat-commands.js";
+import type { InputHistory } from "./input-history.js";
 import {
 	type Component,
 	Editor,
@@ -23,6 +24,55 @@ export interface ChatInputOptions {
 	commands?: readonly ChatCommandMetadata[];
 	maxSuggestions?: number;
 	statusBarText?: string;
+	/** Shared, process-scoped recall buffer for `↑`/`↓` history. */
+	inputHistory?: InputHistory;
+}
+
+/**
+ * Bridges an {@link Editor} to a shared {@link InputHistory} buffer. The live
+ * draft is preserved as a distinct slot; `↑`/`↓` recall history until the
+ * recalled line is edited, after which the arrows fall through to in-editor
+ * vertical cursor movement (so multiline editing still works).
+ */
+class HistoryNavigator {
+	private draft = "";
+	private editedSinceRecall = false;
+
+	constructor(
+		private readonly editor: Editor,
+		private readonly history: InputHistory,
+	) {}
+
+	/** Handle an up/down arrow. Returns `true` when the arrow was consumed for recall. */
+	handleArrow(direction: "up" | "down"): boolean {
+		if (this.editedSinceRecall) {
+			return false;
+		}
+
+		const entry =
+			direction === "up" ? this.history.prev() : this.history.next();
+		if (entry !== null) {
+			this.editor.setText(entry);
+		} else if (direction === "down") {
+			this.editedSinceRecall = false;
+			this.editor.setText(this.draft);
+		}
+
+		return true;
+	}
+
+	/** Track draft/edited state from the editor's `onChange`. */
+	notifyTextChanged(): void {
+		const current = this.history.current();
+		if (current !== null && this.editor.getText() !== current) {
+			// Editing a recalled line drops it back to the draft slot (Story 13).
+			this.editedSinceRecall = true;
+			this.draft = this.editor.getText();
+			this.history.resetToDraft();
+		} else if (current === null) {
+			this.draft = this.editor.getText();
+		}
+	}
 }
 
 export interface EscInterruptListenerOptions {
@@ -38,6 +88,8 @@ export interface RunningTurnInputListenerOptions {
 	statusBarText?: string;
 	onEscape: () => void;
 	onSubmit: (text: string) => void;
+	/** Shared, process-scoped recall buffer for `↑`/`↓` history. */
+	inputHistory?: InputHistory;
 }
 
 export interface RunningTurnInputListenerHandle {
@@ -143,6 +195,7 @@ class InlineTerminal implements Terminal {
 
 class ChatInputComponent implements Component {
 	private readonly editor: Editor;
+	private readonly history: HistoryNavigator | null;
 	private selectedSuggestionIndex = 0;
 	private suggestionSelectionActive = false;
 
@@ -152,9 +205,13 @@ class ChatInputComponent implements Component {
 			commands: readonly ChatCommandMetadata[];
 			maxSuggestions: number;
 			onFinish: (value: string | null) => void;
+			inputHistory?: InputHistory;
 		},
 	) {
 		this.editor = new Editor({ prompt: args.prompt });
+		this.history = args.inputHistory
+			? new HistoryNavigator(this.editor, args.inputHistory)
+			: null;
 		this.editor.onSubmit = (text) => {
 			if (!text.trim()) {
 				this.editor.setText("");
@@ -166,6 +223,7 @@ class ChatInputComponent implements Component {
 		this.editor.onChange = () => {
 			this.selectedSuggestionIndex = 0;
 			this.suggestionSelectionActive = false;
+			this.history?.notifyTextChanged();
 		};
 		this.editor.focused = true;
 	}
@@ -208,6 +266,13 @@ class ChatInputComponent implements Component {
 			return;
 		}
 
+		if (
+			(key === "up" || key === "down") &&
+			this.history?.handleArrow(key) === true
+		) {
+			return;
+		}
+
 		this.editor.handleInput(data);
 	}
 
@@ -247,14 +312,19 @@ class ChatInputComponent implements Component {
 
 class RunningTurnInputComponent implements Component {
 	private readonly editor: Editor;
+	private readonly history: HistoryNavigator | null;
 	private submittedText: string | null = null;
 
 	constructor(args: {
 		prompt: string;
 		onEscape: () => void;
 		onSubmit: (text: string) => void;
+		inputHistory?: InputHistory;
 	}) {
 		this.editor = new Editor({ prompt: args.prompt });
+		this.history = args.inputHistory
+			? new HistoryNavigator(this.editor, args.inputHistory)
+			: null;
 		this.editor.onSubmit = (text) => {
 			if (!text.trim()) {
 				return;
@@ -264,6 +334,9 @@ class RunningTurnInputComponent implements Component {
 			args.onSubmit(text);
 		};
 		this.editor.onCancel = args.onEscape;
+		this.editor.onChange = () => {
+			this.history?.notifyTextChanged();
+		};
 		this.editor.focused = true;
 	}
 
@@ -277,6 +350,13 @@ class RunningTurnInputComponent implements Component {
 
 	handleInput(data: string): void {
 		if (this.submittedText !== null) {
+			return;
+		}
+		const key = parseKey(data);
+		if (
+			(key === "up" || key === "down") &&
+			this.history?.handleArrow(key) === true
+		) {
 			return;
 		}
 		this.editor.handleInput(data);
@@ -336,6 +416,7 @@ export async function readChatInput(
 			commands,
 			maxSuggestions,
 			onFinish: finish,
+			inputHistory: args?.inputHistory,
 		});
 
 		tui.setStatusBar(args?.statusBarText ?? null);
@@ -376,6 +457,7 @@ export function startRunningTurnInputListener(
 			output.write(`${prompt}${text}\n`);
 			options.onSubmit(text);
 		},
+		inputHistory: options.inputHistory,
 	});
 
 	tui.setStatusBar(options.statusBarText ?? null);

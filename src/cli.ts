@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { stdin as input, stdout as output } from "node:process";
 import type { ReadStream, WriteStream } from "node:tty";
+import { fileURLToPath } from "node:url";
 import type { TurnResult } from "./agent/turn.js";
 import {
 	type ChatCommandDefinition,
@@ -28,6 +28,7 @@ import {
 	initializeUserConfig,
 	loadAppConfig,
 } from "./config.js";
+import { InputHistory } from "./input-history.js";
 import { TurnInterruptController } from "./interrupt.js";
 import { resolveDatedLogFilePath } from "./logger.js";
 import { configureHttpProxy } from "./model/http-dispatcher.js";
@@ -208,6 +209,7 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 			input,
 			output,
 			tools: runtime.tools,
+			inputHistory: new InputHistory(),
 		},
 		{
 			commands: createChatCommandDefinitions({
@@ -242,6 +244,8 @@ export interface RunChatReplLoopOptions {
 	output?: WriteStream;
 	prompt?: string;
 	tools?: ToolRegistry;
+	/** Shared, process-scoped recall buffer for `↑`/`↓` history. */
+	inputHistory?: InputHistory;
 }
 
 export interface RunChatReplLoopDependencies {
@@ -352,6 +356,7 @@ export async function runChatReplLoop(
 				output: options.output,
 				commands,
 				statusBarText: formatStatusBar(state),
+				inputHistory: options.inputHistory,
 			}));
 		if (line === null) {
 			break;
@@ -393,6 +398,8 @@ export async function runChatReplLoop(
 			continue;
 		}
 
+		options.inputHistory?.push(line);
+
 		const interruptController = new TurnInterruptController();
 		latestProgressEvent = null;
 		const runningInput = startRunningTurnInputListener({
@@ -400,6 +407,7 @@ export async function runChatReplLoop(
 			input: options.input,
 			output: options.output,
 			statusBarText: formatStatusBar(state),
+			inputHistory: options.inputHistory,
 			onEscape: () => {
 				const interrupt = interruptController.requestInterrupt();
 				if (!interrupt.accepted || interrupt.alreadyRequested) {

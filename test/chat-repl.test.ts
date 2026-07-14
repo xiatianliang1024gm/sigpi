@@ -14,6 +14,7 @@ import {
 	runtimeToChatReplState,
 } from "../src/chat-repl.js";
 import { createCliProgressReporter, runChatReplLoop } from "../src/cli.js";
+import { InputHistory } from "../src/input-history.js";
 import { getCurrentPlan, setCurrentPlan } from "../src/plan-tracker.js";
 import { createAgentRuntime } from "../src/runtime.js";
 import { stripAnsi } from "../src/tui/index.js";
@@ -1708,4 +1709,129 @@ test("createCliProgressReporter still prints assistant_message with real content
 		visibleLines.includes("• Assistant: Here is the answer you asked for."),
 		true,
 	);
+});
+
+test("runChatReplLoop records only model-reaching inputs in input history", async () => {
+	const cwd = await realpath(await createTempDir("sigpi-chat-repl-hist-"));
+	const homeDir = await createTempDir("sigpi-chat-repl-hist-home-");
+	const previousCwd = process.cwd();
+	const restoreHome = setTestHome(homeDir);
+	process.chdir(cwd);
+
+	try {
+		await writeTestConfig(cwd);
+		const runtime = await createAgentRuntime({ createSession: true });
+		const input = new FakeInput();
+		const output = new FakeOutput();
+		const inputHistory = new InputHistory();
+		let promptIndex = 0;
+
+		const commands: ChatCommandDefinition[] = [
+			{
+				name: "/local",
+				description: "A local-only command that does not reach the model",
+				handler: () => ({ action: "continue" }),
+			},
+			{
+				name: "/drive",
+				description: "A command that drives a model turn",
+				handler: (_ctx, args) => ({
+					action: "run-turn",
+					input: `expanded:${args.join(" ")}`,
+				}),
+			},
+		];
+
+		await runChatReplLoop(
+			{
+				state: runtimeToChatReplState(runtime),
+				store: runtime.store,
+				input: input as never,
+				output: output as never,
+				inputHistory,
+			},
+			{
+				commands,
+				readChatInput: async () =>
+					[
+						"natural prompt",
+						"/local",
+						"/drive raw args",
+						"/unknowncmd",
+						"/exit",
+					][promptIndex++] ?? null,
+				executeTurn: async (_runner, line) => ({
+					ok: true,
+					completionStatus: "completed",
+					outputText: `echo:${line}`,
+					toolExecutions: [],
+				}),
+			},
+		);
+
+		// Only the prompt and the /drive command reach the model; the local
+		// command and the unknown command are not recorded.
+		assert.equal(inputHistory.size, 2);
+		assert.equal(inputHistory.prev(), "/drive raw args");
+		assert.equal(inputHistory.prev(), "natural prompt");
+		assert.equal(inputHistory.prev(), null);
+	} finally {
+		restoreHome();
+		process.chdir(previousCwd);
+	}
+});
+
+test("runChatReplLoop records the original line, not the expanded /skill form", async () => {
+	const cwd = await realpath(await createTempDir("sigpi-chat-repl-hist-raw-"));
+	const homeDir = await createTempDir("sigpi-chat-repl-hist-raw-home-");
+	const previousCwd = process.cwd();
+	const restoreHome = setTestHome(homeDir);
+	process.chdir(cwd);
+
+	try {
+		await writeTestConfig(cwd);
+		const runtime = await createAgentRuntime({ createSession: true });
+		const input = new FakeInput();
+		const output = new FakeOutput();
+		const inputHistory = new InputHistory();
+		let promptIndex = 0;
+
+		const commands: ChatCommandDefinition[] = [
+			{
+				name: "/drive",
+				description: "A command that drives a model turn",
+				handler: (_ctx, args) => ({
+					action: "run-turn",
+					input: `expanded:${args.join(" ")}`,
+				}),
+			},
+		];
+
+		await runChatReplLoop(
+			{
+				state: runtimeToChatReplState(runtime),
+				store: runtime.store,
+				input: input as never,
+				output: output as never,
+				inputHistory,
+			},
+			{
+				commands,
+				readChatInput: async () =>
+					["/drive original line", "/exit"][promptIndex++] ?? null,
+				executeTurn: async (_runner, line) => ({
+					ok: true,
+					completionStatus: "completed",
+					outputText: `echo:${line}`,
+					toolExecutions: [],
+				}),
+			},
+		);
+
+		assert.equal(inputHistory.size, 1);
+		assert.equal(inputHistory.prev(), "/drive original line");
+	} finally {
+		restoreHome();
+		process.chdir(previousCwd);
+	}
 });

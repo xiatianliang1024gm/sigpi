@@ -6,6 +6,7 @@ import {
 	readChatInput,
 	startRunningTurnInputListener,
 } from "../src/chat-input.js";
+import { InputHistory } from "../src/input-history.js";
 import { stripAnsi } from "../src/tui/index.js";
 
 class FakeInput extends PassThrough {
@@ -780,4 +781,136 @@ test("readChatInput shows cursor at edited Chinese insertion point", async () =>
 	assert.equal(await resultPromise, "你好啊世界");
 	const rendered = await outputText;
 	assert.match(getVisibleOutput(rendered), /> 你好啊世界/);
+});
+
+test("readChatInput recalls the previous entry with Up when no suggestions are showing", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const outputText = collectOutput(output);
+	const history = new InputHistory();
+	history.push("previous prompt");
+
+	const resultPromise = readChatInput({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		inputHistory: history,
+	});
+
+	process.nextTick(() => {
+		input.write("\x1B[A");
+		input.write("\r");
+		output.end();
+	});
+
+	assert.equal(await resultPromise, "previous prompt");
+	assert.match(getVisibleOutput(await outputText), /> previous prompt/);
+});
+
+test("readChatInput walks older entries with repeated Up and newer with Down", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const history = new InputHistory();
+	history.push("first");
+	history.push("second");
+	history.push("third");
+
+	const resultPromise = readChatInput({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		inputHistory: history,
+	});
+
+	process.nextTick(() => {
+		input.write("\x1B[A"); // third
+		input.write("\x1B[A"); // second
+		input.write("\x1B[A"); // first
+		input.write("\x1B[B"); // back to second
+		input.write("\r");
+		output.end();
+	});
+
+	assert.equal(await resultPromise, "second");
+});
+
+test("readChatInput returns arrows to cursor movement after a recalled line is edited", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const history = new InputHistory();
+	history.push("first");
+	history.push("second");
+
+	const resultPromise = readChatInput({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		inputHistory: history,
+	});
+
+	process.nextTick(() => {
+		input.write("\x1B[A"); // recall "second"
+		input.write("!"); // edit -> "second!" (drops back to draft slot)
+		input.write("\x1B[A"); // should NOT recall "first" (edited)
+		input.write("\r");
+		output.end();
+	});
+
+	assert.equal(await resultPromise, "second!");
+});
+
+test("readChatInput navigates slash suggestions instead of history while typing a slash command", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const outputText = collectOutput(output);
+	const history = new InputHistory();
+	history.push("old prompt");
+
+	const resultPromise = readChatInput({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		commands: createChatCommandDefinitions(),
+		inputHistory: history,
+	});
+
+	process.nextTick(() => {
+		input.write("/");
+		input.write("\x1B[B"); // down navigates suggestions, not history
+		input.write("\r");
+		output.end();
+	});
+
+	const result = await resultPromise;
+	assert.notEqual(result, "old prompt");
+	assert.match(result ?? "", /^\//);
+	assert.match(getVisibleOutput(await outputText), /> \//);
+});
+
+test("running turn input listener recalls history with Up", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const outputText = collectOutput(output);
+	const submitted: string[] = [];
+	const history = new InputHistory();
+	history.push("queued earlier");
+
+	const handle = startRunningTurnInputListener({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		onEscape: () => {
+			throw new Error("should not interrupt");
+		},
+		onSubmit: (text) => submitted.push(text),
+		inputHistory: history,
+	});
+
+	input.write("\x1B[A");
+	input.write("\r");
+	handle?.stop();
+	output.end();
+
+	assert.deepEqual(submitted, ["queued earlier"]);
+	assert.match(getVisibleOutput(await outputText), /> queued earlier/);
 });
