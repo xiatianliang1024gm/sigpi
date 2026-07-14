@@ -28,6 +28,7 @@ import {
 } from "./config.js";
 import { TurnInterruptController } from "./interrupt.js";
 import { resolveDatedLogFilePath } from "./logger.js";
+import { configureHttpProxy } from "./model/http-dispatcher.js";
 import {
 	formatPlanProgressSummary,
 	formatUpdatePlanBody,
@@ -48,6 +49,7 @@ import {
 } from "./tui/file-edit-renderer.js";
 import type {
 	ExecutedToolCall,
+	JsonValue,
 	ProcessOutputMode,
 	RuntimeLogger,
 	TurnProgressEvent,
@@ -83,6 +85,13 @@ async function runAsk(args: string[]): Promise<void> {
 	}
 
 	const config = loadAppConfig();
+	// Make the model `fetch` proxy-aware (only installs when a proxy is
+	// configured via [models.<id>] proxy or HTTP(S)_PROXY env). Returns a
+	// status snapshot and prints a one-line notice to stderr.
+	const proxyStatus = configureHttpProxy(
+		config.model.proxy,
+		config.model.timeoutMs,
+	);
 	const progressReporter = createCliProgressReporter(
 		config.agent.processOutput,
 	);
@@ -100,6 +109,10 @@ async function runAsk(args: string[]): Promise<void> {
 		sessionTitle: parsed.sessionTitle,
 		store,
 	});
+	runtime.logger.info(
+		"http_proxy_status",
+		proxyStatus as unknown as Record<string, JsonValue | undefined>,
+	);
 	printSkillBootstrap(
 		runtime.loadedSkills.length,
 		runtime.skillWarnings.map((warning) => warning.message),
@@ -127,6 +140,13 @@ async function runAsk(args: string[]): Promise<void> {
 async function runChatWithArgs(args: string[]): Promise<void> {
 	const parsed = parseSessionArgs(args);
 	const config = loadAppConfig();
+	// Make the model `fetch` proxy-aware (only installs when a proxy is
+	// configured via [models.<id>] proxy or HTTP(S)_PROXY env). Returns a
+	// status snapshot and prints a one-line notice to stderr.
+	const proxyStatus = configureHttpProxy(
+		config.model.proxy,
+		config.model.timeoutMs,
+	);
 	const progressReporter = createCliProgressReporter(
 		config.agent.processOutput,
 	);
@@ -143,6 +163,10 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		createSession: shouldCreateSession,
 		sessionTitle: parsed.sessionTitle,
 	});
+	runtime.logger.info(
+		"http_proxy_status",
+		proxyStatus as unknown as Record<string, JsonValue | undefined>,
+	);
 	const state = runtimeToChatReplState(runtime);
 
 	printSkillBootstrap(

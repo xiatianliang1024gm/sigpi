@@ -24,6 +24,13 @@ const modelConfigSchema = z.object({
 	maxRetries: z.number().int().min(0).max(5).default(2),
 	retryBaseDelayMs: z.number().int().positive().default(250),
 	/**
+	 * Optional HTTP/HTTPS proxy used for requests to this model's base URL.
+	 * When set it seeds `HTTP_PROXY` / `HTTPS_PROXY` (only if the environment
+	 * has not already set them). Leave unset to inherit the environment's
+	 * proxy configuration, or to connect directly when no proxy is defined.
+	 */
+	proxy: z.string().optional(),
+	/**
 	 * Model's maximum output tokens. Used as a cap when sizing the
 	 * compaction summary so we never ask the model for a summary larger
 	 * than it can produce. Optional; defaults to 2048 internally when
@@ -130,6 +137,7 @@ const MODEL_ALIASES: Record<string, string> = {
 	maxRetries: "max_retries",
 	retryBaseDelayMs: "retry_base_delay_ms",
 	maxTokens: "max_tokens",
+	proxy: "proxy",
 };
 const AGENT_ALIASES: Record<string, string> = {
 	maxSteps: "max_steps",
@@ -250,6 +258,7 @@ export interface ModelConfig {
 	maxRetries: number;
 	retryBaseDelayMs: number;
 	maxTokens?: number;
+	proxy?: string;
 }
 
 export interface AgentConfig {
@@ -612,6 +621,7 @@ function readEnvConfig(env: NodeJS.ProcessEnv): PartialConfig {
 			retryBaseDelayMs: parseOptionalInt(env.MODEL_RETRY_BASE_DELAY_MS),
 			maxTokens: parseOptionalInt(env.MODEL_MAX_TOKENS),
 			stream: parseOptionalBoolean(env.MODEL_STREAM),
+			proxy: env.MODEL_PROXY,
 		},
 		agent: {
 			maxSteps: parseOptionalInt(env.AGENT_MAX_STEPS),

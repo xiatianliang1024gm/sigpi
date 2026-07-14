@@ -9,6 +9,10 @@ api_format = "chat_completions"
 timeout_ms = 60000
 max_retries = 2
 retry_base_delay_ms = 250
+# Optional HTTP/HTTPS proxy for requests to this model's base_url. When set it
+# seeds HTTP_PROXY/HTTPS_PROXY (only if the environment hasn't set them).
+# Leave unset to inherit the environment's proxy or to connect directly.
+# proxy = "http://127.0.0.1:7078"
 
 # [models.remote]
 # base_url = "https://api.example.com/v1"

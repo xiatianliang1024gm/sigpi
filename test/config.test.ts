@@ -28,6 +28,7 @@ test("alias maps drive parseTomlConfig for every section", () => {
 			retry_base_delay_ms: 1,
 			max_tokens: 1,
 			stream: true,
+			proxy: "http://proxy.example:7078",
 		},
 		agent: {
 			max_steps: 1,

@@ -6,6 +6,7 @@ import type {
 	ModelResponse,
 	RuntimeLogger,
 } from "../types.js";
+import { getProxyStatus } from "./http-dispatcher.js";
 import type { WireFormatAdapter } from "./wire-format.js";
 
 export type RequestFailureKind =
@@ -75,7 +76,18 @@ function isRetryableRequestError(error: ModelRequestError): boolean {
 }
 
 function computeBackoffDelayMs(baseDelayMs: number, attempt: number): number {
-	return Math.min(baseDelayMs * 2 ** Math.max(0, attempt - 1), 4_000);
+	const base = Math.min(baseDelayMs * 2 ** Math.max(0, attempt - 1), 4_000);
+	// Jitter up to 50% so retries don't all land in the same down window of a
+	// flaky proxy.
+	return Math.round(base + Math.random() * base * 0.5);
+}
+
+function hostOf(url: string): string | undefined {
+	try {
+		return new URL(url).host;
+	} catch {
+		return undefined;
+	}
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -242,6 +254,10 @@ export class ModelTransport {
 			timeoutMs: this.config.timeoutMs,
 			maxRetries: this.config.maxRetries,
 			stream: this.config.stream,
+			host: hostOf(url),
+			proxyActive: getProxyStatus().configured,
+			proxyUrl: getProxyStatus().proxyUrl,
+			fetchImpl: getProxyStatus().fetchImpl,
 		});
 
 		let lastError: ModelRequestError | null = null;
@@ -300,6 +316,8 @@ export class ModelTransport {
 					maxAttempts,
 					retryable,
 					failureType: normalized.kind,
+					proxyActive: getProxyStatus().configured,
+					proxyUrl: getProxyStatus().proxyUrl,
 					elapsedMs: Date.now() - startedAt,
 					...normalized.details,
 				});
@@ -421,6 +439,12 @@ export class ModelTransport {
 				"network_error",
 				{
 					error: error instanceof Error ? error.message : String(error),
+					cause:
+						error instanceof Error && error.cause instanceof Error
+							? error.cause.message
+							: undefined,
+					proxyActive: getProxyStatus().configured,
+					proxyUrl: getProxyStatus().proxyUrl,
 				},
 			);
 		} finally {
