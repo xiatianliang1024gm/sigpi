@@ -93,7 +93,20 @@ export function collectSkillRoots(cwd: string, homeDir: string): string[] {
 		path.join(homeDir, ".agents", "skills"),
 	];
 
-	return [...sigpiRoots, ...agentsRoots, ...globalRoots];
+	// The global roots are a special case of project roots when homeDir is an
+	// ancestor of cwd, so they can already appear in the walked project roots.
+	// Deduplicate while preserving precedence order (first occurrence wins).
+	const ordered = [...sigpiRoots, ...agentsRoots, ...globalRoots];
+	const seen = new Set<string>();
+	const roots: string[] = [];
+	for (const root of ordered) {
+		if (seen.has(root)) {
+			continue;
+		}
+		seen.add(root);
+		roots.push(root);
+	}
+	return roots;
 }
 
 async function loadSkillsFromDir(
