@@ -68,4 +68,4 @@ Reconsidered the skill trust model after a hands-on comparison with Claude Code
 
 | # | Title | Commit | One-liner |
 |---|-------|--------|-----------|
-| [0017](./0017-skill-trust-load-implies-trust.md) | Skill trust: load implies trust; skill roots are read-only | `—` | No trust gate / allowlist; a discovered skill is trusted on load. Skill roots become a hard, mode-independent (incl. `full_access`) write block — the compensating control |
+| [0017](./0017-skill-trust-load-implies-trust.md) | Skill trust: load implies trust; skill roots are read-only | `5907ec3` | No trust gate / allowlist; a discovered skill is trusted on load. Skill roots become a hard, mode-independent (incl. `full_access`) write block — the compensating control |

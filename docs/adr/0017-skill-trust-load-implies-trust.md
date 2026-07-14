@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-07-13
-- **Commit**: `—`
+- **Commit**: `5907ec3`
 
 ## Context and Problem
 
