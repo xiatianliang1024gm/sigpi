@@ -45,7 +45,7 @@ const storagePaths = resolveSessionStoragePaths({
 	cwd,
 	sessionsRoot: childEnv.AGENT_SESSIONS_ROOT,
 });
-const sessionPath = path.join(storagePaths.sessionsDir, `${savedSessionId}.json`);
+const sessionPath = path.join(storagePaths.sessionsDir, `${savedSessionId}.jsonl`);
 assert.match(await readFile(sessionPath, "utf8"), /save state/);
 
 const resumedAsk = await runCliCommand({
