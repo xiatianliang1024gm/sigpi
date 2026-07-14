@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { stdin as input, stdout as output } from "node:process";
 import type { ReadStream, WriteStream } from "node:tty";
 import type { TurnResult } from "./agent/turn.js";
@@ -54,6 +56,12 @@ import type {
 	RuntimeLogger,
 	TurnProgressEvent,
 } from "./types.js";
+
+function readPackageVersion(): string {
+	const pkgPath = fileURLToPath(new URL("../../package.json", import.meta.url));
+	const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
+	return pkg.version ?? "(unknown)";
+}
 
 function printUsage(): void {
 	console.log("Usage:");
@@ -1224,6 +1232,11 @@ async function main(): Promise<void> {
 
 	if (!command || command === "help" || command === "--help") {
 		printUsage();
+		return;
+	}
+
+	if (command === "--version" || command === "-v") {
+		console.log(readPackageVersion());
 		return;
 	}
 
