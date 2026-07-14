@@ -31,6 +31,11 @@ SigPi ships a **bilingual, teaching-oriented guide**. Read the overview first, t
 
 Architecture decisions and project context: [docs/adr/README.md](./docs/adr/README.md) · [CONTEXT.md](./CONTEXT.md)
 
+## Requirements
+
+- **Node.js >= 22.19.0** — SigPi depends on `undici@8`, which requires `node:worker_threads.markAsUncloneable` (added in Node 20.19.0 / 22.12.0). The supported floor is Node 22.19.0.
+- **pnpm** (see `package.json` `packageManager`) and **git**.
+
 ## Quick start
 
 1. Install dependencies:
