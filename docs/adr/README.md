@@ -59,3 +59,13 @@ Gave the `ModelProvider` seam a home module in `src/model/`. Came from the archi
 | [0014](./0014-skill-discovery-helpers-not-collapsed.md) | Skill-discovery helpers not collapsed (candidate 6, no change) | `—` | Rated Speculative; `catalog.ts`/`manifest.ts`/`format.ts` are already a clean orchestrator + 2 pure-helper split, no drift risk |
 | [0015](./0015-context-estimation-tokens-only.md) | Context estimation is tokens-only (candidate 3) | `58bb157` | Report premise stale; removed unused `chars` fields from 3 summary helpers, kept `estimateMessageChars` as the `chars/4` basis |
 | [0016](./0016-configurable-trusted-roots.md) | Configurable trusted roots replace the hard workspace-write block | `—` | `[tools] allowed_roots` (defaulted via `init` to `os.tmpdir()`) unifies read+write escape from the workspace-write block; `read_only` stays write-closed |
+
+## Skill trust pass (2026-07-13)
+
+Reconsidered the skill trust model after a hands-on comparison with Claude Code
+(load implies trust), Codex (`/skill` enable/disable, default enabled), and Pi
+(load implies trust). Came from a `/grilling` session (grill-with-docs).
+
+| # | Title | Commit | One-liner |
+|---|-------|--------|-----------|
+| [0017](./0017-skill-trust-load-implies-trust.md) | Skill trust: load implies trust; skill roots are read-only | `—` | No trust gate / allowlist; a discovered skill is trusted on load. Skill roots become a hard, mode-independent (incl. `full_access`) write block — the compensating control |

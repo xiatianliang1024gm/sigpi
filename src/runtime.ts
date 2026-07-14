@@ -28,7 +28,7 @@ import {
 	type SessionStore,
 } from "./session/store.js";
 import { captureRcDefinitions, detectShellRuntime } from "./shell.js";
-import { loadSkillCatalog } from "./skills/catalog.js";
+import { collectSkillRoots, loadSkillCatalog } from "./skills/catalog.js";
 import { BackgroundTaskManager } from "./tools/background.js";
 import { createDefaultToolRegistry } from "./tools/index.js";
 import { buildTrustedReadRoots } from "./tools/path-utils.js";
@@ -198,8 +198,10 @@ export async function createAgentRuntime(
 	const baseLogger = createRuntimeLogger(config);
 	const runLogger = createChildLogger(baseLogger, { runId });
 	const shellRuntime = detectShellRuntime(config.shell);
+	const homeDir = process.env.HOME ?? os.homedir();
 	const skillCatalog = await loadRuntimeSkillCatalog({
 		cwd,
+		homeDir,
 		logger: runLogger,
 	});
 	const systemPromptSections = buildSystemPromptSections(
@@ -225,6 +227,7 @@ export async function createAgentRuntime(
 		shellRuntime,
 		config.tools.bash,
 		config.tools.allowedRoots,
+		collectSkillRoots(cwd, homeDir),
 	);
 	const conversationContext = new ConversationContext({
 		summaryEnabled: true,

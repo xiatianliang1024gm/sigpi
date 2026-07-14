@@ -23,3 +23,13 @@ Key sections: `[model]` (default model + manual selection), `[models.<id>]` (per
 - Runtime assembly (provider, tools, session store): `src/runtime.ts`
 - Session storage: `src/session/paths.ts`, `src/session/store.ts`
 - Logging: `src/logger.ts`
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for this repo (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context layout — one `CONTEXT.md` at the repo root plus `docs/adr/`. See `docs/agents/domain.md`.

@@ -1,19 +1,137 @@
 import path from "node:path";
 import type { RunShellMode } from "../types.js";
-import { isWithin, resolveWorkspacePath } from "./path-utils.js";
 
-export interface SandboxDenial {
-	reason: string;
+export class SandboxPolicyError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "SandboxPolicyError";
+	}
 }
 
-export type MutatingToolName = "write" | "edit";
+/**
+ * Returns true when `target` resolves to a location inside any of `roots`.
+ *
+ * Both arguments are resolved to absolute form so that relative paths, `.`/`..`
+ * segments, and trailing separators cannot slip past a root boundary. A path
+ * that equals a root (the root directory itself) or lives beneath it counts as
+ * "within". This is the single containment check reused by every entry point
+ * that must keep skill discovery roots read-only.
+ */
+export function isWithinAnyRoot(target: string, roots: string[]): boolean {
+	if (roots.length === 0) {
+		return false;
+	}
+	const resolvedTarget = path.resolve(target);
+	const resolvedRoots = roots.map((root) => path.resolve(root));
+	return resolvedRoots.some((root) => {
+		if (resolvedTarget === root) {
+			return true;
+		}
+		// Ensure `root` is a genuine prefix directory, not an accidental
+		// substring match (e.g. "/foo/skills" vs "/foo/skills-extra").
+		const relative = path.relative(root, resolvedTarget);
+		return (
+			relative !== "" &&
+			!relative.startsWith("..") &&
+			!path.isAbsolute(relative)
+		);
+	});
+}
+
+/**
+ * Reject writes that target a skill discovery root.
+ *
+ * Skill roots (`.sigpi/skills` / `.agents/skills`, project and global) must
+ * stay read-only in every mode — including `full_access` — so that an agent
+ * cannot persist a new auto-discovered-and-auto-loaded skill and escalate its
+ * privileges (see ADR 0017). This guard runs before any mode-specific logic,
+ * including the `full_access` early-return, so it cannot be bypassed.
+ */
+function assertNotSkillRoot(
+	target: string,
+	skillRoots: string[],
+	toolName: string,
+): void {
+	if (isWithinAnyRoot(target, skillRoots)) {
+		throw new SandboxPolicyError(
+			`${toolName} blocked: path is inside a skill discovery root and must stay read-only.`,
+		);
+	}
+}
+
+/**
+ * Evaluate whether a mutating tool (write/edit) may proceed for the given mode.
+ *
+ * The skill-root guard is mode-independent: it rejects any target inside a
+ * skill discovery root regardless of `mode`, including `full_access`.
+ */
+export function evaluateMutatingToolPolicy(
+	target: string,
+	mode: RunShellMode,
+	toolName: string,
+	skillRoots: string[] = [],
+): void {
+	assertNotSkillRoot(target, skillRoots, toolName);
+
+	if (mode === "read_only") {
+		throw new SandboxPolicyError(
+			`${toolName} is not permitted in read_only mode. Use the read tool instead.`,
+		);
+	}
+}
+
+/**
+ * Resolve a workspace path for a mutating tool, enforcing the read-only mode
+ * and skill-root invariants.
+ *
+ * The skill-root guard is mode-independent: it rejects any target inside a
+ * skill discovery root regardless of `mode`, including `full_access`.
+ */
+export function resolveWritableWorkspacePath(
+	cwd: string,
+	relativePath: string,
+	mode: RunShellMode,
+	toolName: string,
+	allowedRoots: string[] = [],
+	skillRoots: string[] = [],
+): { resolved: string; relative: string } {
+	assertNotSkillRoot(relativePath, skillRoots, toolName);
+
+	if (mode === "read_only") {
+		throw new SandboxPolicyError(
+			`${toolName} is not permitted in read_only mode. Use the read tool instead.`,
+		);
+	}
+
+	const resolved = path.resolve(cwd, relativePath);
+	const relative = path.relative(cwd, resolved);
+	const withinCwd = isWithinRoot(resolved, cwd);
+	const withinAllowed = allowedRoots.some((root) =>
+		isWithinRoot(resolved, root),
+	);
+
+	if (!withinCwd && !withinAllowed) {
+		throw new SandboxPolicyError(
+			"Path must stay within the working directory.",
+		);
+	}
+
+	return { resolved, relative };
+}
+
+function isWithinRoot(target: string, root: string): boolean {
+	const resolvedRoot = path.resolve(root);
+	if (target === resolvedRoot) {
+		return true;
+	}
+	const relative = path.relative(resolvedRoot, target);
+	return (
+		relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
+	);
+}
 
 const execSeparatorPattern = /^(?:&&|\|\||[;|])$/u;
 const redirectionPattern = /(?:^|[^\d<])>>?\s*(["']?)([^"'\s]+)\1/gu;
-const dangerousCommandPattern =
-	/\b(?:git\s+reset\s+--hard|mkfs|shutdown|reboot|halt|poweroff|curl\s+[^|]+\|\s*(?:sh|bash|zsh)|wget\s+[^|]+\|\s*(?:sh|bash|zsh)|rm\s+-rf\s+\/)\b/iu;
-const readOnlyWritePattern =
-	/(?:^|[;&|]\s*)(?:touch|mkdir|rm|rmdir|mv|cp|install|tee|sed\s+-i|perl\s+-i|cat\s+>|echo\s+>|printf\s+>|python3?\s+-m\s+pip|npm\s+install|pnpm\s+install|git\s+apply|git\s+add|git\s+commit|export|unset|source|\.)\b|(?:^|[^\d<])>>?\s*/iu;
 const writeCommandNames = new Set([
 	"touch",
 	"mkdir",
@@ -25,84 +143,15 @@ const writeCommandNames = new Set([
 	"tee",
 ]);
 
-export function evaluateMutatingToolPolicy(
-	toolName: MutatingToolName,
-	mode: RunShellMode,
-): SandboxDenial | null {
-	if (mode === "read_only") {
-		return {
-			reason: `${toolName} is disabled by read_only tool safety mode`,
-		};
-	}
-	return null;
-}
-
-export function resolveWritableWorkspacePath(
-	cwd: string,
-	relativePath: string,
-	mode: RunShellMode,
-	toolName: MutatingToolName,
-	allowedRoots: string[] = [],
-): { resolved: string; relative: string } {
-	const denial = evaluateMutatingToolPolicy(toolName, mode);
-	if (denial) {
-		throw new SandboxPolicyError(denial.reason);
-	}
-	return resolveWorkspacePath(cwd, relativePath, allowedRoots);
-}
-
-export function evaluateCommandPolicy(
-	command: string,
-	cwd: string,
-	mode: RunShellMode,
-	allowedRoots: string[] = [],
-): SandboxDenial | null {
-	if (mode === "full_access") {
-		return null;
-	}
-
-	if (dangerousCommandPattern.test(command)) {
-		return {
-			reason: "blocked by high-risk command policy",
-		};
-	}
-
-	if (mode === "read_only" && readOnlyWritePattern.test(command)) {
-		return {
-			reason: "read_only mode blocks write or environment-modifying commands",
-		};
-	}
-
-	if (mode !== "workspace_write") {
-		return null;
-	}
-
-	for (const target of collectWriteTargets(command)) {
-		if (
-			!isPathWithinWorkspace(target, cwd) &&
-			!isWithinTrustedRoot(target, allowedRoots)
-		) {
-			return {
-				reason: `workspace_write mode blocks writes outside the workspace: ${target}`,
-			};
-		}
-	}
-
-	return null;
-}
-
-function isWithinTrustedRoot(target: string, allowedRoots: string[]): boolean {
-	return allowedRoots.some((root) => isWithin(path.resolve(target), root));
-}
-
-export class SandboxPolicyError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "SandboxPolicyError";
-	}
-}
-
-function collectWriteTargets(command: string): string[] {
+/**
+ * Collect every file path a command may write to: redirect targets
+ * (`> file`, `>> file`) plus the destination args of known write commands
+ * (`cp`/`mv`/`install` take all following non-flag args; `touch`/`mkdir`/
+ * `rm`/`rmdir`/`tee` take the first following non-flag arg). Reused by both
+ * the skill-root guard and the workspace containment check so neither can be
+ * bypassed by switching write syntax.
+ */
+function extractWriteTargets(command: string): string[] {
 	const targets = new Set<string>();
 
 	for (const match of command.matchAll(redirectionPattern)) {
@@ -181,17 +230,7 @@ function tokenizeCommand(command: string): string[] {
 			continue;
 		}
 
-		if ((char === ";" || char === "|") && current) {
-			tokens.push(current);
-			current = "";
-		}
-
-		if (char === ";" || char === "|") {
-			tokens.push(char);
-			continue;
-		}
-
-		if (char === "&") {
+		if (char === ";" || char === "|" || char === "&") {
 			if (current) {
 				tokens.push(current);
 				current = "";
@@ -225,16 +264,54 @@ function normalizeSeparatorTokens(tokens: string[]): string[] {
 	return normalized;
 }
 
-function isPathWithinWorkspace(target: string, cwd: string): boolean {
-	if (!target || target === "/dev/null") {
-		return true;
+/**
+ * Evaluate whether a bash command may run for the given mode.
+ *
+ * The skill-root guard is mode-independent: it rejects any write/redirect
+ * target inside a skill discovery root regardless of `mode`, including
+ * `full_access`. It runs before the `full_access` early-return so the
+ * `full_access` escape hatch cannot bypass it.
+ */
+export function evaluateCommandPolicy(
+	command: string,
+	cwd: string,
+	mode: RunShellMode,
+	allowedRoots: string[] = [],
+	skillRoots: string[] = [],
+): void {
+	// Mode-independent skill-root guard: must precede the full_access
+	// early-return below so the escape hatch cannot defeat it.
+	for (const target of extractWriteTargets(command)) {
+		const resolved = path.resolve(cwd, target);
+		if (isWithinAnyRoot(resolved, skillRoots)) {
+			throw new SandboxPolicyError(
+				`bash blocked: write target "${target}" is inside a skill discovery root and must stay read-only.`,
+			);
+		}
 	}
 
-	const resolved = path.resolve(cwd, target);
-	const relative = path.relative(cwd, resolved);
+	if (mode === "full_access") {
+		return;
+	}
 
-	return (
-		relative === "" ||
-		(!relative.startsWith("..") && !path.isAbsolute(relative))
-	);
+	if (mode === "read_only") {
+		throw new SandboxPolicyError(
+			"bash is not permitted in read_only mode. Use the read tool instead.",
+		);
+	}
+
+	// workspace_write: deny any write target that escapes the workspace
+	// (cwd + allowed roots).
+	for (const target of extractWriteTargets(command)) {
+		const resolved = path.resolve(cwd, target);
+		const withinCwd = isWithinRoot(resolved, cwd);
+		const withinAllowed = allowedRoots.some((root) =>
+			isWithinRoot(resolved, root),
+		);
+		if (!withinCwd && !withinAllowed) {
+			throw new SandboxPolicyError(
+				`bash write target "${target}" must stay within the working directory.`,
+			);
+		}
+	}
 }

@@ -102,7 +102,7 @@ test("bash read_only mode rejects write commands before execution", async () => 
 	);
 
 	assert.equal(result.ok, false);
-	assert.match(result.error ?? "", /read_only mode blocks write/i);
+	assert.match(result.error ?? "", /is not permitted in read_only mode/);
 });
 
 test("bash workspace_write mode rejects writes outside the workspace", async () => {
@@ -126,7 +126,7 @@ test("bash workspace_write mode rejects writes outside the workspace", async () 
 	);
 
 	assert.equal(result.ok, false);
-	assert.match(result.error ?? "", /outside the workspace/);
+	assert.match(result.error ?? "", /must stay within the working directory/);
 });
 
 test("bash workspace_write mode detects common external write targets", async () => {
@@ -157,7 +157,11 @@ test("bash workspace_write mode detects common external write targets", async ()
 		);
 
 		assert.equal(result.ok, false, command);
-		assert.match(result.error ?? "", /outside the workspace/, command);
+		assert.match(
+			result.error ?? "",
+			/must stay within the working directory/,
+			command,
+		);
 	}
 });
 
@@ -911,7 +915,7 @@ test("read_only tool safety mode rejects edit and write", async () => {
 		{ cwd },
 	);
 	assert.equal(editResult.ok, false);
-	assert.match(editResult.error ?? "", /read_only tool safety mode/);
+	assert.match(editResult.error ?? "", /is not permitted in read_only mode/);
 
 	const writeResult = await tools.execute(
 		{
@@ -923,7 +927,7 @@ test("read_only tool safety mode rejects edit and write", async () => {
 		{ cwd },
 	);
 	assert.equal(writeResult.ok, false);
-	assert.match(writeResult.error ?? "", /read_only tool safety mode/);
+	assert.match(writeResult.error ?? "", /is not permitted in read_only mode/);
 	assert.equal(await readFile(path.join(cwd, "demo.txt"), "utf8"), "alpha\n");
 });
 
@@ -2023,6 +2027,66 @@ test("edit tool permits a path under an allowed root outside the workspace", asy
 
 	assert.equal(result.ok, true);
 	assert.equal(await readFile(notePath, "utf8"), "new\n");
+});
+
+test("read tool succeeds on a skill discovery root (read capability unchanged)", async () => {
+	// ADR 0017: skill roots stay read-only for *writes*, but reads must keep
+	// working. The runtime registers each loaded skill's `dir` as a trusted
+	// read root, so pointing the read tool at a SKILL.md under a skill root
+	// must return its content, not a denial.
+	const cwd = await createTempDir("sigpi-skill-read-cwd-");
+	const skillRoot = await createTempDir("sigpi-skill-read-root-");
+	const skillFile = path.join(skillRoot, "SKILL.md");
+	await writeFile(
+		skillFile,
+		"---\nname: demo\ndescription: demo skill\n---\nBody text.\n",
+	);
+	const tracker = new ReadTracker();
+	const tools = new ToolRegistry([createReadTool(tracker)]);
+
+	const result = await tools.execute(
+		{
+			id: "call_skill_read_1",
+			name: "read",
+			arguments: { file_path: skillFile },
+			rawArguments: "{}",
+		},
+		{ cwd, allowedReadRoots: [skillRoot] },
+	);
+
+	assert.equal(result.ok, true);
+	assert.match((result.data as { content: string }).content, /Body text\./);
+});
+
+test("glob and grep succeed on a skill discovery root (read capability unchanged)", async () => {
+	const cwd = await createTempDir("sigpi-skill-rg-cwd-");
+	const skillRoot = await createTempDir("sigpi-skill-rg-root-");
+	await writeFile(path.join(skillRoot, "SKILL.md"), "name: demo\n");
+	await writeFile(path.join(skillRoot, "note.md"), "needle-token\n");
+
+	const glob = new ToolRegistry([globTool]);
+	const globResult = await glob.execute(
+		{
+			id: "call_skill_glob_1",
+			name: "glob",
+			arguments: { pattern: "*.md", path: skillRoot },
+			rawArguments: "{}",
+		},
+		{ cwd, allowedReadRoots: [skillRoot] },
+	);
+	assert.equal(globResult.ok, true);
+
+	const grep = new ToolRegistry([grepTool]);
+	const grepResult = await grep.execute(
+		{
+			id: "call_skill_grep_1",
+			name: "grep",
+			arguments: { pattern: "needle-token", path: skillRoot },
+			rawArguments: "{}",
+		},
+		{ cwd, allowedReadRoots: [skillRoot] },
+	);
+	assert.equal(grepResult.ok, true);
 });
 
 test("bash workspace_write mode permits writes under an allowed root", async () => {

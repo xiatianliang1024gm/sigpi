@@ -30,7 +30,10 @@ import {
 	joinRenderedSections,
 	withRendered,
 } from "../render.js";
-import { evaluateCommandPolicy } from "../sandbox-policy.js";
+import {
+	evaluateCommandPolicy,
+	SandboxPolicyError,
+} from "../sandbox-policy.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -84,6 +87,7 @@ export function createBashTool(
 	config: RunShellConfig = { mode: "workspace_write" },
 	tracker: ReadTracker,
 	allowedRoots: string[] = [],
+	skillRoots: string[] = [],
 ): ToolDefinition<BashArgs> {
 	return {
 		name: "bash",
@@ -151,38 +155,42 @@ export function createBashTool(
 			const outputDir =
 				bash?.outputDir ?? path.join(os.tmpdir(), "sigpi-bash-outputs");
 			const mode = config.mode;
-			const denial = evaluateCommandPolicy(
-				command,
-				workingDir.current,
-				mode,
-				allowedRoots,
-			);
-
-			if (denial) {
-				context.logger?.warn("tool_execution_failed", {
-					runId: context.runId,
-					sessionId: context.sessionId,
-					turnId: context.turnId,
-					toolName: "bash",
+			try {
+				evaluateCommandPolicy(
 					command,
+					workingDir.current,
 					mode,
-					reason: denial.reason,
-				});
-				throw new ToolExecutionError(
-					`bash denied in ${mode} mode: ${denial.reason}`,
-					withRendered(
-						{
-							command,
-							mode,
-							reason: denial.reason,
-						},
-						joinRenderedSections([
-							`Command: ${command}`,
-							`Mode: ${mode}`,
-							`Reason: ${denial.reason}`,
-						]),
-					),
+					allowedRoots,
+					skillRoots,
 				);
+			} catch (denial) {
+				if (denial instanceof SandboxPolicyError) {
+					context.logger?.warn("tool_execution_failed", {
+						runId: context.runId,
+						sessionId: context.sessionId,
+						turnId: context.turnId,
+						toolName: "bash",
+						command,
+						mode,
+						reason: denial.message,
+					});
+					throw new ToolExecutionError(
+						`bash denied in ${mode} mode: ${denial.message}`,
+						withRendered(
+							{
+								command,
+								mode,
+								reason: denial.message,
+							},
+							joinRenderedSections([
+								`Command: ${command}`,
+								`Mode: ${mode}`,
+								`Reason: ${denial.message}`,
+							]),
+						),
+					);
+				}
+				throw denial;
 			}
 
 			const defaultTimeout = config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;

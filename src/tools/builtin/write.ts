@@ -24,6 +24,7 @@ export function createWriteTool(
 	config: RunShellConfig = { mode: "workspace_write" },
 	tracker: ReadTracker,
 	allowedRoots: string[] = [],
+	skillRoots: string[] = [],
 ): ToolDefinition<WriteArgs> {
 	return {
 		name: "write",
@@ -60,6 +61,7 @@ export function createWriteTool(
 					config.mode,
 					"write",
 					allowedRoots,
+					skillRoots,
 				));
 			} catch (error) {
 				if (error instanceof SandboxPolicyError) {

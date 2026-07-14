@@ -66,7 +66,7 @@ export async function loadSkillCatalog(
 	};
 }
 
-function collectSkillRoots(cwd: string, homeDir: string): string[] {
+export function collectSkillRoots(cwd: string, homeDir: string): string[] {
 	const projectRoots: string[] = [];
 	let dir = path.resolve(cwd);
 	for (;;) {

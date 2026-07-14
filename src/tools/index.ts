@@ -14,14 +14,15 @@ export function createDefaultToolRegistry(
 	shellRuntime?: ShellRuntime,
 	bashConfig: RunShellConfig = { mode: "workspace_write" },
 	allowedRoots: string[] = [],
+	skillRoots: string[] = [],
 ): ToolRegistry {
 	const readTracker = new ReadTracker();
 	return new ToolRegistry([
 		globTool,
 		grepTool,
 		createReadTool(readTracker),
-		createWriteTool(bashConfig, readTracker, allowedRoots),
-		createEditTool(bashConfig, readTracker, allowedRoots),
+		createWriteTool(bashConfig, readTracker, allowedRoots, skillRoots),
+		createEditTool(bashConfig, readTracker, allowedRoots, skillRoots),
 		createUpdatePlanTool(),
 		createBashTool(
 			shellRuntime ?? {
@@ -34,6 +35,7 @@ export function createDefaultToolRegistry(
 			bashConfig,
 			readTracker,
 			allowedRoots,
+			skillRoots,
 		),
 	]);
 }

@@ -25,6 +25,7 @@ export function createEditTool(
 	config: RunShellConfig = { mode: "workspace_write" },
 	tracker: ReadTracker,
 	allowedRoots: string[] = [],
+	skillRoots: string[] = [],
 ): ToolDefinition<EditArgs> {
 	return {
 		name: "edit",
@@ -80,6 +81,7 @@ export function createEditTool(
 					config.mode,
 					"edit",
 					allowedRoots,
+					skillRoots,
 				));
 			} catch (error) {
 				if (error instanceof SandboxPolicyError) {
