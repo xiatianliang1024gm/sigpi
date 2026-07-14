@@ -1,8 +1,20 @@
 import assert from "node:assert/strict";
 import { realpathSync, symlinkSync, writeFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+
+// The runtime-wiring test below writes a project-level config at
+// <cwd>/.sigpi/config.toml. Because project config overrides user config, a
+// leftover file would silently hijack `allowed_roots` for the whole repo (and
+// for the user's real agent runs). Remove it after every test to keep the
+// working tree clean and the user's ~/.sigpi/config.toml authoritative.
+test.afterEach(async () => {
+	await rm(path.join(process.cwd(), ".sigpi"), {
+		recursive: true,
+		force: true,
+	});
+});
 import { createAgentRuntime } from "../src/runtime.js";
 import { globTool } from "../src/tools/builtin/glob.js";
 import { grepTool } from "../src/tools/builtin/grep.js";
