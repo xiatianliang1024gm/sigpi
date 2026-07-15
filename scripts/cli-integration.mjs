@@ -14,6 +14,8 @@ const cwd = await createTempDir("sigpi-cli-int-");
 
 await writeTestConfig(cwd, {
 	modelBaseURL: "https://fake-openai.local/v1",
+	contextWindow: 1_000_000,
+	reserveTokens: 0,
 });
 
 const validatedConfig = await runCliCommand({
@@ -134,7 +136,7 @@ const compactCommand = await runCliCommand({
 	timeoutMs: 30_000,
 });
 assert.equal(compactCommand.code, 0);
-assert.match(compactCommand.stdout, /Nothing to compact\./);
+assert.match(compactCommand.stdout, /Context compacted/);
 
 const resumeCommand = await runCliCommand({
 	cwd,
@@ -145,7 +147,8 @@ const resumeCommand = await runCliCommand({
 	timeoutMs: 30_000,
 });
 assert.equal(resumeCommand.code, 0);
-assert.match(resumeCommand.stdout, new RegExp(savedSessionId));
+assert.match(resumeCommand.stdout, /Attached session:/);
+assert.match(resumeCommand.stdout, new RegExp(baseChatSessionId));
 
 const exitCommand = await runCliCommand({
 	cwd,
@@ -173,7 +176,7 @@ const modelFailure = await runCliCommand({
 	nodeArgs,
 });
 assert.equal(modelFailure.code, 1);
-assert.match(modelFailure.stderr, /Model request failed: 500 Internal Server Error/);
+assert.match(modelFailure.stderr, /server error \(HTTP 500\)/);
 
 function extractSessionId(stdout) {
 	const match = stdout.match(/\[session\]\s+([0-9a-f-]{36})/i);

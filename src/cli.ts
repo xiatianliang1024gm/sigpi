@@ -130,6 +130,7 @@ async function runAsk(args: string[]): Promise<void> {
 
 	if (!result.ok) {
 		console.error(result.errorMessage);
+		process.exitCode = 1;
 		return;
 	}
 
