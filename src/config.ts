@@ -51,7 +51,7 @@ const modelConfigSchema = z.object({
 });
 
 const agentConfigSchema = z.object({
-	maxSteps: z.number().int().positive().default(20),
+	maxSteps: z.number().int().positive().default(40),
 	processOutput: z
 		.enum(["compact", "detailed"], {
 			errorMap: () => ({

@@ -84,10 +84,10 @@ for (let step = 1; step <= this.options.maxSteps; step += 1) {
 }
 ```
 
-`maxSteps` (default **8**) is the hard ceiling. Without it, a confused agent could call tools
-forever and burn tokens. When the ceiling is hit, the loop does **not** just stop — it asks the
-model once more to *synthesize* a best-effort answer from what it gathered (see
-[Max-steps & synthesis](#max-steps--synthesis) below).
+`maxSteps` (default **40**) is the hard ceiling. Without it, a confused agent could call tools
+forever and burn tokens. When the ceiling is hit, the loop ends the turn with a **local** fallback
+answer built from the tools already run (`toolExecutions`) plus the current goal — there is **no**
+final model call (see [Max-steps & local fallback](#max-steps--local-fallback) below).
 
 ## Branch A — the model returned tool calls
 
@@ -205,20 +205,14 @@ stay within the token budget. See [Context Management](./04-context-management.m
 
 ## Max-steps & synthesis
 
-If the loop exhausts `maxSteps` without a final answer, SigPi makes one last attempt:
-
-```ts
-const response = await this.provider.generate({
-  messages: [...workingMessages, createSystemMessage(MAX_STEPS_SYNTHESIS_PROMPT)],
-  tools: [],
-  ...
-});
-```
-
-The synthesis prompt tells the model to stop requesting tools and answer from what it already has.
-If even that fails or returns garbage, `buildMaxStepsFallbackAnswer` produces a language-neutral
-summary of the goal and the tool results gathered so far, so the user always gets *something*
-coherent rather than a crash.
+If the loop exhausts `maxSteps` without a final answer, SigPi ends the turn with a **local** fallback
+assembled from the in-memory `toolExecutions` (files read, commands run, calls made) plus the
+`currentGoal` — `buildMaxStepsFallbackAnswer`. There is **no** final model call, so the answer cannot
+leak `<tool_call>` markup and cannot fail on a second provider error. The fallback states the limit
+was reached, that the task is incomplete, and prompts `go on` to continue; a `turn_max_steps_reached`
+progress event surfaces the same signal. The turn is marked resumable, so a later `go on` resumes the
+same task from the persisted checkpoint with a fresh `maxSteps` budget rather than re-running the same
+steps (ADR 0018).
 
 ## In-turn checkpoint compaction
 
@@ -242,7 +236,7 @@ If the user presses escape, the current state is **checkpointed** (not lost) and
 - Two message lists: `workingMessages` (model's window) vs `turnMessages` (this turn's transcript).
 - The loop is driven entirely by whether the model returns `toolCalls`.
 - Real safeguards are already present: **dedup**, **verification tracking**, **in-turn
-  checkpoint**, **max-steps synthesis**, and **interruption**. None of these are "framework magic" —
+  checkpoint**, **local max-steps fallback**, and **interruption**. None of these are "framework magic" —
   they are a few dozen lines each, and you just read all of them.
 
 Next: [Function Calling](./03-function-calling.md) — what a `toolCall` actually is and how the

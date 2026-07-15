@@ -81,9 +81,9 @@ for (let step = 1; step <= this.options.maxSteps; step += 1) {
 }
 ```
 
-`maxSteps`（默认 **8**）是硬性上限。没有它，一个困惑的 agent 可能无限调用工具、烧光 token。
-触顶时循环**不会**直接停——它会再请求模型**一次**，让它基于已收集的内容*综合*出一个尽力而为的答案
-（见下方[触顶合成](#max-steps--合成)）。
+`maxSteps`（默认 **40**）是硬性上限。没有它，一个困惑的 agent 可能无限调用工具、烧光 token。
+触顶时循环**不会**直接丢下用户——它会用本轮已经跑过的工具（`toolExecutions`）加上当前目标，
+在本地拼出一个**兜底答案**（见下方[触顶本地兜底](#max-steps--本地兜底)），**不再**发起最后一次模型调用。
 
 ## 分支 A — 模型返回了工具调用
 
@@ -196,19 +196,13 @@ return {
 
 ## Max-steps 与合成
 
-如果循环耗尽了 `maxSteps` 仍无最终答案，SigPi 做最后一次尝试：
-
-```ts
-const response = await this.provider.generate({
-  messages: [...workingMessages, createSystemMessage(MAX_STEPS_SYNTHESIS_PROMPT)],
-  tools: [],
-  ...
-});
-```
-
-合成提示告诉模型停止请求工具、基于已有内容作答。若连这也失败或返回垃圾，
-`buildMaxStepsFallbackAnswer` 会生成一份语言无关的「目标 + 已收集工具结果」摘要，
-让用户总能拿到*某种*连贯的回复，而不是崩溃。
+如果循环耗尽了 `maxSteps` 仍无最终答案，SigPi 会在本地用已跑过的 `toolExecutions`（读过的文件、
+跑过的命令、调用过的工具）加上 `currentGoal` 拼出兜底答案——`buildMaxStepsFallbackAnswer`。
+**不再**发起最后一次模型调用，因此答案不会泄漏 `<tool_call>` 标记，也不会在第二次调用时因
+服务商报错而失败。兜底答案会说明已达到上限、任务未完成，并提示输入 `go on` 继续；同时发出
+`turn_max_steps_reached` 进度事件给出相同信号。该轮会被标记为可恢复（resumable），因此之后
+输入 `go on` 会从已持久化的 checkpoint 续做同一任务（带着全新的 `maxSteps` 预算），而不是重跑
+同样的步骤（ADR 0018）。
 
 ## 轮内 checkpoint 压缩
 
@@ -228,7 +222,7 @@ escape，当前状态会被**checkpoint**（不会丢失），本轮返回 `comp
 - 一轮是一个**循环**，由 `maxSteps` 限定上限，而不是一次调用。
 - 两个消息列表：`workingMessages`（模型的窗口）vs `turnMessages`（本轮转录）。
 - 循环完全由「模型是否返回 `toolCalls`」驱动。
-- 真实的防护已经就位：**去重**、**验证跟踪**、**轮内 checkpoint**、**max-steps 合成**、**中断**。
+- 真实的防护已经就位：**去重**、**验证跟踪**、**轮内 checkpoint**、**触顶本地兜底**、**中断**。
   它们都不是「框架魔法」——各自只有几十行，而你刚刚把全部读完了。
 
 下一步：[Function Calling](./03-function-calling.md) — 一个 `toolCall` 到底是什么，以及模型如何

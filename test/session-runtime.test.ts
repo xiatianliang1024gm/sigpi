@@ -322,3 +322,78 @@ test("session runtime persists interrupted turns without incrementing turnCount"
 		[{ role: "user", content: "interrupt me" }],
 	);
 });
+
+test("max-steps turn is resumable and go on continues the same task", async () => {
+	const cwd = await createTempDir("sigpi-session-runtime-resume-");
+	const store = createTestSessionStore({ cwd, homeDir: cwd });
+	const fingerprint = createSystemPromptFingerprint("system prompt");
+	const session = await store.createSession({
+		cwd,
+		systemPromptFingerprint: fingerprint,
+		loadedSkillNames: [],
+		skillsFingerprint: null,
+	});
+	// First turn: always emit a tool call so the turn hits maxSteps. Second turn
+	// ("go on"): emit a final answer to prove the resumed turn finishes instead
+	// of re-running the same steps.
+	const provider = new MockProvider((request) => {
+		const lastUser = [...request.messages]
+			.reverse()
+			.find((message) => message.role === "user");
+		if (lastUser?.content === "go on") {
+			return {
+				assistantText: "finished the analysis",
+				toolCalls: [],
+				finishReason: "stop",
+			};
+		}
+
+		return {
+			assistantText: null,
+			toolCalls: [
+				{
+					id: "call_1",
+					name: "glob",
+					arguments: { pattern: "src/**/*.ts" },
+					rawArguments: '{"pattern":"src/**/*.ts"}',
+				},
+			],
+			finishReason: "tool_calls",
+		};
+	});
+	const context = new ConversationContext();
+	const runner = new AgentRunner({
+		provider,
+		tools: createDefaultToolRegistry(),
+		context,
+		systemPrompt: "system prompt",
+		options: {
+			workingDirectory: cwd,
+			maxSteps: 3,
+		},
+	});
+	const sessionRuntime = new SessionRuntime(runner, context, store, session);
+
+	const maxStepsResult = await sessionRuntime.runTurn("analyze the project");
+
+	assert.equal(maxStepsResult.completionStatus, "completed");
+	assert.equal(maxStepsResult.resumable, true);
+	assert.match(
+		maxStepsResult.outputText ?? "",
+		/I reached the maximum tool-call steps/,
+	);
+	assert.match(maxStepsResult.outputText ?? "", /go on/);
+
+	// The resumed turn must not re-run the same steps: it should request the
+	// model exactly once and finish with a fresh budget.
+	const requestsBeforeResume = provider.requests.length;
+	const resumed = await sessionRuntime.runTurn("go on");
+
+	assert.equal(resumed.completionStatus, "completed");
+	assert.equal(resumed.resumable, false);
+	assert.equal(resumed.outputText, "finished the analysis");
+	assert.equal(provider.requests.length - requestsBeforeResume, 1);
+
+	const persisted = await store.getSession(session.sessionId);
+	assert.equal(persisted.turnCount, 2);
+});

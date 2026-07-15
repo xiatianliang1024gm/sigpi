@@ -11,7 +11,6 @@ import type {
 	ExecutedToolCall,
 	Message,
 	ModelProvider,
-	ModelUsage,
 	RunTurnResult,
 	ToolCall,
 	ToolExecutionResult,
@@ -35,12 +34,6 @@ const DEDUP_SKIPPED_TOOL_NAMES = new Set(["write", "edit", "bash", "read"]);
 const DEDUP_WINDOW = 6;
 const VERIFICATION_REMINDER =
 	"You changed files in this turn. Before finishing, run the narrowest relevant verification command with `bash` if feasible, or explain what blocked validation.";
-const MAX_STEPS_SYNTHESIS_PROMPT = [
-	"The tool-call step limit has been reached.",
-	"Do not request or describe more tool calls.",
-	"Answer the user's current request now using the available context.",
-	"If the context is incomplete, state the best-effort findings and what remains unknown, but do not claim the user gave no task.",
-].join(" ");
 const TURN_CHECKPOINT_KEEP_LAST_MESSAGES = 4;
 const TURN_CHECKPOINT_PREFIX =
 	"Current turn checkpoint. Earlier tool work in this same user turn was compacted:";
@@ -67,7 +60,7 @@ Use this EXACT format:
 Preserve the user's current goal even if later tool results are large or distracting.`;
 const CHECKPOINT_GOAL_LOG_MAX_CHARS = 240;
 const DEFAULT_RUNNER_OPTIONS: AgentRunnerOptions = {
-	maxSteps: 8,
+	maxSteps: 40,
 	temperature: 0.2,
 	workingDirectory: process.cwd(),
 	enableVerificationReminder: false,
@@ -433,6 +426,7 @@ export class AgentRunner {
 				contextUpdated,
 				interruptSource: "user_escape",
 				interruptStage: stage,
+				resumable: false,
 			};
 		};
 
@@ -822,57 +816,16 @@ export class AgentRunner {
 					contextUpdated,
 					interruptSource: null,
 					interruptStage: null,
+					resumable: false,
 				};
 			}
 
-			let outputText = `I hit the maximum tool-call steps (${this.options.maxSteps}) before reaching a final answer.`;
-			let synthesisUsage: ModelUsage | undefined;
-			try {
-				const modelStartedAt = Date.now();
-				reportProgress({
-					type: "model_request_started",
-					step: this.options.maxSteps,
-					turnId,
-					message: "Synthesizing final answer",
-				});
-				const response = await this.provider.generate({
-					messages: [
-						...workingMessages,
-						createSystemMessage(MAX_STEPS_SYNTHESIS_PROMPT),
-					],
-					tools: [],
-					temperature: this.options.temperature,
-					maxTokens: this.options.maxTokens,
-					context: {
-						runId: this.options.runId,
-						sessionId: this.options.sessionId ?? null,
-						turnId,
-						step: this.options.maxSteps,
-						purpose: "turn",
-					},
-				});
-				lastModelElapsedMs = Date.now() - modelStartedAt;
-				reportProgress({
-					type: "model_request_finished",
-					step: this.options.maxSteps,
-					turnId,
-					elapsedMs: lastModelElapsedMs,
-					message: "Model returned final answer",
-				});
-				const synthesizedText = response.assistantText?.trim();
-				synthesisUsage = response.usage;
-				outputText = isUsableMaxStepsAnswer(synthesizedText)
-					? synthesizedText
-					: buildMaxStepsFallbackAnswer(currentGoal, toolExecutions);
-			} catch (error) {
-				logger?.warn("turn_max_steps_synthesis_failed", {
-					runId: this.options.runId,
-					sessionId: this.options.sessionId ?? null,
-					turnId,
-					error: error instanceof Error ? error.message : String(error),
-				});
-				outputText = buildMaxStepsFallbackAnswer(currentGoal, toolExecutions);
-			}
+			const outputText = buildMaxStepsFallbackAnswer(
+				currentGoal,
+				toolExecutions,
+				this.options.maxSteps,
+				turnCheckpoint,
+			);
 			turnMessages.push(createAssistantMessage(outputText));
 
 			let contextUpdated: ContextUpdateResult;
@@ -883,7 +836,7 @@ export class AgentRunner {
 					this.systemPrompt,
 					this.toolSchemas,
 					{ turnId },
-					{ usage: synthesisUsage },
+					{ usage: undefined },
 				);
 			} catch (error) {
 				if (error instanceof CompactionFailedError) {
@@ -948,6 +901,7 @@ export class AgentRunner {
 				contextUpdated,
 				interruptSource: null,
 				interruptStage: null,
+				resumable: true,
 			};
 		} catch (error) {
 			if (
@@ -1023,35 +977,32 @@ export class AgentRunner {
 	}
 }
 
-function isUsableMaxStepsAnswer(
-	text: string | null | undefined,
-): text is string {
-	if (!text) {
-		return false;
-	}
-	return !["<tool_call>", "<invoke name=", "]<]minimax[>", "</mm:think>"].some(
-		(marker) => text.includes(marker),
-	);
-}
-
 function buildMaxStepsFallbackAnswer(
 	currentGoal: string,
 	toolExecutions: readonly ExecutedToolCall[],
+	maxSteps: number,
+	checkpoint: string | null,
 ): string {
-	const facts = summarizeToolExecutions(toolExecutions);
+	const facts = summarizeToolExecutions(toolExecutions).slice(0, 20);
 	const factLines =
 		facts.length > 0
-			? facts.slice(0, 20).map((fact) => `- ${fact}`)
+			? facts.map((fact) => `- ${fact}`)
 			: ["- No tool results were captured."];
 
-	return [
-		`I hit the tool-call step limit, but the current user goal is: ${currentGoal}`,
+	const lines: string[] = [
+		`I reached the maximum tool-call steps (${maxSteps}) before the task was complete, so the work is not finished. Type 'go on' to continue from where this left off.`,
 		"",
-		"Based on the context already gathered, I should answer this goal rather than keep exploring. Key context obtained:",
+		`Current goal: ${currentGoal}`,
+		"",
+		"Work done this turn:",
 		...factLines,
-		"",
-		"If this task continues, the next step is to synthesize a clear analysis of the project structure, core modules, how to run it, and its risk points; only keep reading files when key information is missing.",
-	].join("\n");
+	];
+
+	if (checkpoint) {
+		lines.push("", "Turn checkpoint:", checkpoint);
+	}
+
+	return lines.join("\n");
 }
 
 function summarizeToolExecutions(

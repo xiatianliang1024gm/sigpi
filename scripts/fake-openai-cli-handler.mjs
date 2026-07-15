@@ -13,6 +13,36 @@ export async function handleRequest({ body }) {
 		};
 	}
 
+	if (prompt === "loop steps") {
+		// Always emit a tool call (varying args so the runner does not dedupe)
+		// so the agent turn runs until it hits maxSteps and ends with the local
+		// max-steps fallback.
+		const toolCount = messages.filter((message) => message.role === "tool").length;
+		return {
+			body: {
+				choices: [
+					{
+						finish_reason: "tool_calls",
+						message: {
+							role: "assistant",
+							content: "still working",
+							tool_calls: [
+								{
+									id: `call_${toolCount + 1}`,
+									type: "function",
+									function: {
+										name: "glob",
+										arguments: JSON.stringify({ pattern: `src/**/${toolCount}.ts` }),
+									},
+								},
+							],
+						},
+						},
+					],
+			},
+		};
+	}
+
 	if (prompt === "tool fail") {
 		const lastToolMessage = [...messages]
 			.reverse()

@@ -16,6 +16,13 @@ export type TurnResult =
 			completionStatus: "completed" | "interrupted";
 			outputText: string | null;
 			toolExecutions: ExecutedToolCall[];
+			/**
+			 * True when the turn ended at the `maxSteps` bound. The turn produced a
+			 * local summary but no final answer, and a later `go on` / `continue`
+			 * resumes the same task from the persisted checkpoint with a fresh
+			 * budget. Tool errors and model errors do not set this.
+			 */
+			resumable: boolean;
 	  }
 	| {
 			ok: false;
@@ -62,6 +69,7 @@ export class AgentTurn {
 				completionStatus: result.completionStatus,
 				outputText: result.outputText,
 				toolExecutions: result.toolExecutions,
+				resumable: result.resumable,
 			};
 		} catch (error) {
 			const rawMessage = error instanceof Error ? error.message : String(error);

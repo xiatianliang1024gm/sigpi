@@ -607,6 +607,13 @@ export interface RunTurnResult {
 	contextUpdated: ContextUpdateResult;
 	interruptSource: InterruptSource | null;
 	interruptStage: InterruptStage | null;
+	/**
+	 * True when the turn ended because it hit the `maxSteps` bound. Such a turn
+	 * produced a local summary but no final answer, so it is resumable: a later
+	 * `go on` / `continue` continues the same task from the persisted checkpoint
+	 * with a fresh `maxSteps` budget instead of a cold restart.
+	 */
+	resumable: boolean;
 }
 
 export type SessionStatus = "active" | "interrupted" | "completed";
