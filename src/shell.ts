@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import os from "node:os";
@@ -35,7 +35,62 @@ export function detectShellRuntime(
 		return createShellRuntime("powershell", platform, executableOverride);
 	}
 
-	return createShellRuntime("zsh", platform, executableOverride);
+	// No shell was requested or inferred. Prefer the user's login shell from
+	// `$SHELL` when it names a POSIX shell that is actually present, then fall
+	// back to a portable POSIX default that exists on the runner. We never
+	// hardcode `zsh`: on minimal images (e.g. ubuntu-latest) zsh is absent and
+	// `execFile("zsh", …)` would throw `ENOENT`.
+	const fallback = resolvePosixDefaultShell(env);
+	return createShellRuntime(fallback, platform, executableOverride);
+}
+
+/**
+ * Resolve a POSIX default shell that is present on the runner.
+ *
+ * Order of preference:
+ *  1. `$SHELL` when it names a known POSIX shell and that binary exists.
+ *  2. `bash` if present (most common interactive default).
+ *  3. `sh` if present (guaranteed POSIX, last resort before giving up).
+ *
+ * Returns `null` only when no candidate exists, so the caller can surface a
+ * clear error rather than spawning a missing binary.
+ */
+export function resolvePosixDefaultShell(
+	env: NodeJS.ProcessEnv = process.env,
+): ShellKind {
+	const fromEnv = normalizeShellExecutable(env.SHELL);
+	if (
+		fromEnv &&
+		fromEnv !== "powershell" &&
+		fromEnv !== "pwsh" &&
+		fromEnv !== "cmd" &&
+		isExecutablePresent(fromEnv)
+	) {
+		return fromEnv;
+	}
+
+	for (const candidate of ["bash", "sh"] as const) {
+		if (isExecutablePresent(candidate)) {
+			return candidate;
+		}
+	}
+
+	// Nothing we recognize is on PATH. Spawning will fail, but we still return
+	// a sensible default so the error surfaces from the OS (not a hardcoded
+	// zsh ENOENT) and the caller's stderr fallback can report it.
+	return "sh";
+}
+
+function isExecutablePresent(name: string): boolean {
+	try {
+		execFileSync(name, ["--version"], { timeout: 2_000, stdio: "ignore" });
+		return true;
+	} catch (error) {
+		// `ENOENT` means the binary is missing. Any other error (e.g. an
+		// unsupported `--version` flag) means the binary exists and ran, so we
+		// treat it as present.
+		return (error as NodeJS.ErrnoException)?.code !== "ENOENT";
+	}
 }
 
 export function createShellRuntime(
@@ -171,6 +226,34 @@ pwd > '${file}'
 exit $__sigpi_rc`;
 }
 
+/**
+ * Source a script file in the given shell. POSIX shells use `.` (the portable
+ * form of `source`, which is a bash/zsh extension and does not exist in
+ * `sh`/`dash`); PowerShell uses `.` as well. Centralizing this behind the
+ * `ShellRuntime` seam keeps the bash tool from branching on shell kind.
+ */
+export function sourceScript(shellRuntime: ShellRuntime, file: string): string {
+	// POSIX shells and PowerShell both source with `.` (the portable form of
+	// bash/zsh `source`, which does not exist in `sh`/`dash`). The runtime is
+	// threaded through so the seam owns any future per-shell divergence.
+	void shellRuntime;
+	return `. '${file}'`;
+}
+
+/**
+ * Whether the shell provides the builtins needed to capture rc alias and
+ * function definitions. bash/zsh expose `alias`/`declare -f`/`typeset -f`;
+ * `sh`/`dash` do not reliably, so rc capture is skipped there rather than
+ * running a probe that would error. PowerShell/cmd defer rc capture entirely.
+ */
+export function supportsRcCapture(shellRuntime: ShellRuntime): boolean {
+	return (
+		shellRuntime.shell === "bash" ||
+		shellRuntime.shell === "zsh" ||
+		shellRuntime.shell === "sh"
+	);
+}
+
 function buildPowerShellEncodedCommand(command: string): string {
 	const commandBase64 = Buffer.from(command, "utf8").toString("base64");
 	const script = [
@@ -202,15 +285,14 @@ function buildPowerShellEncodedCommand(command: string): string {
  * into the command's environment.
  *
  * pwsh/cmd profile capture is deferred in v1, so this returns empty there.
+ * On `sh`/`dash` the shell lacks the `alias`/`typeset -f` builtins, so we
+ * skip the unsupported parts and only source the rc file (which may still set
+ * useful state) rather than running a probe that would error.
  */
 export async function captureRcDefinitions(
 	shellRuntime: ShellRuntime,
 ): Promise<string> {
-	if (
-		shellRuntime.shell === "powershell" ||
-		shellRuntime.shell === "pwsh" ||
-		shellRuntime.shell === "cmd"
-	) {
+	if (!supportsRcCapture(shellRuntime)) {
 		return "";
 	}
 
@@ -225,9 +307,12 @@ export async function captureRcDefinitions(
 	// directory` errors and dropping the aliases. `alias -L` instead prints
 	// `alias -- name='value'` (regular) and `alias -g name='value'` (global),
 	// which re-source cleanly. bash's `alias` already emits `alias name='value'`,
-	// so it needs no change.
+	// so it needs no change. `sh`/`dash` have no alias/function builtins, so we
+	// only source the rc file and capture nothing else.
 	const listAliases = shellRuntime.shell === "zsh" ? "alias -L" : "alias";
-	const probe = `source ${rcFile} 2>/dev/null; ${listAliases}; ${definitionsCommand}`;
+	const capture =
+		shellRuntime.shell === "sh" ? "" : `${listAliases}; ${definitionsCommand}`;
+	const probe = `source ${rcFile} 2>/dev/null; ${capture}`;
 
 	try {
 		const { stdout } = await execFileAsync(
