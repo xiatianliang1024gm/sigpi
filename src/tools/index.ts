@@ -1,4 +1,5 @@
 import type { RunShellConfig } from "../config.js";
+import { detectShellRuntime } from "../shell.js";
 import type { ShellRuntime } from "../types.js";
 import { createBashTool } from "./builtin/bash.js";
 import { createEditTool } from "./builtin/edit.js";
@@ -25,13 +26,7 @@ export function createDefaultToolRegistry(
 		createEditTool(bashConfig, readTracker, allowedRoots, skillRoots),
 		createUpdatePlanTool(),
 		createBashTool(
-			shellRuntime ?? {
-				platform: process.platform,
-				shell: "zsh",
-				executable: "zsh",
-				argsPrefix: ["-lc"],
-				displayName: "zsh",
-			},
+			shellRuntime ?? detectShellRuntime(),
 			bashConfig,
 			readTracker,
 			allowedRoots,

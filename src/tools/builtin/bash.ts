@@ -17,7 +17,11 @@ import {
 	getString,
 	truncate,
 } from "../../progress.js";
-import { buildShellInvocation, createShellRuntime } from "../../shell.js";
+import {
+	buildShellInvocation,
+	detectShellRuntime,
+	sourceScript,
+} from "../../shell.js";
 import type {
 	RunShellMode,
 	ShellRuntime,
@@ -92,7 +96,8 @@ export function createBashTool(
 	return {
 		name: "bash",
 		description:
-			"Run a command in a shell. The working directory carries across " +
+			`Run a command in a shell (${shellRuntime.displayName}). ` +
+			"The working directory carries across " +
 			"commands in this session (like a terminal): use `cd` to change it, " +
 			"and it resets to the project directory if a command leaves it. " +
 			"Returns stdout, stderr, and exit status. For long output it writes " +
@@ -464,19 +469,12 @@ function buildPreamble(
 ): string {
 	const parts: string[] = [];
 	if (envFile) {
-		parts.push(sourceCommand(shellRuntime, envFile));
+		parts.push(sourceScript(shellRuntime, envFile));
 	}
 	if (rcDefinitionsFile) {
-		parts.push(sourceCommand(shellRuntime, rcDefinitionsFile));
+		parts.push(sourceScript(shellRuntime, rcDefinitionsFile));
 	}
 	return parts.join("\n");
-}
-
-function sourceCommand(shellRuntime: ShellRuntime, file: string): string {
-	if (shellRuntime.shell === "powershell" || shellRuntime.shell === "pwsh") {
-		return `. '${file}'`;
-	}
-	return `source '${file}'`;
 }
 
 function truncateHeadTail(value: string, maxChars: number): string {
@@ -634,10 +632,7 @@ function stripQuoted(value: string): string {
 }
 
 export const bashTool: ToolDefinition<BashArgs> = createBashTool(
-	createShellRuntime(
-		process.platform === "win32" ? "powershell" : "zsh",
-		process.platform,
-	),
+	detectShellRuntime(),
 	{ mode: "workspace_write" },
 	new ReadTracker(),
 );
