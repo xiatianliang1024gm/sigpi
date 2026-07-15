@@ -519,11 +519,31 @@ export function startRunningTurnInputListener(
 	tui.start();
 
 	let stopped = false;
+	// Coalesce rapid streaming deltas into periodic diff-repaints. Each delta
+	// appends to the component and schedules at most one repaint per frame
+	// budget, so a burst of frames repaints once instead of flickering on every
+	// token (spec-0020 follow-up).
+	let renderTimer: ReturnType<typeof setTimeout> | null = null;
+	const scheduleRender = () => {
+		if (stopped || renderTimer !== null) {
+			return;
+		}
+		renderTimer = setTimeout(() => {
+			renderTimer = null;
+			if (!stopped) {
+				tui.requestRender();
+			}
+		}, 33);
+	};
 	const stop = () => {
 		if (stopped) {
 			return;
 		}
 		stopped = true;
+		if (renderTimer !== null) {
+			clearTimeout(renderTimer);
+			renderTimer = null;
+		}
 		terminal.clearRenderedRows();
 		tui.stop();
 	};
@@ -538,21 +558,24 @@ export function startRunningTurnInputListener(
 				return;
 			}
 			options.reasoningStream.appendReasoning(text);
-			tui.forceRender();
+			// Diff-based, coalesced repaint (not forceRender): forceRender wipes
+			// the previous frame, which would repaint the whole screen on every
+			// delta and cause visible flicker (spec-0020 follow-up).
+			scheduleRender();
 		},
 		appendContent: (text: string) => {
 			if (!options.reasoningStream || stopped) {
 				return;
 			}
 			options.reasoningStream.appendContent(text);
-			tui.forceRender();
+			scheduleRender();
 		},
 		clearReasoningStream: () => {
 			if (!options.reasoningStream || stopped) {
 				return;
 			}
 			options.reasoningStream.clear();
-			tui.forceRender();
+			tui.requestRender();
 		},
 		withSuspendedRendering: (operation) => {
 			if (component.hasSubmittedText()) {
