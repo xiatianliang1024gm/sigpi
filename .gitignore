@@ -9,6 +9,7 @@ logs
 coverage
 tmp
 .tmp
+.tmp_*
 .sigpi/
 bench/results
 bench/swebench-work
