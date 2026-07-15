@@ -50,6 +50,7 @@ import {
 	formatFileEditResultData,
 	formatFileEditSummaries,
 } from "./tui/file-edit-renderer.js";
+import { ReasoningStreamComponent } from "./tui/reasoning-stream.js";
 import type {
 	ExecutedToolCall,
 	JsonValue,
@@ -423,12 +424,14 @@ export async function runChatReplLoop(
 
 		const interruptController = new TurnInterruptController();
 		latestProgressEvent = null;
+		const reasoningStream = new ReasoningStreamComponent();
 		const runningInput = startRunningTurnInputListener({
 			prompt: options.prompt ?? "> ",
 			input: options.input,
 			output: options.output,
 			statusBarText: formatStatusBar(state),
 			inputHistory: options.inputHistory,
+			reasoningStream,
 			onEscape: () => {
 				const interrupt = interruptController.requestInterrupt();
 				if (!interrupt.accepted || interrupt.alreadyRequested) {
@@ -463,6 +466,28 @@ export async function runChatReplLoop(
 		const statusBarProgressListener = (event: TurnProgressEvent) => {
 			latestProgressEvent = event;
 			refreshStatusBar(runningInput, event);
+			if (event.type === "model_delta") {
+				if (event.reasoningDelta) {
+					runningInput?.appendReasoning(event.reasoningDelta);
+				}
+				if (event.contentDelta) {
+					runningInput?.appendContent(event.contentDelta);
+				}
+				return;
+			}
+			// The live preview is a temporary, in-flight view. Once the turn
+			// reaches a terminal phase event the final whole-text display is owned
+			// by `assistant_message` (or the failure diagnostic), so clear the
+			// preview to avoid double-printing and lingering residue (spec-0020).
+			if (
+				event.type === "model_request_finished" ||
+				event.type === "assistant_message" ||
+				event.type === "turn_interrupted" ||
+				event.type === "turn_failed" ||
+				event.type === "turn_max_steps_reached"
+			) {
+				runningInput?.clearReasoningStream();
+			}
 		};
 		activeStatusBarProgressListener = options.progressReporter
 			? statusBarProgressListener

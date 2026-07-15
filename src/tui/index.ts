@@ -18,6 +18,7 @@ export {
 	type OverlayAnchor,
 	type OverlayHandle,
 	type OverlayOptions,
+	ReasoningStreamComponent,
 	Tui,
 } from "./tui.js";
 export {

@@ -16,6 +16,7 @@ import {
 	Tui,
 	truncateToWidth,
 } from "./tui/index.js";
+import type { ReasoningStreamComponent } from "./tui/reasoning-stream.js";
 
 export interface ChatInputOptions {
 	prompt?: string;
@@ -112,11 +113,25 @@ export interface RunningTurnInputListenerOptions {
 	onSubmit: (text: string) => void;
 	/** Shared, process-scoped recall buffer for `↑`/`↓` history. */
 	inputHistory?: InputHistory;
+	/**
+	 * Optional live reasoning/content stream. When provided, the listener
+	 * renders it above the input line so streamed model output is visible
+	 * in-place (spec-0020). The caller feeds it via
+	 * {@link RunningTurnInputListenerHandle.appendReasoning} /
+	 * {@link RunningTurnInputListenerHandle.appendContent}.
+	 */
+	reasoningStream?: ReasoningStreamComponent;
 }
 
 export interface RunningTurnInputListenerHandle {
 	stop(): void;
 	setStatusBarText(value: string | null): void;
+	/** Append a streamed reasoning fragment to the live view (spec-0020). */
+	appendReasoning(text: string): void;
+	/** Append a streamed content fragment to the live view (spec-0020). */
+	appendContent(text: string): void;
+	/** Clear the live reasoning/content preview (spec-0020). */
+	clearReasoningStream(): void;
 	withSuspendedRendering<T>(operation: () => T): T;
 }
 
@@ -298,7 +313,7 @@ class ChatInputComponent implements Component {
 		this.editor.handleInput(data);
 	}
 
-	render(width: number): string[] {
+	render(width: number, _maxHeight?: number): string[] {
 		const text = this.editor.getText();
 		const lines = this.editor.render(width);
 		const suggestions = this.getActiveSuggestions();
@@ -397,7 +412,7 @@ class RunningTurnInputComponent implements Component {
 		this.editor.handleInput(data);
 	}
 
-	render(width: number): string[] {
+	render(width: number, _maxHeight?: number): string[] {
 		if (this.submittedText !== null) {
 			return [];
 		}
@@ -496,6 +511,9 @@ export function startRunningTurnInputListener(
 	});
 
 	tui.setStatusBar(options.statusBarText ?? null);
+	if (options.reasoningStream) {
+		tui.addChild(options.reasoningStream);
+	}
 	tui.addChild(component);
 	tui.setFocus(component);
 	tui.start();
@@ -514,6 +532,27 @@ export function startRunningTurnInputListener(
 		stop,
 		setStatusBarText: (value) => {
 			tui.setStatusBar(value);
+		},
+		appendReasoning: (text: string) => {
+			if (!options.reasoningStream || stopped) {
+				return;
+			}
+			options.reasoningStream.appendReasoning(text);
+			tui.forceRender();
+		},
+		appendContent: (text: string) => {
+			if (!options.reasoningStream || stopped) {
+				return;
+			}
+			options.reasoningStream.appendContent(text);
+			tui.forceRender();
+		},
+		clearReasoningStream: () => {
+			if (!options.reasoningStream || stopped) {
+				return;
+			}
+			options.reasoningStream.clear();
+			tui.forceRender();
 		},
 		withSuspendedRendering: (operation) => {
 			if (component.hasSubmittedText()) {

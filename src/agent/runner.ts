@@ -478,20 +478,38 @@ export class AgentRunner {
 
 				interruptController?.enterModel();
 				const response = await this.provider
-					.generate({
-						messages: workingMessages,
-						tools: this.tools.getSchemas(),
-						temperature: this.options.temperature,
-						maxTokens: this.options.maxTokens,
-						context: {
-							runId: this.options.runId,
-							sessionId: this.options.sessionId ?? null,
-							turnId,
-							step,
-							purpose: "turn",
+					.generate(
+						{
+							messages: workingMessages,
+							tools: this.tools.getSchemas(),
+							temperature: this.options.temperature,
+							maxTokens: this.options.maxTokens,
+							context: {
+								runId: this.options.runId,
+								sessionId: this.options.sessionId ?? null,
+								turnId,
+								step,
+								purpose: "turn",
+							},
+							abortSignal: interruptController?.getAbortSignal(),
 						},
-						abortSignal: interruptController?.getAbortSignal(),
-					})
+						(delta) => {
+							if (
+								delta.reasoningDelta ||
+								delta.contentDelta ||
+								delta.toolCallDelta
+							) {
+								reportProgress({
+									type: "model_delta",
+									step,
+									turnId,
+									reasoningDelta: delta.reasoningDelta,
+									contentDelta: delta.contentDelta,
+									toolCallDelta: delta.toolCallDelta,
+								});
+							}
+						},
+					)
 					.finally(() => {
 						interruptController?.leaveActiveStage();
 					});

@@ -206,6 +206,8 @@ function getStatusEventLabel(event: TurnProgressEvent | null): string | null {
 				: "interrupt requested";
 		case "model_request_started":
 			return "thinking";
+		case "model_delta":
+			return null;
 		case "model_request_finished":
 			return null;
 		case "assistant_message":

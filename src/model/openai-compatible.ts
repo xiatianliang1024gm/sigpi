@@ -1,5 +1,6 @@
 import type { ModelConfig } from "../config.js";
 import type {
+	ModelDelta,
 	ModelProvider,
 	ModelRequest,
 	ModelResponse,
@@ -26,11 +27,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
 		this.transport = new ModelTransport(config, logger);
 	}
 
-	generate(request: ModelRequest): Promise<ModelResponse> {
-		return this.transport.generate(request, () =>
-			this.config.apiFormat === "responses"
-				? new ResponsesAdapter(this.config)
-				: new ChatCompletionsAdapter(this.config),
+	generate(
+		request: ModelRequest,
+		onDelta?: (delta: ModelDelta) => void,
+	): Promise<ModelResponse> {
+		return this.transport.generate(
+			request,
+			() =>
+				this.config.apiFormat === "responses"
+					? new ResponsesAdapter(this.config)
+					: new ChatCompletionsAdapter(this.config),
+			onDelta,
 		);
 	}
 }

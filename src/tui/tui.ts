@@ -5,8 +5,10 @@ import {
 	visibleWidth,
 } from "./utils.js";
 
+export { ReasoningStreamComponent } from "./reasoning-stream.js";
+
 export interface Component {
-	render(width: number): string[];
+	render(width: number, maxHeight?: number): string[];
 	handleInput?(data: string): void;
 	invalidate?(): void;
 	shouldRenderAfterInput?(): boolean;
@@ -215,7 +217,14 @@ export class Tui {
 		const height = this.terminal.rows;
 		const footerEnabled = this.statusBar !== null;
 		const contentHeight = footerEnabled ? Math.max(0, height - 1) : height;
-		const frame = this.children.flatMap((child) => child.render(width));
+		// Cap tall children (e.g. the live reasoning preview) at ~70% of the
+		// content area so the focused input component (the prompt line) stays
+		// visible and ESC stays reachable (spec-0020). The component scrolls
+		// internally past that cap.
+		const childMaxHeight = Math.max(0, Math.floor(contentHeight * 0.7));
+		const frame = this.children.flatMap((child) =>
+			child.render(width, childMaxHeight),
+		);
 		const cursor = findCursorPosition(frame.slice(0, contentHeight), width);
 		const baseFrame = frame
 			.slice(0, contentHeight)

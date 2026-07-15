@@ -1,4 +1,4 @@
-import type { ModelRequest, ModelResponse } from "../types.js";
+import type { ModelDelta, ModelRequest, ModelResponse } from "../types.js";
 
 /**
  * Wire format adapter — one implementation per model API shape
@@ -19,6 +19,20 @@ export interface WireFormatAdapter {
 	 * order and calls {@link finalize} once the stream ends.
 	 */
 	accumulate(frame: unknown): void;
+	/**
+	 * Derive a {@link ModelDelta} from a single accumulated frame, or `null` if
+	 * the frame carries no renderable change. Called by the transport on the
+	 * streaming path immediately after {@link accumulate} so the agent loop can
+	 * render partial reasoning/content (spec-0020).
+	 */
+	onDelta(frame: unknown): ModelDelta | null;
+	/**
+	 * Return a best-effort partial {@link ModelResponse} reflecting the frames
+	 * accumulated so far. Used to render a live preview of the in-flight
+	 * response and to recover a usable answer if the stream is interrupted
+	 * before it finalizes (spec-0020).
+	 */
+	getPartialView(): ModelResponse;
 	/** Emit the complete {@link ModelResponse} assembled from accumulated frames. */
 	finalize(): ModelResponse;
 }

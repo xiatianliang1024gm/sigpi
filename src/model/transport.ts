@@ -2,6 +2,7 @@ import type { ModelConfig } from "../config.js";
 import { isTurnInterruptedError } from "../interrupt.js";
 import type {
 	JsonValue,
+	ModelDelta,
 	ModelRequest,
 	ModelResponse,
 	RuntimeLogger,
@@ -237,6 +238,7 @@ export class ModelTransport {
 	async generate(
 		request: ModelRequest,
 		makeAdapter: () => WireFormatAdapter,
+		onDelta?: (delta: ModelDelta) => void,
 	): Promise<ModelResponse> {
 		const url = makeAdapter().buildUrl();
 		const maxAttempts = this.config.maxRetries + 1;
@@ -264,7 +266,12 @@ export class ModelTransport {
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
 			try {
-				const response = await this.performRequest(url, request, makeAdapter());
+				const response = await this.performRequest(
+					url,
+					request,
+					makeAdapter(),
+					onDelta,
+				);
 				// A hard truncation (max_tokens / content filter) is not recoverable
 				// by retrying with the same limit, so surface it as an error rather
 				// than returning a partial answer. The summarizer and checkpoint
@@ -346,6 +353,7 @@ export class ModelTransport {
 		url: string,
 		request: ModelRequest,
 		adapter: WireFormatAdapter,
+		onDelta?: (delta: ModelDelta) => void,
 	): Promise<ModelResponse> {
 		const timeoutController = new AbortController();
 		// Total-deadline timer. For the streaming path this is cleared once we
@@ -389,7 +397,12 @@ export class ModelTransport {
 				this.config.stream && ModelTransport.isEventStream(response);
 			if (streaming) {
 				clearTimeout(timeout);
-				return await this.readSseStream(response, adapter, timeoutController);
+				return await this.readSseStream(
+					response,
+					adapter,
+					timeoutController,
+					onDelta,
+				);
 			}
 
 			// Non-streaming path: the total-deadline timer above stays armed and
@@ -409,6 +422,14 @@ export class ModelTransport {
 			const data = parseJsonResponse(bodyResult.text, baseDetails);
 			return adapter.parse(data);
 		} catch (error) {
+			// A user interrupt aborts the merged signal with the
+			// TurnInterruptedError as its reason, so the read rejects with that
+			// error directly (not a DOMException). Surface it before the generic
+			// AbortError/network branches so the turn loop can stop promptly
+			// (spec-0020 interrupt fix).
+			if (isTurnInterruptedError(error)) {
+				throw error;
+			}
 			if (error instanceof DOMException && error.name === "AbortError") {
 				if (request.abortSignal?.aborted) {
 					const reason = request.abortSignal.reason;
@@ -456,6 +477,7 @@ export class ModelTransport {
 		response: Response,
 		adapter: WireFormatAdapter,
 		timeoutController: AbortController,
+		onDelta?: (delta: ModelDelta) => void,
 	): Promise<ModelResponse> {
 		const reader = response.body?.getReader();
 		if (!reader) {
@@ -499,7 +521,7 @@ export class ModelTransport {
 				while (separator !== -1) {
 					const block = buffer.slice(0, separator);
 					buffer = buffer.slice(separator + 2);
-					const result = this.processSseBlock(block, adapter);
+					const result = this.processSseBlock(block, adapter, onDelta);
 					if (result === "done") {
 						sawDone = true;
 						break;
@@ -512,7 +534,7 @@ export class ModelTransport {
 			}
 
 			if (!sawDone && buffer.trim().length > 0) {
-				const result = this.processSseBlock(buffer, adapter);
+				const result = this.processSseBlock(buffer, adapter, onDelta);
 				if (result === "done") {
 					sawDone = true;
 				} else if (result === "frame") {
@@ -569,6 +591,7 @@ export class ModelTransport {
 	private processSseBlock(
 		block: string,
 		adapter: WireFormatAdapter,
+		onDelta?: (delta: ModelDelta) => void,
 	): "done" | "frame" | "ignore" {
 		const parsed = ModelTransport.parseSseBlock(block);
 		if (!parsed) {
@@ -599,6 +622,12 @@ export class ModelTransport {
 		}
 
 		adapter.accumulate(frame);
+		if (onDelta) {
+			const delta = adapter.onDelta(frame);
+			if (delta) {
+				onDelta(delta);
+			}
+		}
 		return "frame";
 	}
 

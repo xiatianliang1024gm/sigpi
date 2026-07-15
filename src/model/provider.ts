@@ -1,5 +1,10 @@
 import type { ModelConfig } from "../config.js";
-import type { ModelRequest, ModelResponse, RuntimeLogger } from "../types.js";
+import type {
+	ModelDelta,
+	ModelRequest,
+	ModelResponse,
+	RuntimeLogger,
+} from "../types.js";
 import { OpenAICompatibleProvider } from "./openai-compatible.js";
 
 /**
@@ -16,7 +21,10 @@ export interface ModelProvider {
 	 * default to a sensible internal cap (2048) when absent.
 	 */
 	readonly maxTokens?: number;
-	generate(request: ModelRequest): Promise<ModelResponse>;
+	generate(
+		request: ModelRequest,
+		onDelta?: (delta: ModelDelta) => void,
+	): Promise<ModelResponse>;
 }
 
 /**

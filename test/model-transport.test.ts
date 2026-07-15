@@ -36,6 +36,14 @@ const adapter: WireFormatAdapter = {
 		rawResponse: data,
 	}),
 	accumulate: () => {},
+	onDelta: () => null,
+	getPartialView: () => ({
+		assistantText: null,
+		toolCalls: [],
+		finishReason: null,
+		usage: undefined,
+		rawResponse: undefined,
+	}),
 	finalize: () => ({
 		assistantText: null,
 		toolCalls: [],

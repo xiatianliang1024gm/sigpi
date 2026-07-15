@@ -183,6 +183,7 @@ export interface TurnProgressEvent {
 		| "interrupt_requested"
 		| "model_request_started"
 		| "model_request_finished"
+		| "model_delta"
 		| "assistant_message"
 		| "context_checkpoint"
 		| "tool_calls_received"
@@ -205,6 +206,17 @@ export interface TurnProgressEvent {
 	toolResult?: string;
 	toolResultData?: JsonValue;
 	assistantText?: string;
+	/** Incremental reasoning text emitted mid-stream (spec-0020). */
+	reasoningDelta?: string;
+	/** Incremental assistant content text emitted mid-stream (spec-0020). */
+	contentDelta?: string;
+	/** Incremental tool-call argument fragment emitted mid-stream (spec-0020). */
+	toolCallDelta?: {
+		index: number;
+		id?: string;
+		name?: string;
+		argumentsDelta?: string;
+	};
 	detail?: string;
 	modelElapsedMs?: number;
 	summaryCount?: number;
@@ -328,6 +340,37 @@ export interface ModelResponse {
 	 */
 	usage?: ModelUsage;
 	rawResponse?: unknown;
+}
+
+/**
+ * A single streaming delta emitted by a model provider mid-request. The
+ * transport surfaces these through {@link WireFormatAdapter.onDelta} so the
+ * agent loop can render partial reasoning/content without waiting for the full
+ * response to finalize (spec-0020).
+ *
+ * Exactly one of `reasoningDelta` / `contentDelta` / `toolCallDelta` is
+ * expected to be present per delta, but adapters may emit a delta with multiple
+ * fields populated when a single wire frame carries more than one kind of
+ * change.
+ */
+export interface ModelDelta {
+	/** Incremental reasoning text (e.g. OpenAI `reasoning_content`). */
+	reasoningDelta?: string;
+	/** Incremental assistant content text. */
+	contentDelta?: string;
+	/** Incremental tool-call argument text for an in-progress tool call. */
+	toolCallDelta?: {
+		/** Index of the tool call within the current response. */
+		index: number;
+		/** Stable tool-call id, if the provider has assigned one yet. */
+		id?: string;
+		/** Tool name, if known at this point in the stream. */
+		name?: string;
+		/** Incremental JSON argument fragment. */
+		argumentsDelta?: string;
+	};
+	/** Provider-reported finish reason, if this delta terminates the stream. */
+	finishReason?: string | null;
 }
 
 export interface ModelRequestContext {
