@@ -386,3 +386,89 @@ test("multi-line data fields are concatenated per the SSE spec", async () => {
 	);
 	assert.equal(result.assistantText, "ab");
 });
+
+test("onDelta surfaces chat-completions reasoning + content deltas in order (spec-0020)", async () => {
+	const frames = [
+		'data: {"choices":[{"delta":{"reasoning_content":"let me "}}]}\n\n',
+		'data: {"choices":[{"delta":{"reasoning_content":"think"}}]}\n\n',
+		'data: {"choices":[{"delta":{"content":"hel"}}]}\n\n',
+		'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
+		'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+		"data: [DONE]\n\n",
+	];
+	const transport = new ModelTransport(
+		config({ timeoutMs: 50 }),
+		undefined,
+		fetchImpl(() => sseResponse(frames)),
+	);
+	const deltas: string[] = [];
+	await transport.generate(
+		request(),
+		() => new ChatCompletionsAdapter(config()),
+		(delta) => {
+			if (delta.reasoningDelta) deltas.push(`r:${delta.reasoningDelta}`);
+			if (delta.contentDelta) deltas.push(`c:${delta.contentDelta}`);
+		},
+	);
+	assert.deepEqual(deltas, ["r:let me ", "r:think", "c:hel", "c:lo"]);
+});
+
+test("onDelta surfaces responses reasoning + content deltas (spec-0020)", async () => {
+	const frames = [
+		'data: {"type":"response.reasoning.delta","delta":{"text":"hmm"}}\n\n',
+		'data: {"type":"response.output_text.delta","item_id":"i1","delta":"hel"}\n\n',
+		'data: {"type":"response.output_text.delta","item_id":"i1","delta":"lo"}\n\n',
+		'data: {"type":"response.completed","status":"completed","output_text":"hello","output":[]}\n\n',
+		"data: [DONE]\n\n",
+	];
+	const transport = new ModelTransport(
+		config({ apiFormat: "responses", timeoutMs: 50 }),
+		undefined,
+		fetchImpl(() => sseResponse(frames)),
+	);
+	const deltas: string[] = [];
+	await transport.generate(
+		request(),
+		() => new ResponsesAdapter(config({ apiFormat: "responses" })),
+		(delta) => {
+			if (delta.reasoningDelta) deltas.push(`r:${delta.reasoningDelta}`);
+			if (delta.contentDelta) deltas.push(`c:${delta.contentDelta}`);
+		},
+	);
+	assert.deepEqual(deltas, ["r:hmm", "c:hel", "c:lo"]);
+});
+
+test("getPartialView returns accumulated text before finalize (spec-0020)", async () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	adapter.accumulate(JSON.parse('{"choices":[{"delta":{"content":"hel"}}]}'));
+	adapter.accumulate(JSON.parse('{"choices":[{"delta":{"content":"lo"}}]}'));
+	const partial = adapter.getPartialView();
+	assert.equal(partial.assistantText, "hello");
+	assert.equal(partial.finishReason, null);
+});
+
+test("interrupt aborts the stream and surfaces TurnInterruptedError (spec-0020)", async () => {
+	const { TurnInterruptedError } = await import("../src/interrupt.js");
+	const firstFrame = 'data: {"choices":[{"delta":{"content":"x"}}]}\n\n';
+	const controller = new AbortController();
+	const transport = new ModelTransport(
+		config({ timeoutMs: 5000, maxRetries: 0 }),
+		undefined,
+		fetchImpl(
+			(_input, init) =>
+				stallingSseResponse(firstFrame, init?.signal) as Response,
+		),
+	);
+	const run = transport.generate(
+		{ ...request(), abortSignal: controller.signal },
+		() => new ChatCompletionsAdapter(config()),
+	);
+	setTimeout(
+		() => controller.abort(new TurnInterruptedError("user_escape", "model")),
+		10,
+	);
+	await assert.rejects(
+		() => run,
+		(error) => error instanceof TurnInterruptedError,
+	);
+});

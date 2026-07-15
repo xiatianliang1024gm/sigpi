@@ -150,7 +150,7 @@ class SessionSelectorComponent implements Component {
 
 	constructor(private state: SessionSelectorState) {}
 
-	render(width: number): string[] {
+	render(width: number, _maxHeight?: number): string[] {
 		return renderSessionSelectorWithWidth(this.state, width).split("\n");
 	}
 

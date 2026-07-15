@@ -517,7 +517,7 @@ class ModelSelectorComponent implements Component {
 		this.list.handleInput(data);
 	}
 
-	render(width: number): string[] {
+	render(width: number, _maxHeight?: number): string[] {
 		return [
 			"Select a model:",
 			"",

@@ -6,6 +6,7 @@ import {
 	matchesKey,
 	moveSelectedIndex,
 	parseKey,
+	ReasoningStreamComponent,
 	SelectList,
 	stripAnsi,
 	type Terminal,
@@ -343,3 +344,37 @@ class InputRecorder implements Component {
 function cleanRenderedLine(line: string): string {
 	return stripAnsi(line.replaceAll("\x1B_sigpi:c\x07", "")).trimEnd();
 }
+
+test("ReasoningStreamComponent renders streamed reasoning then content (spec-0020)", () => {
+	const component = new ReasoningStreamComponent();
+	assert.deepEqual(component.render(40), []);
+
+	component.appendReasoning("let me think");
+	component.appendContent("hello");
+	const lines = component.render(40).map(cleanRenderedLine);
+	assert.equal(lines[0], "▸ reasoning");
+	assert.equal(lines[1], "  let me think");
+	assert.equal(lines[2], "hello");
+
+	component.clear();
+	assert.deepEqual(component.render(40), []);
+});
+
+test("ReasoningStreamComponent scrolls internally when capped (spec-0020)", () => {
+	const component = new ReasoningStreamComponent();
+	// Each fragment is wide enough to occupy its own wrapped line; together they
+	// far exceed the cap so the component must scroll internally.
+	for (let i = 0; i < 10; i += 1) {
+		component.appendReasoning(`${"a".repeat(50)} `);
+	}
+	const full = component.render(40).map(cleanRenderedLine);
+	const capped = component.render(40, 5).map(cleanRenderedLine);
+	// Capped render never exceeds the requested height.
+	assert.equal(capped.length, 5);
+	// The full (uncapped) render is taller than the cap, so scrolling happened.
+	assert.ok(full.length > 5);
+	// An overflow marker is shown when content was scrolled away.
+	assert.match(capped[0], /more lines/);
+	// The most recent content is preserved at the tail.
+	assert.match(capped[capped.length - 1], /a/);
+});

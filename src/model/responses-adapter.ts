@@ -1,6 +1,7 @@
 import type { ModelConfig } from "../config.js";
 import type {
 	Message,
+	ModelDelta,
 	ModelRequest,
 	ModelResponse,
 	ModelUsage,
@@ -199,6 +200,107 @@ export class ResponsesAdapter implements WireFormatAdapter {
 				"stream_error",
 				{},
 			);
+		}
+		return this.convert(validateResponsesResponse(this.accumulated));
+	}
+
+	onDelta(frame: unknown): ModelDelta | null {
+		if (!isPlainObject(frame)) {
+			return null;
+		}
+		const frameObj = frame as Record<string, unknown>;
+		const eventType = typeof frameObj.type === "string" ? frameObj.type : "";
+
+		switch (eventType) {
+			case "response.output_item.delta":
+			case "response.content_part.delta": {
+				const itemId = frameObj.item_id;
+				let textChunk: string | undefined;
+				if (
+					isPlainObject(frameObj.part) &&
+					typeof frameObj.part.text === "string"
+				) {
+					textChunk = frameObj.part.text;
+				} else if (isPlainObject(frameObj.delta)) {
+					const d = frameObj.delta as { type?: string; text?: string };
+					if (typeof d.text === "string") {
+						textChunk = d.text;
+					}
+				}
+				if (typeof itemId === "string" && typeof textChunk === "string") {
+					return { contentDelta: textChunk };
+				}
+				break;
+			}
+			case "response.output_text.delta": {
+				const itemId = frameObj.item_id;
+				const textChunk =
+					typeof frameObj.delta === "string" ? frameObj.delta : undefined;
+				if (typeof itemId === "string" && typeof textChunk === "string") {
+					return { contentDelta: textChunk };
+				}
+				break;
+			}
+			case "response.reasoning.delta":
+			case "response.reasoning_summary.delta": {
+				const d = isPlainObject(frameObj.delta)
+					? (frameObj.delta as { text?: unknown })
+					: undefined;
+				if (typeof d?.text === "string") {
+					return { reasoningDelta: d.text };
+				}
+				break;
+			}
+			case "response.function_call_arguments.delta": {
+				const itemId = frameObj.item_id;
+				const raw = frameObj.delta;
+				const args =
+					typeof raw === "string"
+						? raw
+						: isPlainObject(raw) && typeof raw.arguments === "string"
+							? raw.arguments
+							: typeof frameObj.arguments === "string"
+								? frameObj.arguments
+								: undefined;
+				if (typeof itemId === "string" && typeof args === "string") {
+					const item = this.findOutputItem(itemId);
+					const index = this.accumulated.output.indexOf(item ?? {});
+					return {
+						toolCallDelta: {
+							index: index >= 0 ? index : 0,
+							...(typeof item?.id === "string" ? { id: item.id } : {}),
+							...(typeof item?.name === "string" ? { name: item.name } : {}),
+							argumentsDelta: args,
+						},
+					};
+				}
+				break;
+			}
+			case "response.completed": {
+				if (typeof frameObj.status === "string") {
+					return { finishReason: frameObj.status };
+				}
+				break;
+			}
+			default:
+				break;
+		}
+		return null;
+	}
+
+	getPartialView(): ModelResponse {
+		if (
+			this.accumulated.output.length === 0 &&
+			this.accumulated.output_text === undefined &&
+			this.accumulated.status === undefined
+		) {
+			return {
+				assistantText: null,
+				toolCalls: [],
+				finishReason: null,
+				usage: undefined,
+				rawResponse: undefined,
+			};
 		}
 		return this.convert(validateResponsesResponse(this.accumulated));
 	}

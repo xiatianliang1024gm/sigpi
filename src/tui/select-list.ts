@@ -66,7 +66,7 @@ export class SelectList<TValue = string> implements Component {
 		}
 	}
 
-	render(width: number): string[] {
+	render(width: number, _maxHeight?: number): string[] {
 		if (this.items.length === 0) {
 			return ["(no items)"];
 		}

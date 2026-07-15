@@ -1,6 +1,7 @@
 import type { ModelConfig } from "../config.js";
 import type {
 	Message,
+	ModelDelta,
 	ModelRequest,
 	ModelResponse,
 	ModelUsage,
@@ -46,6 +47,8 @@ interface ChatCompletionsChunk {
 		delta?: {
 			role?: string;
 			content?: string;
+			/** Provider extension (DeepSeek / OpenAI reasoning) for chain-of-thought. */
+			reasoning_content?: string;
 			tool_calls?: Array<{
 				index?: number;
 				id?: string;
@@ -142,6 +145,79 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 				"stream_error",
 				{},
 			);
+		}
+		return this.convert(validateChatCompletionsResponse(this.accumulated));
+	}
+
+	onDelta(frame: unknown): ModelDelta | null {
+		if (!isPlainObject(frame)) {
+			return null;
+		}
+		const chunk = frame as ChatCompletionsChunk;
+		const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
+		let delta: ModelDelta | null = null;
+		for (const chunkChoice of choices) {
+			if (!isPlainObject(chunkChoice)) {
+				continue;
+			}
+			const choiceDelta = isPlainObject(chunkChoice.delta)
+				? (chunkChoice.delta as Record<string, unknown>)
+				: undefined;
+			if (!choiceDelta) {
+				continue;
+			}
+			if (typeof choiceDelta.reasoning_content === "string") {
+				delta = delta ?? {};
+				delta.reasoningDelta =
+					(delta.reasoningDelta ?? "") + choiceDelta.reasoning_content;
+			}
+			if (typeof choiceDelta.content === "string") {
+				delta = delta ?? {};
+				delta.contentDelta = (delta.contentDelta ?? "") + choiceDelta.content;
+			}
+			if (Array.isArray(choiceDelta.tool_calls)) {
+				for (const tc of choiceDelta.tool_calls) {
+					if (!isPlainObject(tc)) {
+						continue;
+					}
+					const index = typeof tc.index === "number" ? tc.index : 0;
+					const fn = isPlainObject(tc.function)
+						? (tc.function as Record<string, unknown>)
+						: undefined;
+					const argumentsDelta =
+						fn && typeof fn.arguments === "string" ? fn.arguments : undefined;
+					if (
+						typeof tc.id === "string" ||
+						typeof fn?.name === "string" ||
+						typeof argumentsDelta === "string"
+					) {
+						delta = delta ?? {};
+						delta.toolCallDelta = {
+							index,
+							...(typeof tc.id === "string" ? { id: tc.id } : {}),
+							...(typeof fn?.name === "string" ? { name: fn.name } : {}),
+							...(typeof argumentsDelta === "string" ? { argumentsDelta } : {}),
+						};
+					}
+				}
+			}
+			if (typeof chunkChoice.finish_reason === "string") {
+				delta = delta ?? {};
+				delta.finishReason = chunkChoice.finish_reason;
+			}
+		}
+		return delta;
+	}
+
+	getPartialView(): ModelResponse {
+		if (!this.accumulated) {
+			return {
+				assistantText: null,
+				toolCalls: [],
+				finishReason: null,
+				usage: undefined,
+				rawResponse: undefined,
+			};
 		}
 		return this.convert(validateChatCompletionsResponse(this.accumulated));
 	}

@@ -133,7 +133,7 @@ export class Editor implements Component, Focusable {
 		}
 	}
 
-	render(width: number): string[] {
+	render(width: number, _maxHeight?: number): string[] {
 		const prompt = this.options.prompt ?? "> ";
 		const text = this.text || this.options.placeholder || "";
 		const cursorMarker = this.focused ? CURSOR_MARKER : "";
