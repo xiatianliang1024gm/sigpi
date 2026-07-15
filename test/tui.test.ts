@@ -378,3 +378,26 @@ test("ReasoningStreamComponent scrolls internally when capped (spec-0020)", () =
 	// The most recent content is preserved at the tail.
 	assert.match(capped[capped.length - 1], /a/);
 });
+
+test("streaming deltas repaint via diff, not a full-screen wipe (spec-0020 flicker fix)", async () => {
+	const terminal = new FakeTerminal();
+	const component = new ReasoningStreamComponent();
+	const tui = new Tui(terminal, { clearOnStart: false, fillHeight: false });
+	tui.addChild(component);
+	tui.setStatusBar("model test | chars 10/100 (10%) | /tmp/project");
+	tui.start();
+	// Initial render establishes the previous frame.
+	await new Promise((resolve) => setImmediate(resolve));
+	terminal.writes = [];
+
+	// A delta that only extends the reasoning text should rewrite only the
+	// affected lines, not the whole screen (which would flicker).
+	component.appendReasoning("thinking");
+	tui.requestRender();
+	await new Promise((resolve) => setImmediate(resolve));
+
+	const fullWipe = terminal.writes.some((w) => w === "<clear>");
+	assert.equal(fullWipe, false);
+	// The status bar row (row 5) is untouched, so it must not be rewritten.
+	assert.ok(!terminal.writes.includes("<5,1>"));
+});
