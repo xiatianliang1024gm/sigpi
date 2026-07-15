@@ -22,6 +22,10 @@ deepening opportunities so future architecture reviews share one vocabulary.
 - **Function calling** — the mechanism by which the model emits `toolCalls` in its response, the runner dispatches them via `ToolRegistry`, and the results are fed back into the working context. Distinct from **Tool** (the capability definition): a Tool is "what can be done"; function calling is "how the model drives it".
 - **Context management** — see **Compaction**; this project keeps the working context within the token budget using a three-part scheme of "summary + recent messages + in-turn checkpoint", corresponding to one of the three teaching concepts claimed by the README.
 - **Process output mode** — the `[agent] process_output` config value that selects how the CLI renders a turn's progress. `compact`: dense, Claude-Code-style tier showing the user + assistant messages, grouping parallel tool calls returned in one model response, with reduced tool results. `detailed` (default): `compact` plus turn/model-run dividers, counts, and fuller tool-result rendering. _Avoid_: quiet, clear, full — prior names; `full` was removed.
+- **Command suggestion** — a `ChatCommandMetadata` whose name matches the current single-`/token` buffer (`/^\/\S*$/`), surfaced below the input line in `ChatInputComponent`. Computed by `getChatCommandSuggestions`; includes dynamic `/skill:<name>` entries.
+- **Selected suggestion** — the suggestion at `selectedSuggestionIndex` (default 0), rendered with the `> ` marker; the target of both Up/Down navigation and Tab-completion.
+- **Tab completion** — in the `/xxx` command-entry line, Tab fills the selected suggestion's name plus a trailing space into the input buffer, replacing the current `/token`, **without submitting**. Tab is swallowed even when no suggestion exists (never inserts a literal tab). Distinct from Enter, which submits.
+- **Suggestion token** — the buffer form `/^\/\S*$/` (a single slash-token with no spaces) under which suggestions are computed; completion applies only to this token, not to post-space arguments (e.g. `/model <id>` argument completion is out of scope).
 
 ## Conventions
 
