@@ -33,7 +33,8 @@
     "pack:smoke": "pnpm run test:compile && node scripts/pack-smoke.mjs",
     "release:check": "pnpm check && pnpm run test:provider && pnpm run test:cli && pnpm run pack:smoke",
     "publishnochecks": "pnpm publish --no-git-checks",
-    "release": "bash scripts/release.sh"
+    "release": "bash scripts/release.sh",
+    "prepare": "husky"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -47,6 +48,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
     "@types/node": "^24.10.1",
+    "husky": "^9.1.7",
     "typescript": "^5.9.3"
   }
 }
