@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import os from "node:os";
@@ -128,6 +134,8 @@ export async function writeTestConfig(
 		modelBaseURL?: string;
 		modelApiKey?: string;
 		modelName?: string;
+		contextWindow?: number;
+		reserveTokens?: number;
 	},
 ): Promise<string> {
 	const configDir = path.join(cwd, ".sigpi");
@@ -147,6 +155,10 @@ export async function writeTestConfig(
 			"timeout_ms = 2000",
 			"max_retries = 0",
 			"retry_base_delay_ms = 10",
+			"",
+			"[agent]",
+			`context_window = ${overrides?.contextWindow ?? 200_000}`,
+			`reserve_tokens = ${overrides?.reserveTokens ?? 16_384}`,
 		].join("\n"),
 		"utf8",
 	);
@@ -287,7 +299,17 @@ export async function runCliCommand(args: {
 			{
 				cwd: args.cwd,
 				env: {
+					// Keep the host HOME so the child still loads the developer's
+					// skills catalog (skill count affects compaction output). But
+					// neutralize any proxy so the fake OpenAI handler is used and no
+					// request escapes to the real network: clear ambient HTTP(S)_PROXY
+					// and force the active model's proxy to empty via MODEL_PROXY.
 					...process.env,
+					HTTP_PROXY: "",
+					HTTPS_PROXY: "",
+					http_proxy: "",
+					https_proxy: "",
+					MODEL_PROXY: "",
 					...(args.env ?? {}),
 				},
 				stdio: "ignore",

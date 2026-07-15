@@ -50,7 +50,9 @@ export async function handleRequest({ body }) {
 						finish_reason: "stop",
 						message: {
 							role: "assistant",
-							content: (lastToolMessage.content ?? "").includes("非法工具参数")
+							content: (lastToolMessage.content ?? "").includes(
+								"invalid tool arguments",
+							)
 								? "tool error surfaced"
 								: "tool error missing",
 						},
