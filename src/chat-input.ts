@@ -184,6 +184,17 @@ class ChatInputComponent implements Component {
 			return;
 		}
 
+		// Tab completes the selected suggestion into the input buffer. It fills
+		// (never submits) so the user can keep typing or press Enter. Tab is
+		// swallowed even with no suggestions to avoid inserting a literal tab.
+		if (key === "tab") {
+			const selected = suggestions[this.selectedSuggestionIndex];
+			if (selected) {
+				this.editor.setText(`${selected.name} `);
+			}
+			return;
+		}
+
 		if (key === "enter" && this.suggestionSelectionActive) {
 			const selected = suggestions[this.selectedSuggestionIndex];
 			if (selected) {

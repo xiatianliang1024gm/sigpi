@@ -399,6 +399,76 @@ test("readChatInput completes a unique slash suggestion on Enter", async () => {
 	assert.match(getVisibleOutput(await outputText), /> \/model/);
 });
 
+test("readChatInput fills the selected slash suggestion into the input on Tab", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const outputText = collectOutput(output);
+
+	const resultPromise = readChatInput({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		commands: createChatCommandDefinitions(),
+	});
+
+	process.nextTick(() => {
+		input.write("/");
+		input.write("m");
+		input.write("\t");
+		input.write("\r");
+		output.end();
+	});
+
+	// Tab fills the buffer (with trailing space) but does not submit; Enter does.
+	assert.equal(await resultPromise, "/model ");
+	assert.match(getVisibleOutput(await outputText), /> \/model /);
+});
+
+test("readChatInput fills the navigated suggestion on Tab", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const outputText = collectOutput(output);
+
+	const resultPromise = readChatInput({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		commands: createChatCommandDefinitions(),
+	});
+
+	process.nextTick(() => {
+		input.write("/");
+		input.write("\x1B[B"); // move selection down
+		input.write("\t"); // complete the now-selected suggestion
+		input.write("\r");
+		output.end();
+	});
+
+	// After "/", suggestions start at "/clear"; one Down selects "/compact".
+	assert.equal(await resultPromise, "/compact ");
+	assert.match(getVisibleOutput(await outputText), /> \/compact /);
+});
+
+test("readChatInput swallows Tab when there are no suggestions", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+
+	const resultPromise = readChatInput({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		commands: createChatCommandDefinitions(),
+	});
+
+	process.nextTick(() => {
+		input.write("/zzz");
+		input.write("\t"); // no matching suggestion -> no-op, no literal tab
+		input.write("\r");
+	});
+
+	assert.equal(await resultPromise, "/zzz");
+});
+
 test("readChatInput consumes unhandled arrow keys instead of inserting escape fragments", async () => {
 	const input = new FakeInput();
 	const output = new FakeOutput();
