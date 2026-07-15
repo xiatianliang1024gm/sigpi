@@ -69,3 +69,11 @@ Reconsidered the skill trust model after a hands-on comparison with Claude Code
 | # | Title | Commit | One-liner |
 |---|-------|--------|-----------|
 | [0017](./0017-skill-trust-load-implies-trust.md) | Skill trust: load implies trust; skill roots are read-only | `5907ec3` | No trust gate / allowlist; a discovered skill is trusted on load. Skill roots become a hard, mode-independent (incl. `full_access`) write block — the compensating control |
+
+## Streaming render + interrupt pass (2026-07-14)
+
+Came from a `/grilling` session (grill-with-docs) triggered by a "stuck in thinking, no timeout, ESC does nothing" report on a reasoning model (hy3 via OpenRouter). Four coupled decisions: capture reasoning tokens, render them live via one `onDelta` chain, keep `model_delta` render-only vs phase events, and make ESC a terminal cancel (not a retry). The idle/stall timeout is intentionally left unchanged.
+
+| # | Title | Commit | One-liner |
+|---|-------|--------|-----------|
+| [0020](./0020-streaming-render-and-interrupt-fix.md) | Streaming render of reasoning/content + interrupt-not-retry | `618e08c` | Adapter captures `reasoning_content`; one `onDelta` chain carries `{reasoningDelta, contentDelta}` → `model_delta` event (UI v1 renders reasoning); ESC aborts the turn instead of retrying; idle timer unchanged |
