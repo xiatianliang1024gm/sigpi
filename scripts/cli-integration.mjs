@@ -160,6 +160,19 @@ const exitCommand = await runCliCommand({
 });
 assert.equal(exitCommand.code, 0);
 
+// No-args invocation must default to interactive chat (not print usage).
+const noArgsChat = await runCliCommand({
+  cwd,
+  commandArgs: [],
+  input: "/exit\n",
+  env: childEnv,
+  nodeArgs,
+  timeoutMs: 30_000,
+});
+assert.equal(noArgsChat.code, 0);
+assert.match(noArgsChat.stdout, /Interactive chat started/);
+assert.doesNotMatch(noArgsChat.stdout, /Usage:/);
+
 const toolFailure = await runCliCommand({
 	cwd,
 	commandArgs: ["ask", "tool fail"],

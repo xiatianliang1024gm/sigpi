@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { stdin as input, stdout as output } from "node:process";
 import type { ReadStream, WriteStream } from "node:tty";
 import { fileURLToPath } from "node:url";
@@ -1311,7 +1311,13 @@ function redactSecret(value: string): string {
 async function main(): Promise<void> {
 	const [command, ...rest] = process.argv.slice(2);
 
-	if (!command || command === "help" || command === "--help") {
+	// No command defaults to interactive chat (same as the `chat` subcommand).
+	if (!command) {
+		await runChatWithArgs(rest);
+		return;
+	}
+
+	if (command === "help" || command === "--help") {
 		printUsage();
 		return;
 	}
@@ -1355,11 +1361,21 @@ async function main(): Promise<void> {
 	throw new Error(`Unknown command: ${command}`);
 }
 
-main().catch((error) => {
-	const message = error instanceof Error ? error.message : String(error);
-	console.error(`Error: ${message}`);
-	if (process.env.TINYPI_DEBUG_STACK === "1" && error instanceof Error) {
-		console.error(error.stack);
-	}
-	process.exitCode = 1;
-});
+// Only run the CLI when this module is the process entry point. Importing it
+// from tests (e.g. to reuse `runChatReplLoop`) must not start the REPL loop,
+// which would keep the event loop alive and hang the test runner.
+const invokedAsEntryPoint =
+	process.argv[1] !== undefined &&
+	realpathSync(process.argv[1]) ===
+		realpathSync(fileURLToPath(import.meta.url));
+
+if (invokedAsEntryPoint) {
+	main().catch((error) => {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`Error: ${message}`);
+		if (process.env.TINYPI_DEBUG_STACK === "1" && error instanceof Error) {
+			console.error(error.stack);
+		}
+		process.exitCode = 1;
+	});
+}
