@@ -49,30 +49,22 @@ reminder telling the model to run a narrow verification command before finishing
 defaults to `false`** — the mechanism exists and is wired, but is opt-in. That is intentional: it
 shows the pattern without forcing behavior you may not want.
 
-## Max-steps synthesis
+## Max-steps local fallback
 
-`maxSteps` (default 8) bounds the loop. If it is exhausted without a final answer, SigPi does not
-just give up:
-
-```ts
-const response = await this.provider.generate({
-  messages: [...workingMessages, createSystemMessage(MAX_STEPS_SYNTHESIS_PROMPT)],
-  tools: [],
-  ...
-});
-```
-
-The synthesis prompt tells the model to stop requesting tools and answer from what it already
-gathered. If even that fails or returns garbage (e.g. leftover tool-call markup),
-`buildMaxStepsFallbackAnswer` produces a language-neutral summary of the goal and the tool results
-collected — so the user always gets something coherent instead of a crash.
+`maxSteps` (default 40) bounds the loop. If it is exhausted without a final answer, SigPi ends the
+turn with a **local** fallback assembled from the in-memory `toolExecutions` (files read, commands
+run, calls made) plus the `currentGoal` — `buildMaxStepsFallbackAnswer`. There is **no** final model
+call, so the answer cannot leak `<tool_call>` markup and cannot fail on a second provider error. The
+fallback states the limit was reached, that the task is incomplete, and prompts `go on` to continue;
+a `turn_max_steps_reached` progress event surfaces the same signal, and the turn is marked resumable
+so a later `go on` resumes the same task from the persisted checkpoint (ADR 0018).
 
 ## Key takeaways
 
 - **Interrupt** is a checked signal at every step/tool, with a checkpoint so no work is lost.
 - **Verification** is a tiny state flag (mutating tool done → expect a bash check) behind an opt-in
   flag.
-- **Max-steps** is a hard bound plus a graceful synthesis fallback.
+- **Max-steps** is a hard bound plus a graceful local fallback that needs no extra model call.
 - Each guard is a few dozen lines. The lesson: agent robustness is mostly a handful of small,
   explicit checks — not a framework.
 

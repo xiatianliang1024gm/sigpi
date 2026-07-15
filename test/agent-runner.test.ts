@@ -195,34 +195,19 @@ test("returns structured tool errors for invalid arguments", async () => {
 	assert.equal(result.toolExecutions[0]?.result.ok, false);
 });
 
-test("synthesizes a final answer after the maximum number of tool steps", async () => {
-	const provider = new MockProvider((request) => {
-		if (request.tools.length === 0) {
-			assert.match(
-				request.messages.at(-1)?.content ?? "",
-				/Answer the user's current request now/,
-			);
-			return {
-				assistantText: "Best-effort project analysis from gathered context.",
-				toolCalls: [],
-				finishReason: "stop",
-			};
-		}
-
-		return {
-			assistantText: null,
-			toolCalls: [
-				{
-					id: "call_1",
-					name: "glob",
-					arguments: { pattern: "*.ts" },
-					rawArguments: '{"pattern":"*.ts"}',
-				},
-			],
-			finishReason: "tool_calls",
-		};
-	});
-
+test("assembles a local max-steps fallback without a final model call", async () => {
+	const provider = new MockProvider(() => ({
+		assistantText: null,
+		toolCalls: [
+			{
+				id: "call_1",
+				name: "glob",
+				arguments: { pattern: "*.ts" },
+				rawArguments: '{"pattern":"*.ts"}',
+			},
+		],
+		finishReason: "tool_calls",
+	}));
 	const runner = new AgentRunner({
 		provider,
 		tools: createDefaultToolRegistry(),
@@ -235,38 +220,39 @@ test("synthesizes a final answer after the maximum number of tool steps", async 
 
 	const result = await runner.runTurn("loop forever");
 
-	assert.equal(
-		result.outputText,
-		"Best-effort project analysis from gathered context.",
+	// The limit must end the turn with no extra model call: every request is a
+	// normal tool-calling step (tools populated), so there is no tools:[]
+	// synthesis request.
+	assert.equal(provider.requests.length, 2);
+	assert.ok(
+		provider.requests.every((request) => (request.tools?.length ?? 0) > 0),
+		"no tools:[] synthesis request should be fired at the limit",
 	);
 	assert.equal(result.steps, 2);
-	assert.equal(provider.requests.at(-1)?.tools.length, 0);
+	assert.match(
+		result.outputText ?? "",
+		/I reached the maximum tool-call steps \(2\)/,
+	);
+	assert.match(result.outputText ?? "", /Current goal: loop forever/);
+	assert.match(result.outputText ?? "", /Work done this turn:/);
+	assert.match(result.outputText ?? "", /glob/);
+	assert.match(result.outputText ?? "", /go on/);
+	assert.equal(result.resumable, true);
 });
 
-test("falls back when max-step synthesis emits tool markup", async () => {
-	const provider = new MockProvider((request) => {
-		if (request.tools.length === 0) {
-			return {
-				assistantText:
-					'</mm:think>]<]minimax[>[<tool_call><invoke name="read"></invoke></tool_call>',
-				toolCalls: [],
-				finishReason: "stop",
-			};
-		}
-
-		return {
-			assistantText: null,
-			toolCalls: [
-				{
-					id: "call_1",
-					name: "read",
-					arguments: { file_path: "README.md" },
-					rawArguments: '{"file_path":"README.md"}',
-				},
-			],
-			finishReason: "tool_calls",
-		};
-	});
+test("max-steps fallback contains no tool-call markup and prompts go on", async () => {
+	const provider = new MockProvider(() => ({
+		assistantText: null,
+		toolCalls: [
+			{
+				id: "call_1",
+				name: "read",
+				arguments: { file_path: "README.md" },
+				rawArguments: '{"file_path":"README.md"}',
+			},
+		],
+		finishReason: "tool_calls",
+	}));
 	const runner = new AgentRunner({
 		provider,
 		tools: createDefaultToolRegistry(),
@@ -279,9 +265,16 @@ test("falls back when max-step synthesis emits tool markup", async () => {
 
 	const result = await runner.runTurn("分析当前项目");
 
-	assert.match(result.outputText ?? "", /current user goal is: 分析当前项目/);
+	assert.match(
+		result.outputText ?? "",
+		/I reached the maximum tool-call steps \(1\)/,
+	);
+	assert.match(result.outputText ?? "", /Current goal: 分析当前项目/);
 	assert.match(result.outputText ?? "", /Read README\.md/);
+	assert.match(result.outputText ?? "", /go on/);
 	assert.doesNotMatch(result.outputText ?? "", /<tool_call>/);
+	assert.doesNotMatch(result.outputText ?? "", /<invoke name=/);
+	assert.equal(result.resumable, true);
 });
 
 test("interrupts an in-flight model request and returns interrupted status", async () => {

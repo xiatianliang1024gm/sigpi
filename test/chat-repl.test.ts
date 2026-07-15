@@ -910,6 +910,7 @@ test("runChatReplLoop handles slash commands and ignores legacy command forms", 
 					return {
 						ok: true,
 						completionStatus: "completed",
+						resumable: false,
 						outputText: `echo:${line}`,
 						toolExecutions: [],
 					};
@@ -963,6 +964,7 @@ test("runChatReplLoop exits on legacy exit alias without calling the model", asy
 					return {
 						ok: true,
 						completionStatus: "completed",
+						resumable: false,
 						outputText: `echo:${line}`,
 						toolExecutions: [],
 					};
@@ -1117,6 +1119,7 @@ test("runChatReplLoop prints the turn divider after the final answer", async () 
 				executeTurn: async () => ({
 					ok: true,
 					completionStatus: "completed",
+					resumable: false,
 					outputText: "Answer.",
 					toolExecutions: [],
 				}),
@@ -1162,6 +1165,7 @@ test("runChatReplLoop prints file edit summaries in clear mode", async () => {
 				executeTurn: async () => ({
 					ok: true,
 					completionStatus: "completed",
+					resumable: false,
 					outputText: "Done.",
 					toolExecutions: [
 						{
@@ -1283,6 +1287,7 @@ test("runChatReplLoop prints full file edit content for review", async () => {
 				executeTurn: async () => ({
 					ok: true,
 					completionStatus: "completed",
+					resumable: false,
 					outputText: "Done.",
 					toolExecutions: [
 						{
@@ -1386,6 +1391,7 @@ test("runChatReplLoop does not print edit summaries for patch validation", async
 				executeTurn: async () => ({
 					ok: true,
 					completionStatus: "completed",
+					resumable: false,
 					outputText: "Patch validates.",
 					toolExecutions: [
 						{
@@ -1472,6 +1478,7 @@ test("runChatReplLoop listens for Esc while a turn is running", async () => {
 							resolve({
 								ok: true as const,
 								completionStatus: "interrupted" as const,
+								resumable: false,
 								outputText: null,
 								toolExecutions: [],
 							});
@@ -1528,6 +1535,7 @@ test("runChatReplLoop queues visible input typed while a turn is running", async
 					return {
 						ok: true,
 						completionStatus: "completed",
+						resumable: false,
 						outputText: `echo:${line}`,
 						toolExecutions: [],
 					};
@@ -1593,6 +1601,7 @@ test("runChatReplLoop preserves draft input across progress output", async () =>
 					return {
 						ok: true,
 						completionStatus: "completed",
+						resumable: false,
 						outputText: `echo:${line}`,
 						toolExecutions: [],
 					};

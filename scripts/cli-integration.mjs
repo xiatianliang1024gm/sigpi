@@ -47,7 +47,7 @@ const storagePaths = resolveSessionStoragePaths({
 	cwd,
 	sessionsRoot: childEnv.AGENT_SESSIONS_ROOT,
 });
-const sessionPath = path.join(storagePaths.sessionsDir, `${savedSessionId}.jsonl`);
+const sessionPath = path.join(storagePaths.sessionsDir, `${savedSessionId}.meta.json`);
 assert.match(await readFile(sessionPath, "utf8"), /save state/);
 
 const resumedAsk = await runCliCommand({
@@ -189,7 +189,20 @@ const modelFailure = await runCliCommand({
 	nodeArgs,
 });
 assert.equal(modelFailure.code, 1);
-assert.match(modelFailure.stderr, /server error \(HTTP 500\)/);
+assert.match(
+	modelFailure.stderr,
+	/The model provider returned a server error \(HTTP 500\)\. Retry shortly\./,
+);
+
+const maxStepsAsk = await runCliCommand({
+	cwd,
+	commandArgs: ["ask", "loop steps"],
+	env: { ...childEnv, AGENT_MAX_STEPS: "3" },
+	nodeArgs,
+});
+assert.equal(maxStepsAsk.code, 0);
+assert.match(maxStepsAsk.stdout, /I reached the maximum tool-call steps/);
+assert.match(maxStepsAsk.stdout, /go on/);
 
 function extractSessionId(stdout) {
 	const match = stdout.match(/\[session\]\s+([0-9a-f-]{36})/i);

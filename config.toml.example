@@ -23,7 +23,7 @@ retry_base_delay_ms = 250
 [agent]
 # These limits are approximate characters, not model tokens. Raise them for
 # large-context models; lower them if your model/backend rejects long requests.
-max_steps = 20
+max_steps = 40
 soft_context_limit = 200000
 hard_context_limit = 260000
 keep_last_messages = 8
