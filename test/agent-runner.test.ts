@@ -433,9 +433,11 @@ test("summarizes older context when the token threshold is exceeded", async () =
 
 	const context = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: 35,
-		reserveTokens: 2,
-		keepRecentTokens: 5,
+		getContextBudget: () => ({
+			hardContextLimit: 35,
+			reserveTokens: 2,
+			keepRecentTokens: 5,
+		}),
 		keepRecentMessagesFloor: 2,
 	});
 
@@ -581,9 +583,11 @@ test("compacts oversized in-turn tool context while preserving current goal", as
 	});
 	const context = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: 200,
-		reserveTokens: 10,
-		keepRecentTokens: 30,
+		getContextBudget: () => ({
+			hardContextLimit: 200,
+			reserveTokens: 10,
+			keepRecentTokens: 30,
+		}),
 	});
 	const runner = new AgentRunner({
 		provider,
@@ -647,9 +651,11 @@ test("checkpoint goal uses prior task when the user says continue", async () => 
 	]);
 	const context = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: 200,
-		reserveTokens: 10,
-		keepRecentTokens: 30,
+		getContextBudget: () => ({
+			hardContextLimit: 200,
+			reserveTokens: 10,
+			keepRecentTokens: 30,
+		}),
 	});
 	context.hydrateState({
 		summary:

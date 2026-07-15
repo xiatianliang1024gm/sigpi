@@ -23,10 +23,6 @@ export interface ChatReplState {
 	modelId: string;
 	modelName: string;
 	models: Record<string, ModelConfig>;
-	contextWindow: {
-		contextWindow: number;
-		reserveTokens: number;
-	};
 }
 
 export interface AttachSessionResult {
@@ -102,10 +98,6 @@ export function runtimeToChatReplState(runtime: AgentRuntime): ChatReplState {
 		modelId: runtime.config.modelId,
 		modelName: runtime.config.model.name,
 		models: runtime.config.models,
-		contextWindow: {
-			contextWindow: runtime.config.agent.contextWindow,
-			reserveTokens: runtime.config.agent.reserveTokens,
-		},
 	};
 }
 
@@ -178,9 +170,8 @@ function formatStatusBarWithUsedTokens(
 	state: ChatReplState,
 	usedTokens: number,
 ): string {
-	const contextWindow = state.contextWindow.contextWindow;
-	const reserveTokens = state.contextWindow.reserveTokens;
-	const limit = Math.max(1, contextWindow - reserveTokens);
+	const budget = state.runtime.context.getContextBudget();
+	const limit = Math.max(1, budget.hardContextLimit - budget.reserveTokens);
 	const percentUsed = Math.round((usedTokens / limit) * 100);
 
 	return [

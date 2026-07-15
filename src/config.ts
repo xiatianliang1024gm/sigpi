@@ -37,20 +37,21 @@ const modelConfigSchema = z.object({
 	 * not configured.
 	 */
 	maxTokens: z.number().int().positive().optional(),
+	/**
+	 * The model's full context window in tokens (the physical ceiling).
+	 * The compact trigger fires when `tokens > hardContextLimit -
+	 * reserveTokens`. When the model hasn't yet reported usage, the token
+	 * estimate falls back to `chars / 4`. Defaults to 200_000.
+	 */
+	hardContextLimit: z.number().int().positive().default(200_000),
+	/** Tokens reserved for the model's response. Defaults to 16_384. */
+	reserveTokens: z.number().int().nonnegative().default(16_384),
+	/** Recent tokens to keep un-summarized when summarizing. Defaults to 20_000. */
+	keepRecentTokens: z.number().int().positive().default(20_000),
 });
 
 const agentConfigSchema = z.object({
 	maxSteps: z.number().int().positive().default(20),
-	/**
-	 * Model's full context window in tokens. The compact trigger fires when
-	 * `tokens > contextWindow - reserveTokens`. When the model hasn't yet
-	 * reported usage, the token estimate falls back to `chars / 4`.
-	 */
-	contextWindow: z.number().int().positive().default(200_000),
-	/** Tokens reserved for the model's response. */
-	reserveTokens: z.number().int().nonnegative().default(16_384),
-	/** Recent tokens to keep un-summarized when summarizing. */
-	keepRecentTokens: z.number().int().positive().default(20_000),
 	processOutput: z
 		.enum(["compact", "detailed"], {
 			errorMap: () => ({
@@ -138,12 +139,12 @@ const MODEL_ALIASES: Record<string, string> = {
 	retryBaseDelayMs: "retry_base_delay_ms",
 	maxTokens: "max_tokens",
 	proxy: "proxy",
+	hardContextLimit: "hard_context_limit",
+	reserveTokens: "reserve_tokens",
+	keepRecentTokens: "keep_recent_tokens",
 };
 const AGENT_ALIASES: Record<string, string> = {
 	maxSteps: "max_steps",
-	contextWindow: "context_window",
-	reserveTokens: "reserve_tokens",
-	keepRecentTokens: "keep_recent_tokens",
 	processOutput: "process_output",
 };
 const LOGGING_ALIASES: Record<string, string> = {
@@ -259,13 +260,21 @@ export interface ModelConfig {
 	retryBaseDelayMs: number;
 	maxTokens?: number;
 	proxy?: string;
+	/**
+	 * The model's full context window in tokens (the physical ceiling). The
+	 * compact trigger fires when `tokens > hardContextLimit - reserveTokens`.
+	 * Optional here because the model schema applies a 200_000 default at load;
+	 * the budget getter in `ConversationContext` treats it as required.
+	 */
+	hardContextLimit?: number;
+	/** Tokens reserved for the model's response. Default 16_384 at load. */
+	reserveTokens?: number;
+	/** Recent tokens to keep un-summarized when summarizing. Default 20_000 at load. */
+	keepRecentTokens?: number;
 }
 
 export interface AgentConfig {
 	maxSteps: number;
-	contextWindow: number;
-	reserveTokens: number;
-	keepRecentTokens: number;
 	processOutput: ProcessOutputMode;
 }
 
@@ -464,21 +473,25 @@ export function renderDefaultConfigToml(): string {
 		"retry_base_delay_ms = 250",
 		"# stream = true  # set false for providers that do not support streaming",
 		"# max_tokens = 8192  # model max output tokens; caps the /compact summary request",
+		"# hard_context_limit = 200000  # model's total token budget (physical ceiling)",
+		"# reserve_tokens = 16384  # headroom reserved for the model's response",
+		"# keep_recent_tokens = 20000  # recent tokens kept un-summarized",
 		"",
 		"# [models.remote]",
 		'# base_url = "https://api.example.com/v1"',
 		'# api_key = "your-api-key"',
 		'# name = "remote-model"',
 		'# api_format = "responses"',
+		"# hard_context_limit = 128000",
+		"# reserve_tokens = 16384",
+		"# keep_recent_tokens = 20000",
 		"",
 		"[agent]",
-		"# Token-based context management. Compact triggers when",
-		"# `tokens > context_window - reserve_tokens`. The recent-message",
-		"# window keeps the last `keep_recent_tokens` tokens verbatim.",
+		"# Token-based context management. The budget is model-bound: each model's",
+		"# hard_context_limit / reserve_tokens / keep_recent_tokens live under",
+		"# [models.<id>] (see above). The compact trigger fires when",
+		"# `tokens > hard_context_limit - reserve_tokens`.",
 		"max_steps = 20",
-		"context_window = 200000",
-		"reserve_tokens = 16384",
-		"keep_recent_tokens = 20000",
 		'process_output = "detailed"',
 		"",
 		"[logging]",
@@ -622,12 +635,12 @@ function readEnvConfig(env: NodeJS.ProcessEnv): PartialConfig {
 			maxTokens: parseOptionalInt(env.MODEL_MAX_TOKENS),
 			stream: parseOptionalBoolean(env.MODEL_STREAM),
 			proxy: env.MODEL_PROXY,
+			hardContextLimit: parseOptionalInt(env.MODEL_HARD_CONTEXT_LIMIT),
+			reserveTokens: parseOptionalInt(env.MODEL_RESERVE_TOKENS),
+			keepRecentTokens: parseOptionalInt(env.MODEL_KEEP_RECENT_TOKENS),
 		},
 		agent: {
 			maxSteps: parseOptionalInt(env.AGENT_MAX_STEPS),
-			contextWindow: parseOptionalInt(env.AGENT_CONTEXT_WINDOW),
-			reserveTokens: parseOptionalInt(env.AGENT_RESERVE_TOKENS),
-			keepRecentTokens: parseOptionalInt(env.AGENT_KEEP_RECENT_TOKENS),
 			processOutput: parseOptionalProcessOutputMode(env.AGENT_PROCESS_OUTPUT),
 		},
 		logging: {
@@ -704,7 +717,9 @@ function resolveModelConfig(
 	const models: Record<string, ModelConfig> = {};
 
 	for (const [id, model] of Object.entries(fileConfig.models ?? {})) {
-		models[id] = modelConfigSchema.parse(dropUndefined(model));
+		const resolved = modelConfigSchema.parse(dropUndefined(model));
+		validateModelBudget(id, resolved);
+		models[id] = resolved;
 	}
 
 	const modelId = fileConfig.modelId;
@@ -721,6 +736,7 @@ function resolveModelConfig(
 		...selectedModel,
 		...envOverrides,
 	});
+	validateModelBudget(modelId, model);
 	models[modelId] = model;
 
 	return {
@@ -728,6 +744,18 @@ function resolveModelConfig(
 		modelId,
 		models,
 	};
+}
+
+function validateModelBudget(modelId: string, model: ModelConfig): void {
+	if (
+		model.maxTokens != null &&
+		model.hardContextLimit != null &&
+		model.maxTokens > model.hardContextLimit
+	) {
+		throw new Error(
+			`Model "${modelId}": max_tokens (${model.maxTokens}) must not exceed hard_context_limit (${model.hardContextLimit}).`,
+		);
+	}
 }
 
 function mergeNamedModels(

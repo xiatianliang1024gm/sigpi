@@ -16,9 +16,11 @@ import { MockProvider } from "./helpers.js";
 
 function buildContext(hooks?: CompactionHookRegistry): ConversationContext {
 	return new ConversationContext({
-		contextWindow: 60,
-		reserveTokens: 2,
-		keepRecentTokens: 10,
+		getContextBudget: () => ({
+			hardContextLimit: 60,
+			reserveTokens: 2,
+			keepRecentTokens: 10,
+		}),
 		keepRecentMessagesFloor: 2,
 		summaryEnabled: true,
 		compactionHooks: hooks,

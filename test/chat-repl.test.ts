@@ -569,15 +569,7 @@ test("formatStatusBar shows tokens and (contextWindow-reserveTokens) limit", asy
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const tokensState: typeof state = {
-			...state,
-			contextWindow: {
-				...state.contextWindow,
-				contextWindow: 200_000,
-				reserveTokens: 16_384,
-			},
-		};
-		const status = formatStatusBar(tokensState);
+		const status = formatStatusBar(state);
 		assert.match(status, /tokens \d+(?:\.\d+)?[KMB]?\/183\.6K \(\d+%\)/);
 	} finally {
 		restoreHome();
@@ -1050,14 +1042,15 @@ test("runChatReplLoop /resume reports empty session list before selector", async
 		},
 		systemPromptSections: [],
 		toolSchemas: [],
-		contextWindow: {
-			contextWindow: 200_000,
-			reserveTokens: 0,
-		},
 		modelName: "test-model",
 		workingDirectory: "/tmp/test",
 		runtime: {
 			context: {
+				getContextBudget: () => ({
+					hardContextLimit: 200_000,
+					reserveTokens: 0,
+					keepRecentTokens: 20_000,
+				}),
 				getLastUsage: () => null,
 				getSummary: () => "",
 				getRecentMessages: () => [],

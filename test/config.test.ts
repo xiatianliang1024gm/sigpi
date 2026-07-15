@@ -29,12 +29,12 @@ test("alias maps drive parseTomlConfig for every section", () => {
 			max_tokens: 1,
 			stream: true,
 			proxy: "http://proxy.example:7078",
+			hard_context_limit: 1,
+			reserve_tokens: 1,
+			keep_recent_tokens: 1,
 		},
 		agent: {
 			max_steps: 1,
-			context_window: 1,
-			reserve_tokens: 1,
-			keep_recent_tokens: 1,
 			process_output: "detailed",
 		},
 		logging: {
@@ -224,10 +224,10 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 			'name = "user-project-placeholder"',
 			"timeout_ms = 19000",
 			"max_tokens = 4096",
+			"hard_context_limit = 100000",
 			"",
 			"[agent]",
 			"max_steps = 7",
-			"context_window = 100000",
 			"",
 			"[logging]",
 			'level = "warn"',
@@ -247,9 +247,9 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 			"",
 			"[models.project]",
 			'name = "project-model"',
+			"keep_recent_tokens = 3000",
 			"",
 			"[agent]",
-			"keep_recent_tokens = 3000",
 			"",
 			"[shell]",
 			'kind = "bash"',
@@ -279,8 +279,8 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 	assert.equal(config.model.retryBaseDelayMs, 250);
 	assert.equal(config.model.maxTokens, 4096);
 	assert.equal(config.agent.maxSteps, 7);
-	assert.equal(config.agent.contextWindow, 100000);
-	assert.equal(config.agent.keepRecentTokens, 3000);
+	assert.equal(config.models.project.hardContextLimit, 100000);
+	assert.equal(config.models.project.keepRecentTokens, 3000);
 	assert.equal(config.agent.processOutput, "compact");
 	assert.equal(config.logging.level, "warn");
 	assert.equal(config.logging.filePath, "user.log");
@@ -358,6 +358,55 @@ test("loadAppConfig applies Bash env-var overrides (BASH_*/CLAUDE_*)", async () 
 	assert.equal(config.tools.bash.maxOutputLength, 40000);
 	assert.equal(config.tools.bash.maintainProjectWorkingDir, true);
 	assert.equal(config.tools.bash.envFile, "~/.sigpi/env.sh");
+});
+
+test("loadAppConfig rejects a model whose max_tokens exceeds hard_context_limit", async () => {
+	const cwd = await createTempDir("sigpi-config-budget-overflow-");
+	const homeDir = await createTempDir("sigpi-config-budget-overflow-home-");
+	await mkdir(path.join(homeDir, ".sigpi"), { recursive: true });
+	await writeFile(
+		path.join(homeDir, ".sigpi", "config.toml"),
+		[
+			"[model]",
+			'default = "m"',
+			"[models.m]",
+			'base_url = "https://x/v1"',
+			'api_key = "k"',
+			'name = "n"',
+			"hard_context_limit = 1000",
+			"max_tokens = 4096",
+		].join("\n"),
+		"utf8",
+	);
+
+	assert.throws(
+		() => loadAppConfig({ cwd, homeDir, env: {} }),
+		/hard_context_limit/,
+	);
+});
+
+test("loadAppConfig accepts a model whose max_tokens fits within hard_context_limit", async () => {
+	const cwd = await createTempDir("sigpi-config-budget-ok-");
+	const homeDir = await createTempDir("sigpi-config-budget-ok-home-");
+	await mkdir(path.join(homeDir, ".sigpi"), { recursive: true });
+	await writeFile(
+		path.join(homeDir, ".sigpi", "config.toml"),
+		[
+			"[model]",
+			'default = "m"',
+			"[models.m]",
+			'base_url = "https://x/v1"',
+			'api_key = "k"',
+			'name = "n"',
+			"hard_context_limit = 100000",
+			"max_tokens = 4096",
+		].join("\n"),
+		"utf8",
+	);
+
+	const config = loadAppConfig({ cwd, homeDir, env: {} });
+	assert.equal(config.models.m.hardContextLimit, 100000);
+	assert.equal(config.models.m.maxTokens, 4096);
 });
 
 test("loadAppConfig defaults [tools.bash] bounds when unset", async () => {

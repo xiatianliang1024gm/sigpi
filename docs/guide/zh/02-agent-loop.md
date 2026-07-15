@@ -213,7 +213,7 @@ const response = await this.provider.generate({
 ## 轮内 checkpoint 压缩
 
 在一轮较长时，`workingMessages` 自身也可能超出预算。`maybeCompactWorkingMessages()`
-监视估计 token 数，一旦超过 `contextWindow - reserveTokens`，就把本轮的*早段*摘要成 checkpoint，
+监视估计 token 数，一旦超过 `hardContextLimit - reserveTokens`，就把本轮的*早段*摘要成 checkpoint，
 只保留最后 `TURN_CHECKPOINT_KEEP_LAST_MESSAGES`（**4**）条消息，并以 checkpoint 为前缀重建
 `workingMessages`。于是模型能在长任务上持续工作而不丢线索。（完整的上下文管理在下一章。）
 

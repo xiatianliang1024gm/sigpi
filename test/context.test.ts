@@ -393,9 +393,11 @@ test("context compaction counts system prompt and tool schemas in the estimate",
 	}));
 	const context = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: 50,
-		reserveTokens: 2,
-		keepRecentTokens: 5,
+		getContextBudget: () => ({
+			hardContextLimit: 50,
+			reserveTokens: 2,
+			keepRecentTokens: 5,
+		}),
 		keepRecentMessagesFloor: 2,
 	});
 
@@ -485,9 +487,11 @@ test("token-based trigger fires when provider usage exceeds context window minus
 	}));
 	const context = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: 10_000,
-		reserveTokens: 2_000,
-		keepRecentTokens: 100,
+		getContextBudget: () => ({
+			hardContextLimit: 10_000,
+			reserveTokens: 2_000,
+			keepRecentTokens: 100,
+		}),
 	});
 
 	// 200 messages, ~120 chars each ≈ 30 tokens each. Total recent messages
@@ -535,9 +539,11 @@ test("token trigger does not fire when recent messages fit within keepRecentToke
 	}));
 	const context = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: 10_000,
-		reserveTokens: 1_000,
-		keepRecentTokens: 100_000,
+		getContextBudget: () => ({
+			hardContextLimit: 10_000,
+			reserveTokens: 1_000,
+			keepRecentTokens: 100_000,
+		}),
 	});
 
 	const messages: Message[] = [];
@@ -633,9 +639,11 @@ test("hydrated session forgets provider usage until next model response", async 
 	}));
 	const context = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: 10_000,
-		reserveTokens: 1_000,
-		keepRecentTokens: 100_000,
+		getContextBudget: () => ({
+			hardContextLimit: 10_000,
+			reserveTokens: 1_000,
+			keepRecentTokens: 100_000,
+		}),
 	});
 
 	// Hydrate with messages only; no usage information is available.
@@ -666,8 +674,11 @@ test("summary request caps maxTokens at provider.maxTokens when configured", asy
 	);
 	const context = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: 50,
-		reserveTokens: 100,
+		getContextBudget: () => ({
+			hardContextLimit: 50,
+			reserveTokens: 100,
+			keepRecentTokens: 20_000,
+		}),
 		keepRecentMessagesFloor: 2,
 	});
 
@@ -698,8 +709,11 @@ test("summary request uses provider.maxTokens when it is the tightest cap", asyn
 	);
 	const context = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: 50,
-		reserveTokens: 4_000,
+		getContextBudget: () => ({
+			hardContextLimit: 50,
+			reserveTokens: 4_000,
+			keepRecentTokens: 20_000,
+		}),
 		keepRecentMessagesFloor: 2,
 	});
 
@@ -727,8 +741,11 @@ test("summary request keeps the 2048 default cap when provider exposes no maxTok
 	}));
 	const context = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: 50,
-		reserveTokens: 4_000,
+		getContextBudget: () => ({
+			hardContextLimit: 50,
+			reserveTokens: 4_000,
+			keepRecentTokens: 20_000,
+		}),
 		keepRecentMessagesFloor: 2,
 	});
 
@@ -1194,4 +1211,61 @@ test("microCompactMessages never mutates the input messages", () => {
 	assert.notEqual(input[1].content, (out[1] as { content: string }).content);
 	assert.equal(input[1].content, originalA);
 	assert.equal(out.length, input.length);
+});
+
+test("budget getter follows the active model so /model switch changes the trigger", async () => {
+	const provider = new MockProvider(() => ({
+		assistantText: "<summary>compressed</summary>",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+
+	// Backed by a mutable holder so switching the active model re-points the
+	// getter, exactly like runtime.setActiveModel does for /model switch.
+	let activeBudget = {
+		hardContextLimit: 100,
+		reserveTokens: 10,
+		keepRecentTokens: 20,
+	};
+	const context = new ConversationContext({
+		summaryEnabled: true,
+		getContextBudget: () => activeBudget,
+	});
+
+	// ~12 messages of a few hundred chars each comfortably exceed a 90-token
+	// (100 - 10) threshold for the small model.
+	const messages: Message[] = [];
+	for (let i = 0; i < 6; i += 1) {
+		messages.push({ role: "user", content: "request ".repeat(40) + i });
+		messages.push({ role: "assistant", content: "answer ".repeat(40) + i });
+	}
+	context.hydrateState({ summary: null, recentMessages: messages });
+
+	const smallResult = await context.compact(
+		provider,
+		"You are a test agent.",
+		[],
+	);
+	// Small model: trigger fires, context is summarized.
+	assert.equal(smallResult.summarized, true);
+
+	// Switch to a much larger model: the same conversation now fits.
+	activeBudget = {
+		hardContextLimit: 1_000_000,
+		reserveTokens: 10,
+		keepRecentTokens: 20,
+	};
+	context.appendRecoveryMessages(
+		[{ role: "user", content: "one more small request" }],
+		"You are a test agent.",
+		[],
+	);
+	const largeResult = await context.compact(
+		provider,
+		"You are a test agent.",
+		[],
+	);
+	// Large model: the expanded budget means no further compaction fires.
+	assert.equal(largeResult.summarized, false);
+	assert.equal(largeResult.trimmed, false);
 });

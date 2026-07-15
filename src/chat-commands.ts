@@ -573,6 +573,7 @@ function switchActiveModel(
 	state.runtime.turn.setProvider(
 		createModelProvider(model, state.runtime.logger),
 	);
+	state.runtime.setActiveModel(model);
 	context.setState({
 		...state,
 		modelId: requestedModelId,

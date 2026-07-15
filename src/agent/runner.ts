@@ -321,8 +321,8 @@ export class AgentRunner {
 				return;
 			}
 			const estimatedTokens = estimateWorkingMessageTokens();
-			const hardLimitTokens =
-				this.context.getContextWindow() - this.context.getReserveTokens();
+			const budget = this.context.getContextBudget();
+			const hardLimitTokens = budget.hardContextLimit - budget.reserveTokens;
 			if (estimatedTokens <= hardLimitTokens) {
 				return;
 			}

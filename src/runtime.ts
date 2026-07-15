@@ -13,6 +13,7 @@ import {
 	type AppConfig,
 	getDefaultSessionsRoot,
 	loadAppConfig,
+	type ModelConfig,
 } from "./config.js";
 import { buildSystemPrompt, buildSystemPromptSections } from "./defaults.js";
 import { createChildLogger, createLogger } from "./logger.js";
@@ -66,6 +67,12 @@ export interface AgentRuntime {
 	runId: string;
 	backgroundTasks: import("./tools/background.js").BackgroundTaskManager;
 	tools: import("./tools/registry.js").ToolRegistry;
+	/**
+	 * Point the conversation context's budget getter at a newly selected
+	 * model. Called by `/model switch` so the compaction trigger tracks the
+	 * active model each turn (ADR-0021).
+	 */
+	setActiveModel: (model: ModelConfig) => void;
 }
 
 export interface CreateAgentRuntimeArgs {
@@ -229,11 +236,17 @@ export async function createAgentRuntime(
 		config.tools.allowedRoots,
 		collectSkillRoots(cwd, homeDir),
 	);
+	// Holder for the *active* model so the context budget getter can track
+	// `/model switch` each turn (ADR-0021). The context never caches a budget;
+	// it re-reads this holder on every compaction / estimate.
+	const activeModelRef: { current: ModelConfig } = { current: config.model };
 	const conversationContext = new ConversationContext({
 		summaryEnabled: true,
-		contextWindow: config.agent.contextWindow,
-		reserveTokens: config.agent.reserveTokens,
-		keepRecentTokens: config.agent.keepRecentTokens,
+		getContextBudget: () => ({
+			hardContextLimit: activeModelRef.current.hardContextLimit ?? 200_000,
+			reserveTokens: activeModelRef.current.reserveTokens ?? 16_384,
+			keepRecentTokens: activeModelRef.current.keepRecentTokens ?? 20_000,
+		}),
 		logger: runLogger,
 		runId,
 		sessionId: args.sessionId ?? null,
@@ -360,5 +373,8 @@ export async function createAgentRuntime(
 		config,
 		runId,
 		backgroundTasks: backgroundTaskManager,
+		setActiveModel: (model: ModelConfig) => {
+			activeModelRef.current = model;
+		},
 	};
 }
