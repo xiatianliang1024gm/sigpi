@@ -386,25 +386,38 @@ export interface ModelRequestContext {
 // single import site.
 export type { ModelProvider } from "./model/provider.js";
 
-export interface ContextManagerOptions {
+/**
+ * The model-bound context budget that drives compaction. Capacity is a
+ * physical property of the selected model, so the whole budget object lives
+ * at the model level (see ADR-0021) rather than the agent level.
+ */
+export interface ContextBudget {
 	/**
-	 * The model's full context window in tokens. Compact triggers when
-	 * `tokens > contextWindow - reserveTokens`. Defaults to 200_000.
+	 * The model's full context window in tokens (the physical ceiling).
+	 * The hard trim limit is `hardContextLimit - reserveTokens`.
 	 */
-	contextWindow: number;
+	hardContextLimit: number;
 	/**
 	 * Tokens reserved for the model's response. Subtracted from
-	 * `contextWindow` to compute the soft trigger threshold.
-	 * Defaults to 16_384.
+	 * `hardContextLimit` to compute the soft trigger threshold.
 	 */
-	reserveTokens?: number;
+	reserveTokens: number;
 	/**
 	 * Token budget of recent messages to keep un-summarized. The cut-point
 	 * algorithm walks backwards from the newest message, accumulating tokens
 	 * until this budget is filled, then cuts at the nearest valid boundary.
-	 * Defaults to 20_000.
 	 */
-	keepRecentTokens?: number;
+	keepRecentTokens: number;
+}
+
+export interface ContextManagerOptions {
+	/**
+	 * Returns the active model's context budget. Called at every compaction /
+	 * estimate so the soft trigger threshold tracks the model selected via
+	 * `/model switch`. This is the single source of truth for the "which
+	 * model is active" budget knowledge (see ADR-0021).
+	 */
+	getContextBudget: () => ContextBudget;
 	/**
 	 * Minimum number of recent messages that must always be retained,
 	 * regardless of which trigger fires. Acts as a sanity floor for the

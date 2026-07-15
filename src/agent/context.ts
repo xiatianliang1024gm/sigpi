@@ -9,6 +9,7 @@ import {
 	buildEntriesFromContextState,
 } from "../session/format.js";
 import type {
+	ContextBudget,
 	ContextManagerOptions,
 	ContextUpdateResult,
 	ConversationContextState,
@@ -35,10 +36,12 @@ import { createSystemMessage, createUserMessage } from "./messages.js";
 import { summarize } from "./summarizer.js";
 
 const DEFAULT_CONTEXT_OPTIONS: ContextManagerOptions = {
-	contextWindow: 200_000,
+	getContextBudget: () => ({
+		hardContextLimit: 200_000,
+		reserveTokens: 16_384,
+		keepRecentTokens: 20_000,
+	}),
 	summaryEnabled: true,
-	reserveTokens: 16_384,
-	keepRecentTokens: 20_000,
 	keepRecentMessagesFloor: 4,
 };
 
@@ -295,12 +298,13 @@ export class ConversationContext {
 		);
 	}
 
-	getContextWindow(): number {
-		return this.options.contextWindow;
-	}
-
-	getReserveTokens(): number {
-		return this.options.reserveTokens ?? 16_384;
+	getContextBudget(): ContextBudget {
+		const budget = this.options.getContextBudget();
+		return {
+			hardContextLimit: budget.hardContextLimit ?? 200_000,
+			reserveTokens: budget.reserveTokens ?? 16_384,
+			keepRecentTokens: budget.keepRecentTokens ?? 20_000,
+		};
 	}
 
 	getLastUsage(): { usage: ModelUsage; messageIndex: number } | null {
@@ -378,6 +382,10 @@ export class ConversationContext {
 		});
 	}
 
+	private getBudget(): ContextBudget {
+		return this.getContextBudget();
+	}
+
 	private estimateRequest(
 		systemPrompt: string,
 		toolSchemas: readonly ToolSchema[],
@@ -397,16 +405,11 @@ export class ConversationContext {
 			lastUsageMessageIndex: this.lastUsage?.messageIndex ?? null,
 		});
 
-		let threshold: number | undefined;
-		if (
-			typeof this.options.contextWindow === "number" &&
-			typeof this.options.reserveTokens === "number"
-		) {
-			threshold = Math.max(
-				0,
-				this.options.contextWindow - this.options.reserveTokens,
-			);
-		}
+		const budget = this.getBudget();
+		const threshold = Math.max(
+			0,
+			budget.hardContextLimit - budget.reserveTokens,
+		);
 
 		return {
 			totalTokens: tokens.totalTokens,
@@ -539,7 +542,7 @@ export class ConversationContext {
 								ledger: this.explorationLedger,
 								instructions: options?.instructions,
 								requestContext,
-								reserveTokens: this.options.reserveTokens ?? 16_384,
+								reserveTokens: this.getBudget().reserveTokens,
 								runId: this.runId,
 								sessionId: this.sessionId ?? undefined,
 								abortSignal: compactAbortController.signal,
@@ -616,7 +619,7 @@ export class ConversationContext {
 		const floor =
 			this.options.keepRecentMessagesFloor ??
 			DEFAULT_KEEP_RECENT_MESSAGES_FLOOR;
-		const keepRecentTokens = this.options.keepRecentTokens ?? 20_000;
+		const keepRecentTokens = this.getBudget().keepRecentTokens;
 		const messageFloorIndex = alignSplitIndex(
 			this.recentMessages,
 			Math.max(1, this.recentMessages.length - floor),
@@ -676,8 +679,8 @@ export class ConversationContext {
 		const floor =
 			this.options.keepRecentMessagesFloor ??
 			DEFAULT_KEEP_RECENT_MESSAGES_FLOOR;
-		const hardLimitTokens =
-			this.options.contextWindow - (this.options.reserveTokens ?? 16_384);
+		const budget = this.getBudget();
+		const hardLimitTokens = budget.hardContextLimit - budget.reserveTokens;
 
 		while (
 			this.estimateRequest(systemPrompt, toolSchemas).totalTokens >

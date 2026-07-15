@@ -61,7 +61,11 @@ test("compact appends a CompactionEntry whose firstKeptEntryId matches the new r
 		finishReason: "stop",
 	}));
 	const context = new ConversationContext({
-		contextWindow: 1_000_000, // appendMessages must not auto-summarize
+		getContextBudget: () => ({
+			hardContextLimit: 1_000_000,
+			reserveTokens: 16_384,
+			keepRecentTokens: 20_000,
+		}), // appendMessages must not auto-summarize
 		summaryEnabled: true,
 	});
 

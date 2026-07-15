@@ -26,14 +26,13 @@ export function formatContextWindowSummary(state: ChatReplState): string {
 		lastUsageMessageIndex: lastUsage?.messageIndex ?? null,
 	});
 	const usedTokens = tokens.totalTokens;
-	const contextWindow = state.contextWindow.contextWindow;
-	const reserveTokens = state.contextWindow.reserveTokens;
-	const thresholdTokens = contextWindow - reserveTokens;
+	const budget = state.runtime.context.getContextBudget();
+	const thresholdTokens = budget.hardContextLimit - budget.reserveTokens;
 	const remainingTokens = thresholdTokens - usedTokens;
 
 	return [
 		`Context window: ${usedTokens}/${thresholdTokens} tokens used (${formatPercent(usedTokens, thresholdTokens)}). Remaining: ${formatSignedTokens(remainingTokens)}.`,
-		`Reserve tokens: ${reserveTokens}. Trigger threshold: ${thresholdTokens} tokens (= context_window - reserve_tokens).`,
+		`Reserve tokens: ${budget.reserveTokens}. Trigger threshold: ${thresholdTokens} tokens (= hard_context_limit - reserve_tokens).`,
 		`System prompt: ${tokens.systemPromptTokens} tokens (${formatPercent(tokens.systemPromptTokens, usedTokens)} of total).`,
 		...systemPromptSections.map(
 			(section) => `  - ${section.label}: ${section.tokens} tokens.`,

@@ -128,7 +128,7 @@ export async function writeTestConfig(
 		modelBaseURL?: string;
 		modelApiKey?: string;
 		modelName?: string;
-		contextWindow?: number;
+		hardContextLimit?: number;
 		reserveTokens?: number;
 	},
 ): Promise<string> {
@@ -149,9 +149,7 @@ export async function writeTestConfig(
 			"timeout_ms = 2000",
 			"max_retries = 0",
 			"retry_base_delay_ms = 10",
-			"",
-			"[agent]",
-			`context_window = ${overrides?.contextWindow ?? 200_000}`,
+			`hard_context_limit = ${overrides?.hardContextLimit ?? 200_000}`,
 			`reserve_tokens = ${overrides?.reserveTokens ?? 16_384}`,
 		].join("\n"),
 		"utf8",

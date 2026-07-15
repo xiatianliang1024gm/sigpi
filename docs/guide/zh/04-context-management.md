@@ -15,7 +15,7 @@ SigPi 用三个协同的部分把工作上下文控制在 token 窗口内：
 
 ## 压缩（Compaction）：留出空间
 
-一轮结束时调用 `appendMessages`，上下文会把估计 token 数与预算（`contextWindow - reserveTokens`）
+一轮结束时调用 `appendMessages`，上下文会把估计 token 数与预算（`hard_context_limit - reserveTokens`）
 比较。若超出，它就**压缩**：
 
 - 更早的近期消息通过一次模型调用（摘要）折叠进**摘要**。
@@ -49,9 +49,9 @@ SigPi 用三个协同的部分把工作上下文控制在 token 窗口内：
 
 来自 `runTurn` 与上下文选项：
 
-- `contextWindow` — 模型的总 token 预算。
-- `reserveTokens` — 为下一次请求保留的余量。
-- `keepRecentTokens` — 多少近期尾部保持逐字。
+- `hard_context_limit` — 模型的总 token 预算（按模型配置；默认 `200_000`）。
+- `reserveTokens` — 为下一次请求保留的余量（按模型配置）。
+- `keepRecentTokens` — 多少近期尾部保持逐字（按模型配置）。
 - `TURN_CHECKPOINT_KEEP_LAST_MESSAGES = 4` — 轮内 checkpoint 保留几条消息。
 - `DEDUP_WINDOW = 6` — 工具调用去重向后看多远（第二章）。
 

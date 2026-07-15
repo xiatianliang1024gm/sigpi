@@ -77,3 +77,4 @@ Came from a `/grilling` session (grill-with-docs) triggered by a "stuck in think
 | # | Title | Commit | One-liner |
 |---|-------|--------|-----------|
 | [0020](./0020-streaming-render-and-interrupt-fix.md) | Streaming render of reasoning/content + interrupt-not-retry | `618e08c` | Adapter captures `reasoning_content`; one `onDelta` chain carries `{reasoningDelta, contentDelta}` → `model_delta` event (UI v1 renders reasoning); ESC aborts the turn instead of retrying; idle timer unchanged |
+| [0021](./0021-context-budget-model-level.md) | Context budget moves to model level | `—` | `contextWindow`→`hard_context_limit`; `reserveTokens`/`keepRecentTokens` move into `[models.<id>]`; budget getter follows active model on `/model switch`; `maxTokens <= hard_context_limit` validated at load |

@@ -223,7 +223,7 @@ coherent rather than a crash.
 ## In-turn checkpoint compaction
 
 During a long turn, `workingMessages` can itself grow past the budget. `maybeCompactWorkingMessages()`
-watches the estimated token count and, when it exceeds `contextWindow - reserveTokens`, summarizes
+watches the estimated token count and, when it exceeds `hardContextLimit - reserveTokens`, summarizes
 the *early part* of the turn into a checkpoint, keeps only the last `TURN_CHECKPOINT_KEEP_LAST_MESSAGES`
 (**4**) messages, and rebuilds `workingMessages` with the checkpoint prepended. The model therefore
 keeps working on a long task without losing the thread. (Full context management is covered in the

@@ -18,7 +18,7 @@ The owner of all three is `ConversationContext` (`src/agent/context.ts`).
 ## Compaction: summarizing to make room
 
 When `appendMessages` is called at the end of a turn, the context checks the estimated token
-count against the budget (`contextWindow - reserveTokens`). If it is over, it **compacts**:
+count against the budget (`hard_context_limit - reserveTokens`). If it is over, it **compacts**:
 
 - Older recent messages are folded into the **summary** by the model (a summarization call).
 - The recent-message tail is trimmed to `keepRecentTokens`.
@@ -55,9 +55,9 @@ This is a small but real lesson: a production agent does not just manage *tokens
 
 From `runTurn` and the context options:
 
-- `contextWindow` — the model's total token budget.
-- `reserveTokens` — headroom kept free for the next request.
-- `keepRecentTokens` — how much of the recent tail stays verbatim.
+- `hard_context_limit` — the model's total token budget (per-model; default `200_000`).
+- `reserveTokens` — headroom kept free for the next request (per-model).
+- `keepRecentTokens` — how much of the recent tail stays verbatim (per-model).
 - `TURN_CHECKPOINT_KEEP_LAST_MESSAGES = 4` — how many messages survive an in-turn checkpoint.
 - `DEDUP_WINDOW = 6` — how far back tool-call deduplication looks (Chapter 2).
 

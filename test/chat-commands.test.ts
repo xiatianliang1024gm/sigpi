@@ -497,6 +497,7 @@ test("/model switches to the interactively selected model", async () => {
 								providerUpdated = true;
 							},
 						},
+						setActiveModel: () => {},
 					},
 					models: {
 						fast: {
@@ -558,6 +559,7 @@ test("/model switches the active provider for the current chat state", async () 
 								providerUpdated = true;
 							},
 						},
+						setActiveModel: () => {},
 					},
 					models: {
 						fast: {
@@ -617,6 +619,7 @@ test("/model remembers a successful model switch", async () => {
 						turn: {
 							setProvider: () => {},
 						},
+						setActiveModel: () => {},
 					},
 					models: {
 						fast: {
@@ -667,6 +670,7 @@ test("/model does not remember an unknown model", async () => {
 						turn: {
 							setProvider: () => {},
 						},
+						setActiveModel: () => {},
 					},
 					models: {
 						fast: {
@@ -814,6 +818,11 @@ test("/summary reports context structure instead of recent message bodies", asyn
 			({
 				runtime: {
 					context: {
+						getContextBudget: () => ({
+							hardContextLimit: 200_000,
+							reserveTokens: 16384,
+							keepRecentTokens: 20_000,
+						}),
 						getSummary: () => "compressed memory",
 						getLastUsage: () => null,
 						getRecentMessages: () => [
@@ -852,10 +861,6 @@ test("/summary reports context structure instead of recent message bodies", asyn
 					],
 				},
 				loadedSkillNames: [],
-				contextWindow: {
-					contextWindow: 200_000,
-					reserveTokens: 16384,
-				},
 			}) as never,
 		setState: () => {},
 		store: {} as never,
