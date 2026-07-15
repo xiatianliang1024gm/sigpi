@@ -212,6 +212,8 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		console.log(`[session-warning] ${warning}`);
 	}
 
+	console.log("Interactive chat started.");
+
 	const finalState = await runChatReplLoop(
 		{
 			state,
