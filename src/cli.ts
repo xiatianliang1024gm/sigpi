@@ -66,9 +66,11 @@ function readPackageVersion(): string {
 
 function printUsage(): void {
 	console.log("Usage:");
+	console.log(
+		"  pnpm dev [chat] [--session <id>] [--continue] [--new] [--title <title>]",
+	);
 	console.log("  pnpm dev init [--force]");
 	console.log("  pnpm dev config validate");
-	console.log("  pnpm dev chat [--session <id>] [--new] [--title <title>]");
 	console.log(
 		'  pnpm dev ask [--session <id>] [--new] [--title <title>] "your question"',
 	);
@@ -80,7 +82,7 @@ function printUsage(): void {
 	console.log(`Project config: ${getDefaultProjectConfigPath()}`);
 	console.log("");
 	console.log(
-		"`chat` creates and attaches a session by default. Use `ask` for one-off prompts.",
+		"`chat` is the default command: `sigpi` with no subcommand starts a chat. Use `--continue` to resume the most recent session for this project, or `--session <id>` to resume a specific one. Use `ask` for one-off prompts.",
 	);
 	console.log(`In chat: use ${formatDocumentedChatCommands()}.`);
 }
@@ -135,8 +137,10 @@ async function runAsk(args: string[]): Promise<void> {
 	}
 
 	if (runtime.sessionRuntime) {
+		const askSessionId = runtime.sessionRuntime.getCurrentSession().sessionId;
+		console.log(`[session] ${askSessionId}`);
 		console.log(
-			`[session] ${runtime.sessionRuntime.getCurrentSession().sessionId}`,
+			`To continue this session, run: sigpi --session ${askSessionId}`,
 		);
 	}
 	console.log("");
@@ -165,11 +169,20 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		config,
 	});
 	const prunedSessionCount = await cleanupStore.pruneEmptySessions();
-	const shouldCreateSession = !parsed.sessionId;
+
+	// `--continue` attaches the most recent session for the current working
+	// directory; if none exists, a fresh session is created.
+	let resolvedSessionId = parsed.sessionId;
+	if (parsed.continueSession) {
+		const recent = await findMostRecentSession(cleanupStore);
+		resolvedSessionId = recent?.sessionId;
+	}
+
+	const shouldCreateSession = !resolvedSessionId;
 	const runtime = await createAgentRuntime({
 		config,
 		progressReporter,
-		sessionId: parsed.sessionId,
+		sessionId: resolvedSessionId,
 		createSession: shouldCreateSession,
 		sessionTitle: parsed.sessionTitle,
 	});
@@ -184,9 +197,6 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		runtime.skillWarnings.map((warning) => warning.message),
 	);
 
-	console.log(
-		`Interactive chat started. Press Enter to send. Press Esc while a turn is running to stop the current operation. Bracketed multiline paste is buffered until you press Enter. Use ${formatDocumentedChatCommands()}.`,
-	);
 	console.log(`Logs: ${resolveDatedLogFilePath(config.logging.filePath)}`);
 	console.log(
 		`Shell: ${state.shellRuntime.shell} on ${state.shellRuntime.platform}`,
@@ -201,7 +211,7 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		console.log(`[session-warning] ${warning}`);
 	}
 
-	await runChatReplLoop(
+	const finalState = await runChatReplLoop(
 		{
 			state,
 			store: runtime.store,
@@ -219,6 +229,16 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 			}),
 		},
 	);
+
+	// Print a copy-pasteable hint so the user can resume this session later.
+	const exitedSessionId =
+		finalState.runtime.session?.sessionId ?? runtime.session?.sessionId;
+	if (exitedSessionId) {
+		console.log("");
+		console.log(
+			`To continue this session, run: sigpi --session ${exitedSessionId}`,
+		);
+	}
 }
 
 function printResult(
@@ -1099,6 +1119,7 @@ function parseSessionArgs(args: string[]): {
 	sessionId?: string;
 	createSession: boolean;
 	noSession: boolean;
+	continueSession: boolean;
 	sessionTitle?: string;
 	rest: string[];
 } {
@@ -1106,6 +1127,7 @@ function parseSessionArgs(args: string[]): {
 	let sessionId: string | undefined;
 	let createSession = false;
 	let noSession = false;
+	let continueSession = false;
 	let sessionTitle: string | undefined;
 
 	for (let index = 0; index < args.length; index += 1) {
@@ -1124,6 +1146,11 @@ function parseSessionArgs(args: string[]): {
 
 		if (value === "--no-session") {
 			noSession = true;
+			continue;
+		}
+
+		if (value === "--continue") {
+			continueSession = true;
 			continue;
 		}
 
@@ -1146,13 +1173,33 @@ function parseSessionArgs(args: string[]): {
 		throw new Error("--no-session cannot be combined with --session or --new.");
 	}
 
+	if (continueSession && (sessionId || createSession || noSession)) {
+		throw new Error(
+			"--continue cannot be combined with --session, --new, or --no-session.",
+		);
+	}
+
 	return {
 		sessionId,
 		createSession,
 		noSession,
+		continueSession,
 		sessionTitle,
 		rest,
 	};
+}
+
+/**
+ * Returns the most recently updated session for the current working directory,
+ * or `null` if there are no sessions yet. The store is already scoped to the
+ * cwd (sessions are partitioned per project directory), so the index is the
+ * right source of truth and is sorted newest-first.
+ */
+async function findMostRecentSession(
+	store: SessionStore,
+): Promise<{ sessionId: string } | null> {
+	const sessions = await store.listSessions();
+	return sessions[0] ? { sessionId: sessions[0].sessionId } : null;
 }
 
 async function runInitCommand(args: string[]): Promise<void> {
@@ -1249,28 +1296,34 @@ async function main(): Promise<void> {
 		return;
 	}
 
-	if (command === "ask") {
-		await runAsk(rest);
-		return;
-	}
-
-	if (command === "init") {
-		await runInitCommand(rest);
-		return;
-	}
-
-	if (command === "config") {
-		await runConfigCommand(rest);
-		return;
-	}
-
-	if (command === "chat") {
-		await runChatWithArgs(rest);
-		return;
-	}
-
-	if (command === "session") {
-		await runSessionCommand(rest);
+	// `chat` is the default subcommand: `sigpi` with no subcommand (or a
+	// top-level flag like --continue / --session) starts an interactive chat.
+	if (
+		command === "chat" ||
+		command.startsWith("--") ||
+		command === "ask" ||
+		command === "init" ||
+		command === "config" ||
+		command === "session"
+	) {
+		if (command === "ask") {
+			await runAsk(rest);
+			return;
+		}
+		if (command === "init") {
+			await runInitCommand(rest);
+			return;
+		}
+		if (command === "config") {
+			await runConfigCommand(rest);
+			return;
+		}
+		if (command === "session") {
+			await runSessionCommand(rest);
+			return;
+		}
+		// `chat` or a bare top-level flag: default to chat.
+		await runChatWithArgs(command === "chat" ? rest : [command, ...rest]);
 		return;
 	}
 
