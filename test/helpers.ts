@@ -291,11 +291,12 @@ export async function runCliCommand(args: {
 			{
 				cwd: args.cwd,
 				env: {
-					// Keep the host HOME so the child still loads the developer's
-					// skills catalog (skill count affects compaction output). But
-					// neutralize any proxy so the fake OpenAI handler is used and no
-					// request escapes to the real network: clear ambient HTTP(S)_PROXY
-					// and force the active model's proxy to empty via MODEL_PROXY.
+					// Inherit the ambient environment, but neutralize any proxy so the
+					// fake OpenAI handler is used and no request escapes to the real
+					// network: clear ambient HTTP(S)_PROXY and force the active model's
+					// proxy to empty via MODEL_PROXY. Callers that need a hermetic run
+					// (no dependence on the host's ~/.sigpi config) pass their own HOME
+					// via args.env, which overrides the inherited one below.
 					...process.env,
 					HTTP_PROXY: "",
 					HTTPS_PROXY: "",

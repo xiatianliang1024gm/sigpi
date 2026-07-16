@@ -11,6 +11,11 @@ import {
 const bootstrapPath = path.resolve("scripts/fake-openai-bootstrap.mjs");
 const handlerPath = path.resolve("scripts/fake-openai-cli-handler.mjs");
 const cwd = await createTempDir("sigpi-cli-int-");
+// Run the child CLI with a hermetic HOME so the test never depends on the
+// host machine's ~/.sigpi config (a stray global config masked a real bug,
+// and a missing one broke CI). The project fixtures are still loaded via
+// --approve below.
+const trustHome = await createTempDir("sigpi-cli-int-home-");
 
 await writeTestConfig(cwd, {
 	modelBaseURL: "https://fake-openai.local/v1",
@@ -39,6 +44,9 @@ const nodeArgs = ["--import", bootstrapPath];
 async function runTrustedCli(args) {
 	return runCliCommand({
 		...args,
+		// Override HOME so the child cannot read the host's ~/.sigpi config.
+		// (runCliCommand keeps process.env by default; we replace HOME only.)
+		env: { ...args.env, HOME: trustHome },
 		commandArgs: [...args.commandArgs, "--approve"],
 	});
 }
