@@ -5,6 +5,7 @@ import type {
 	ConversationContextState,
 	Message,
 	MessageEntry,
+	ModelUsage,
 	PersistedSession,
 	SessionEntry,
 } from "../types.js";
@@ -184,6 +185,15 @@ export function appendMessageEntries(args: {
 	messages: Message[];
 	turnId: number | null;
 	timestamp?: string;
+	/**
+	 * Optional provider-reported usage for the assistant message in
+	 * `messages`. When provided, it is attached to the resulting
+	 * `MessageEntry` so resuming a session can restore the ground-truth
+	 * token count without re-querying the model. Only the assistant
+	 * message's entry receives the usage; non-assistant entries are
+	 * persisted without it.
+	 */
+	usage?: ModelUsage;
 }): SessionEntry[] {
 	const timestamp = args.timestamp ?? new Date().toISOString();
 	const newEntries: MessageEntry[] = args.messages.map(
@@ -193,13 +203,17 @@ export function appendMessageEntries(args: {
 					"appendMessageEntries requires every message to carry a stable id",
 				);
 			}
-			return {
+			const entry: MessageEntry = {
 				kind: "message",
 				id: message.id,
 				turnId: args.turnId,
 				timestamp,
 				message,
 			};
+			if (args.usage && message.role === "assistant") {
+				entry.usage = args.usage;
+			}
+			return entry;
 		},
 	);
 	return [...args.entries, ...newEntries];

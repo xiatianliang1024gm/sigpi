@@ -15,6 +15,7 @@ import type {
 	ConversationContextState,
 	ExplorationLedger,
 	Message,
+	MessageEntry,
 	ModelProvider,
 	ModelUsage,
 	SessionEntry,
@@ -189,6 +190,7 @@ export class ConversationContext {
 			messages: tagged,
 			turnId: parseTurnId(requestContext?.turnId),
 			timestamp: new Date().toISOString(),
+			usage: options?.usage,
 		});
 
 		if (options?.usage) {
@@ -339,9 +341,26 @@ export class ConversationContext {
 				recentMessages: state.recentMessages,
 			});
 		}
-		// Hydrated sessions have no provider usage info available; fall back
-		// to the chars/4 heuristic until the first model response reports it.
+		// Restore the most recent provider-reported usage from the entry
+		// stream so resumed sessions keep the ground-truth token count
+		// instead of falling back to the chars/4 heuristic. We scan
+		// `recentMessages` (not `entries`) because `lastUsage.messageIndex`
+		// is an index into the live window.
 		this.lastUsage = null;
+		for (let i = this.recentMessages.length - 1; i >= 0; i -= 1) {
+			const message = this.recentMessages[i];
+			if (!message || message.role !== "assistant") {
+				continue;
+			}
+			const entry = this.entries.find(
+				(candidate): candidate is MessageEntry =>
+					candidate.kind === "message" && candidate.id === message.id,
+			);
+			if (entry?.usage) {
+				this.lastUsage = { usage: entry.usage, messageIndex: i };
+				break;
+			}
+		}
 	}
 
 	reset(): void {

@@ -527,6 +527,13 @@ export interface MessageEntry {
 	turnId: number | null;
 	timestamp: string;
 	message: Message;
+	/**
+	 * Provider-reported token usage for the assistant message in this entry.
+	 * Only set on assistant entries that came back with a `ModelResponse.usage`
+	 * payload. Persisted so that resuming a session can restore the
+	 * `lastUsage` ground-truth context size without re-querying the model.
+	 */
+	usage?: ModelUsage;
 }
 
 export interface CompactionEntry {

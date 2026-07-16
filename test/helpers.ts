@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -84,6 +84,25 @@ let tempCleanupRegistered = false;
  * to assert on message shape without caring about the randomly-generated
  * stable id that the session store now mints for every persisted message.
  */
+/**
+ * Run a `git` command in `cwd` for tests, without inheriting a `GIT_DIR` /
+ * `GIT_WORK_TREE` from the environment. When tests run inside a git hook
+ * the parent process exports an absolute `GIT_DIR`, which would otherwise
+ * make every nested `git` call resolve to the outer repository instead of
+ * `cwd`.
+ */
+export function gitIn(cwd: string, command: string): string {
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	delete env.GIT_DIR;
+	delete env.GIT_WORK_TREE;
+	delete env.GIT_INDEX_FILE;
+	return execSync(`git ${command}`, {
+		cwd,
+		env,
+		encoding: "utf8",
+	}).toString();
+}
+
 export function stripMessageIds<T extends { id?: string }>(
 	messages: readonly T[],
 ): Array<Omit<T, "id">> {

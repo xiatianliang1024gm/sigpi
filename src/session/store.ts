@@ -156,6 +156,14 @@ const sessionTurnHistoryEntrySchema = z.object({
 	interruptStage: z.enum(["model", "tool"]).nullable().optional(),
 });
 
+const modelUsageSchema = z.object({
+	input: z.number().int().nonnegative(),
+	output: z.number().int().nonnegative(),
+	cacheRead: z.number().int().nonnegative(),
+	cacheWrite: z.number().int().nonnegative(),
+	totalTokens: z.number().int().nonnegative(),
+});
+
 const messageEntrySchema = z.object({
 	kind: z.literal("message"),
 	id: z.string().min(1),
@@ -170,6 +178,11 @@ const messageEntrySchema = z.object({
 		assistantMessageSchema,
 		toolMessageSchema,
 	]),
+	// Provider-reported token usage for the assistant message in this entry.
+	// Only set on assistant entries that came back with a `ModelResponse.usage`
+	// payload. Persisted so that resuming a session can restore the
+	// `lastUsage` ground-truth context size without re-querying the model.
+	usage: modelUsageSchema.optional(),
 });
 
 const compactionEntrySchema = z.object({

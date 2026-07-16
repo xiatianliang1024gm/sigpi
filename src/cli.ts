@@ -363,11 +363,12 @@ export async function runChatReplLoop(
 	const processOutputMode = options.processOutputMode ?? "detailed";
 	let turnNumber = 0;
 
-	const refreshStatusBar = (
+	const refreshStatusBar = async (
 		handle: RunningTurnInputListenerHandle | null,
 		event: TurnProgressEvent | null = latestProgressEvent,
-	): void => {
-		handle?.setStatusBarText(formatStatusBarForEvent(state, event));
+	): Promise<void> => {
+		const text = await formatStatusBarForEvent(state, event);
+		handle?.setStatusBarText(text);
 	};
 
 	while (true) {
@@ -379,7 +380,7 @@ export async function runChatReplLoop(
 				input: options.input,
 				output: options.output,
 				commands,
-				statusBarText: formatStatusBar(state),
+				statusBarText: await formatStatusBar(state),
 				inputHistory: options.inputHistory,
 			}));
 		if (line === null) {
@@ -431,7 +432,7 @@ export async function runChatReplLoop(
 			prompt: options.prompt ?? "> ",
 			input: options.input,
 			output: options.output,
-			statusBarText: formatStatusBar(state),
+			statusBarText: await formatStatusBar(state),
 			inputHistory: options.inputHistory,
 			reasoningStream,
 			onEscape: () => {
@@ -450,7 +451,7 @@ export async function runChatReplLoop(
 						interruptSource: "user_escape",
 					} satisfies TurnProgressEvent;
 					latestProgressEvent = event;
-					refreshStatusBar(runningInput, event);
+					void refreshStatusBar(runningInput, event);
 					options.progressReporter(event);
 					return;
 				}
@@ -467,7 +468,7 @@ export async function runChatReplLoop(
 		});
 		const statusBarProgressListener = (event: TurnProgressEvent) => {
 			latestProgressEvent = event;
-			refreshStatusBar(runningInput, event);
+			void refreshStatusBar(runningInput, event);
 			if (event.type === "model_delta") {
 				if (event.reasoningDelta) {
 					runningInput?.appendReasoning(event.reasoningDelta);
