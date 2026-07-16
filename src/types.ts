@@ -107,13 +107,6 @@ export interface ToolExecutionContext {
 	abortSignal?: AbortSignal;
 	/** Present only for the `bash` tool: shared working dir + output roots. */
 	bash?: BashToolContext;
-	/**
-	 * Additional roots (outside `cwd`) the read-only tools (`read`, `grep`,
-	 * `glob`, `local-search`) may open. Populated at runtime with the session
-	 * bash output dir and the directories of loaded skills, so the agent can
-	 * read progressive-disclosure skill files that live outside the workspace.
-	 */
-	allowedReadRoots?: string[];
 }
 
 /**
@@ -576,14 +569,9 @@ export interface AgentRunnerOptions {
 	/**
 	 * Shared `bash` tool context (working dir + output roots). Plumbed from
 	 * the runtime so the `bash` tool can carry `cd` across commands and
-	 * write overflow/background output where the `read` tool can open it.
+	 * write overflow/background output.
 	 */
 	bashToolContext?: BashToolContext;
-	/**
-	 * Trusted read roots passed through to every tool's execution context
-	 * (see `ToolExecutionContext.allowedReadRoots`).
-	 */
-	allowedReadRoots?: string[];
 }
 
 export interface ExecutedToolCall {

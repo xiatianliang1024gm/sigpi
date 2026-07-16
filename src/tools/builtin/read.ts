@@ -142,7 +142,6 @@ export function createReadTool(tracker: ReadTracker): ToolDefinition<ReadArgs> {
 			const { resolved, relative } = resolveWorkspacePath(
 				context.cwd,
 				filePath,
-				context.allowedReadRoots ?? [],
 			);
 			const content = await readFile(resolved, "utf8");
 			const segments = splitIntoLineSegments(content);

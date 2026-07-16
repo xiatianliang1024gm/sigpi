@@ -32,7 +32,6 @@ import { captureRcDefinitions, detectShellRuntime } from "./shell.js";
 import { loadSkillCatalog } from "./skills/catalog.js";
 import { BackgroundTaskManager } from "./tools/background.js";
 import { createDefaultToolRegistry } from "./tools/index.js";
-import { buildTrustedReadRoots } from "./tools/path-utils.js";
 import type {
 	LoadedSession,
 	LoadedSkill,
@@ -310,11 +309,6 @@ export async function createAgentRuntime(
 		tasks: backgroundTaskManager,
 	};
 
-	const trustedReadRoots = await buildTrustedReadRoots([
-		bashOutputDir,
-		...skillCatalog.loadedSkills.map((skill) => skill.dir),
-	]);
-
 	const runner = new AgentRunner({
 		provider,
 		tools,
@@ -329,7 +323,6 @@ export async function createAgentRuntime(
 			runId,
 			sessionId: sessionState.session?.sessionId ?? null,
 			bashToolContext,
-			allowedReadRoots: trustedReadRoots,
 		},
 	});
 

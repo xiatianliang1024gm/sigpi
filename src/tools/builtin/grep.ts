@@ -141,11 +141,7 @@ export function createGrepTool(
 			context,
 		) => {
 			const searchPath = searchPathArg ?? ".";
-			const { resolved } = resolveWorkspacePath(
-				context.cwd,
-				searchPath,
-				context.allowedReadRoots ?? [],
-			);
+			const { resolved } = resolveWorkspacePath(context.cwd, searchPath);
 
 			const args = buildRipgrepArgs({
 				pattern,
@@ -190,7 +186,6 @@ export function createGrepTool(
 					const fallback = await grepWorkspaceContentFallback({
 						cwd: context.cwd,
 						startPath: resolved,
-						allowedRoots: context.allowedReadRoots ?? [],
 						pattern,
 						glob,
 						type,

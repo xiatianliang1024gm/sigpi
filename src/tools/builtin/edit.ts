@@ -3,7 +3,7 @@ import { z } from "zod";
 import { asInlineCode, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
 import { createEditSummary } from "../edit-summary.js";
-import { resolveWritableWorkspacePath } from "../path-utils.js";
+import { resolveWorkspacePath } from "../path-utils.js";
 import type { ReadTracker } from "../read-tracker.js";
 import { ToolExecutionError } from "../registry.js";
 import { joinRenderedSections, withRendered } from "../render.js";
@@ -66,10 +66,7 @@ export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 			let resolved: string;
 			let relative: string;
 			try {
-				({ resolved, relative } = resolveWritableWorkspacePath(
-					context.cwd,
-					file_path,
-				));
+				({ resolved, relative } = resolveWorkspacePath(context.cwd, file_path));
 			} catch (error) {
 				if (error instanceof Error) {
 					throw new ToolExecutionError(error.message);

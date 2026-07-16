@@ -158,7 +158,6 @@ test("bash carries the working directory across calls within the project", async
 	const ctx = {
 		cwd: startDir,
 		bash: { workingDir, outputDir },
-		allowedReadRoots: [outputDir],
 	};
 
 	const subDir = path.join(startDir, `bash-cd-${randomUUID()}`);
@@ -205,7 +204,6 @@ test("bash resets the working directory to the project dir when a command escape
 	const ctx = {
 		cwd: startDir,
 		bash: { workingDir, outputDir },
-		allowedReadRoots: [outputDir],
 	};
 
 	await tools.execute(
@@ -244,7 +242,6 @@ test("bash runs a command in the background and tracks it", async () => {
 			outputDir,
 			tasks: manager,
 		},
-		allowedReadRoots: [outputDir],
 	};
 
 	const result = await tools.execute(
@@ -327,7 +324,6 @@ test("bash does not hit E2BIG with a very large captured-rc preamble", async () 
 			outputDir,
 			rcDefinitionsFile: rcFile,
 		},
-		allowedReadRoots: [outputDir],
 	};
 
 	const result = await tools.execute(
@@ -358,7 +354,6 @@ test("bash resets to the project working dir when maintainProjectWorkingDir is s
 	const ctx = {
 		cwd: startDir,
 		bash: { workingDir, outputDir },
-		allowedReadRoots: [outputDir],
 	};
 
 	await tools.execute(
@@ -1811,7 +1806,7 @@ test("edit tool edits a path outside the workspace directory", async () => {
 			arguments: { file_path: notePath },
 			rawArguments: "{}",
 		},
-		{ cwd, allowedReadRoots: [scratch] },
+		{ cwd },
 	);
 
 	const result = await tools.execute(
@@ -1833,10 +1828,8 @@ test("edit tool edits a path outside the workspace directory", async () => {
 });
 
 test("read tool succeeds on a skill discovery root (read capability unchanged)", async () => {
-	// ADR 0017: skill roots stay read-only for *writes*, but reads must keep
-	// working. The runtime registers each loaded skill's `dir` as a trusted
-	// read root, so pointing the read tool at a SKILL.md under a skill root
-	// must return its content, not a denial.
+	// Reads are unrestricted (the OS is the boundary, ADR 0022/0023), so the
+	// read tool returns a SKILL.md's content regardless of where it lives.
 	const cwd = await createTempDir("sigpi-skill-read-cwd-");
 	const skillRoot = await createTempDir("sigpi-skill-read-root-");
 	const skillFile = path.join(skillRoot, "SKILL.md");
@@ -1854,7 +1847,7 @@ test("read tool succeeds on a skill discovery root (read capability unchanged)",
 			arguments: { file_path: skillFile },
 			rawArguments: "{}",
 		},
-		{ cwd, allowedReadRoots: [skillRoot] },
+		{ cwd },
 	);
 
 	assert.equal(result.ok, true);
@@ -1875,7 +1868,7 @@ test("glob and grep succeed on a skill discovery root (read capability unchanged
 			arguments: { pattern: "*.md", path: skillRoot },
 			rawArguments: "{}",
 		},
-		{ cwd, allowedReadRoots: [skillRoot] },
+		{ cwd },
 	);
 	assert.equal(globResult.ok, true);
 
@@ -1887,7 +1880,7 @@ test("glob and grep succeed on a skill discovery root (read capability unchanged
 			arguments: { pattern: "needle-token", path: skillRoot },
 			rawArguments: "{}",
 		},
-		{ cwd, allowedReadRoots: [skillRoot] },
+		{ cwd },
 	);
 	assert.equal(grepResult.ok, true);
 });
