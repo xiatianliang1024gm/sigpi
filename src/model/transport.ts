@@ -614,12 +614,15 @@ export class ModelTransport {
 
 			const response = adapter.finalize();
 			// If the idle/stall timer fired, the stream ended because the server
-			// went quiet — classify that as a `timeout` (matching the pre-stream
-			// abort path) rather than a generic stream_error. A complete turn
-			// always carries a `finish_reason`, so a missing one on a stream that
-			// was NOT idle-timed out means it was truncated mid-answer (the old
-			// transport's "ended before [DONE]" stream_error). Surface it rather
-			// than silently accepting a partial turn.
+			// went quiet — classify that as a `timeout` rather than a generic
+			// stream_error. Otherwise the SDK consumed the `[DONE]` sentinel, so the
+			// stream reached a normal completion. Some responses-API gateways
+			// stream `[DONE]` but omit the formal response.completed / status event,
+			// leaving `finishReason` null — that is still a completed turn (the
+			// pre-SDK transport returned finalize() on `[DONE]` regardless of
+			// finish_reason). Only a stream that ended WITHOUT a completion signal
+			// and produced no usable output is a genuine stream_error; the
+			// adapter's isComplete() distinguishes the two.
 			if (timeoutController.signal.aborted) {
 				throw new ModelRequestError(
 					`Model request timed out after ${this.config.timeoutMs}ms.`,
@@ -627,14 +630,17 @@ export class ModelTransport {
 					{ timeoutMs: this.config.timeoutMs },
 				);
 			}
-			if (response.finishReason == null) {
-				throw new ModelRequestError(
-					"Model SSE stream ended without a finish_reason; the response is incomplete.",
-					"stream_error",
-					{},
-				);
+			if (adapter.isComplete()) {
+				return response;
 			}
-			return response;
+			if (response.finishReason != null) {
+				return response;
+			}
+			throw new ModelRequestError(
+				"Model SSE stream ended without a finish_reason; the response is incomplete.",
+				"stream_error",
+				{},
+			);
 		} finally {
 			clearTimeout(idleTimer);
 			try {
