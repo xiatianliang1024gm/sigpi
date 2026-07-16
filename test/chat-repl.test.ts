@@ -459,7 +459,9 @@ test("runtimeToChatReplState clears a plan left over from a previous session", a
 	const cwd = await realpath(
 		await createTempDir("sigpi-chat-repl-plan-clear-"),
 	);
+	const homeDir = await createTempDir("sigpi-chat-repl-plan-clear-home-");
 	const previousCwd = process.cwd();
+	const restoreHome = setTestHome(homeDir);
 	process.chdir(cwd);
 
 	try {
@@ -478,6 +480,7 @@ test("runtimeToChatReplState clears a plan left over from a previous session", a
 	} finally {
 		setCurrentPlan(null);
 		process.chdir(previousCwd);
+		restoreHome();
 	}
 });
 

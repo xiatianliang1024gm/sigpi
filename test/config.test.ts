@@ -641,3 +641,49 @@ test("loadAppConfig rejects invalid process_output", async () => {
 		/compact|detailed/,
 	);
 });
+
+test("parseTomlConfig rejects removed execution-guard keys under [tools.bash]", () => {
+	const toml = [
+		"[model]",
+		'default = "m"',
+		"[models.m]",
+		'base_url = "https://x/v1"',
+		'api_key = "k"',
+		'name = "n"',
+		"[tools.bash]",
+		'mode = "full_access"',
+		'allowed_roots = ["/tmp"]',
+	].join("\n");
+
+	assert.throws(
+		() => parseTomlConfig(toml),
+		/removed execution-guard/i,
+		"config with removed mode/allowed_roots should fail to parse",
+	);
+});
+
+test("loadAppConfig fails to load a config file carrying removed [tools.bash] guards", async () => {
+	const cwd = await createTempDir("sigpi-config-removed-guards-project-");
+	const homeDir = await createTempDir("sigpi-config-removed-guards-home-");
+	await mkdir(path.join(homeDir, ".sigpi"), { recursive: true });
+	await writeFile(
+		path.join(homeDir, ".sigpi", "config.toml"),
+		[
+			"[model]",
+			'default = "m"',
+			"[models.m]",
+			'base_url = "https://x/v1"',
+			'api_key = "k"',
+			'name = "n"',
+			"[tools.bash]",
+			'mode = "full_access"',
+		].join("\n"),
+		"utf8",
+	);
+
+	assert.throws(
+		() => loadAppConfig({ cwd, homeDir, env: {} }),
+		/Failed to load config file|removed execution-guard/i,
+		"config file with removed mode key should fail to load",
+	);
+});
