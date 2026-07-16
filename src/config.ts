@@ -359,6 +359,24 @@ export interface InitializeUserConfigOptions {
 	overwrite?: boolean;
 }
 
+/**
+ * Reads the global `default_project_trust` preference without validating the
+ * full config. Used by the pre-trust load in `resolveConfigAndTrust`: the only
+ * configuration source may be the still-gated project config, which must not be
+ * validated (and would fail model validation) before trust is resolved.
+ */
+export function readDefaultProjectTrust(
+	homeDir: string = os.homedir(),
+): ProjectTrustPreference {
+	try {
+		const userConfigPath = path.join(homeDir, ".sigpi", "config.toml");
+		const fileConfig = readConfigFile(userConfigPath);
+		return fileConfig.trust?.defaultProjectTrust ?? "ask";
+	} catch {
+		return "ask";
+	}
+}
+
 export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
 	const cwd = options.cwd ?? process.cwd();
 	const env = options.env ?? process.env;
