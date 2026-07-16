@@ -8,6 +8,7 @@ import type {
 	RuntimeLogger,
 } from "../types.js";
 import { ChatCompletionsAdapter } from "./chat-completions-adapter.js";
+import { getProxyFetch } from "./http-dispatcher.js";
 import { ResponsesAdapter } from "./responses-adapter.js";
 import { ModelTransport } from "./transport.js";
 import type { WireFormatAdapter } from "./wire-format.js";
@@ -18,10 +19,13 @@ import type { WireFormatAdapter } from "./wire-format.js";
  * openai-compatible path. SigPi keeps the `Wire format adapter` for
  * schema translation and supplies its own idle/stall timer + retry/backoff on
  * top. The SDK's own retry is disabled (`maxRetries: 0`) so SigPi's retry loop
- * governs (ADR-0022). `fetch` references the live global so a proxy-aware
- * dispatcher installed at startup (undici) is picked up.
+ * governs (ADR-0022). The SDK client is constructed with SigPi's existing
+ * proxy `fetch` (the undici dispatcher installed by `configureHttpProxy`) so
+ * outbound model requests route through the same proxy as the rest of SigPi
+ * when one is configured (ADR-0024). No new proxy code — we reuse the one
+ * proxy implementation.
  */
-function buildSdkClient(config: ModelConfig): OpenAI {
+export function buildSdkClient(config: ModelConfig): OpenAI {
 	return new OpenAI({
 		apiKey: config.apiKey,
 		baseURL: config.baseURL,
@@ -31,8 +35,7 @@ function buildSdkClient(config: ModelConfig): OpenAI {
 		// is killed even though the idle/stall timer keeps resetting on bytes.
 		timeout: config.timeoutMs,
 		maxRetries: 0,
-		fetch: (input: RequestInfo | URL, init?: RequestInit) =>
-			globalThis.fetch(input, init),
+		fetch: getProxyFetch(),
 	});
 }
 

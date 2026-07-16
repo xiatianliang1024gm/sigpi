@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ModelConfig } from "../src/config.js";
-import { OpenAICompatibleProvider } from "../src/model/openai-compatible.js";
+import {
+	configureHttpProxy,
+	getProxyFetch,
+	getProxyStatus,
+} from "../src/model/http-dispatcher.js";
+import {
+	buildSdkClient,
+	OpenAICompatibleProvider,
+} from "../src/model/openai-compatible.js";
 import { clampMaxTokens } from "../src/model/transport.js";
 import type { ModelRequest } from "../src/types.js";
 import {
@@ -886,4 +894,72 @@ test("provider clamps an oversized max_tokens on the responses API (max_output_t
 			);
 		},
 	);
+});
+
+test("buildSdkClient disables SDK retry and uses the proxy fetch (no proxy configured)", () => {
+	const client = buildSdkClient({
+		baseURL: "http://127.0.0.1:1/v1",
+		apiKey: "test-key",
+		name: "test-model",
+		apiFormat: "chat_completions",
+		stream: true,
+		timeoutMs: 60_000,
+		maxRetries: 2,
+		retryBaseDelayMs: 1,
+	});
+	// The SDK's own retry is disabled so SigPi's retry/backoff loop governs.
+	assert.equal(client.maxRetries, 0);
+	// The SDK client is constructed with SigPi's existing proxy fetch. With no
+	// proxy configured that is the live global fetch — but it is the *same*
+	// function getProxyFetch() hands out, not a separately-rolled wrapper.
+	const clientFetch = (client as unknown as { fetch: typeof fetch }).fetch;
+	assert.equal(clientFetch, getProxyFetch());
+});
+
+test("buildSdkClient routes through the proxy fetch when a proxy is configured", () => {
+	const originalFetch = globalThis.fetch;
+	const proxyEnv: Record<string, string | undefined> = {
+		HTTP_PROXY: process.env.HTTP_PROXY,
+		HTTPS_PROXY: process.env.HTTPS_PROXY,
+		http_proxy: process.env.http_proxy,
+		https_proxy: process.env.https_proxy,
+	};
+	try {
+		const status = configureHttpProxy("http://127.0.0.1:9999");
+		assert.equal(status.configured, true);
+		assert.equal(getProxyStatus().configured, true);
+
+		// With a proxy configured, the proxy fetch is the proxy-aware undici
+		// fetch installed by configureHttpProxy — not the bare global fetch.
+		const proxyFetch = getProxyFetch();
+		assert.notEqual(proxyFetch, originalFetch);
+
+		// The SDK client is constructed with that same proxy fetch, so outbound
+		// model requests route through the proxy.
+		const client = buildSdkClient({
+			baseURL: "http://127.0.0.1:1/v1",
+			apiKey: "test-key",
+			name: "test-model",
+			apiFormat: "chat_completions",
+			stream: true,
+			timeoutMs: 60_000,
+			maxRetries: 2,
+			retryBaseDelayMs: 1,
+		});
+		assert.equal(client.maxRetries, 0);
+		assert.equal(
+			(client as unknown as { fetch: typeof fetch }).fetch,
+			proxyFetch,
+		);
+	} finally {
+		// Restore the proxy env so the process-wide dispatcher installed above
+		// routes subsequent (no-proxy) local-server requests directly again.
+		for (const [key, value] of Object.entries(proxyEnv)) {
+			if (value === undefined) {
+				delete process.env[key];
+			} else {
+				process.env[key] = value;
+			}
+		}
+	}
 });
