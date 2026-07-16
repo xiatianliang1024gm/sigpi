@@ -154,9 +154,11 @@ Scope).
 - **Event division (hard rule)**: `model_delta` is render-only; phase events are
   persistence/logging-only. The two families are orthogonal and never overlap
   (tool-call events fire only after `generate()` returns the full response).
-- **Deferred (out of scope)**: a separate `reasoning_timeout` timer; improving
-  the `truncated` error message to distinguish "request cap hit" from "model cap
-  hit".
+- **Deferred (out of scope)**: improving the `truncated` error message to
+  distinguish "request cap hit" (SigPi's `max_tokens` clamp) from "model cap
+  hit" (provider's own max output). The separate `reasoning_timeout` timer
+  originally listed here is **resolved by ADR 0024** — the `total request
+  timeout` closes the reasoning-forever gap without a per-phase timer.
 
 ## Testing Decisions
 
@@ -190,8 +192,10 @@ Scope).
 - Adding **content streaming** to the UI (the `onDelta` interface already
   carries `contentDelta`; rendering it is a later, UI-only phase).
 - A separate **`reasoning_timeout`** timer / "semantic silence" refinement of
-  the idle/stall timeout. Accepted as a deferred enhancement because live
-  rendering + working ESC remove the "mysterious stall" symptom.
+  the idle/stall timeout. **Resolved by ADR 0024**: the `total request
+  timeout` (SDK-owned `timeout: timeoutMs`) bounds the whole request and
+  catches reasoning-forever, so the per-phase timer is unnecessary and the
+  idle reset rule is unchanged.
 - Changing the **idle/stall timeout** mechanics (byte-reset behavior unchanged).
 - Improving the **`truncated`** error message to distinguish request-cap vs
   model-cap hits.

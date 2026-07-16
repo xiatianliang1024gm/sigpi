@@ -1,6 +1,6 @@
 # 0020 — Streaming render of reasoning/content + interrupt-not-retry
 
-- **Status**: Accepted
+- **Status**: Superseded by ADR 0024 (its accepted "reasoning-forever" gap is closed by the total request timeout)
 - **Date**: 2026-07-14
 - **Commit**: `—` (pending implementation)
 
