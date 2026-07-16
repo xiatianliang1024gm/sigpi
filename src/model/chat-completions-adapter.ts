@@ -84,6 +84,10 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 	}
 
 	toRequestBody(request: ModelRequest): Record<string, unknown> {
+		return this.toParams(request);
+	}
+
+	toParams(request: ModelRequest): Record<string, unknown> {
 		return {
 			model: this.config.name,
 			messages: request.messages.map((message) => this.toApiMessage(message)),

@@ -45,6 +45,51 @@ test("toRequestBody serializes messages and the model name", () => {
 	assert.equal(body.tools, undefined);
 });
 
+test("toParams emits SDK-shaped chat.completions params", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	const req: ModelRequest = {
+		messages: [{ role: "user", content: "hi" }],
+		tools: [],
+		temperature: 0.2,
+		maxTokens: 512,
+	};
+	const params = adapter.toParams(req) as {
+		model: string;
+		messages: unknown[];
+		tools?: unknown;
+		temperature: number;
+		max_tokens: number;
+		stream: boolean;
+	};
+	assert.equal(params.model, "demo");
+	assert.deepEqual(params.messages, [{ role: "user", content: "hi" }]);
+	assert.equal(params.tools, undefined);
+	assert.equal(params.temperature, 0.2);
+	assert.equal(params.max_tokens, 512);
+	assert.equal(params.stream, true);
+});
+
+test("toParams omits stream when the adapter is not streaming", () => {
+	const adapter = new ChatCompletionsAdapter({ ...config(), stream: false });
+	const req: ModelRequest = {
+		messages: [{ role: "user", content: "hi" }],
+		tools: [],
+	};
+	const params = adapter.toParams(req) as { stream?: boolean };
+	assert.equal(params.stream, undefined);
+});
+
+test("toParams matches toRequestBody (no live-traffic change)", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	const request_: ModelRequest = {
+		messages: [{ role: "user", content: "hi" }],
+		tools: [],
+		temperature: 0.4,
+		maxTokens: 256,
+	};
+	assert.deepEqual(adapter.toParams(request_), adapter.toRequestBody(request_));
+});
+
 test("parse extracts assistant text, tool calls, and usage", () => {
 	const adapter = new ChatCompletionsAdapter(config());
 	const response = adapter.parse({

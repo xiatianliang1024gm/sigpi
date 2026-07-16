@@ -39,6 +39,53 @@ test("toRequestBody serializes input items from messages", () => {
 	assert.equal(body.tools, undefined);
 });
 
+test("toParams emits SDK-shaped responses params", () => {
+	const adapter = new ResponsesAdapter(config());
+	const req: ModelRequest = {
+		messages: [{ role: "user", content: "hi" }],
+		tools: [],
+		temperature: 0.3,
+		maxTokens: 1024,
+	};
+	const params = adapter.toParams(req) as {
+		model: string;
+		input: unknown[];
+		tools?: unknown;
+		temperature: number;
+		max_output_tokens: number;
+		stream: boolean;
+	};
+	assert.equal(params.model, "demo");
+	assert.deepEqual(params.input, [
+		{ type: "message", role: "user", content: "hi" },
+	]);
+	assert.equal(params.tools, undefined);
+	assert.equal(params.temperature, 0.3);
+	assert.equal(params.max_output_tokens, 1024);
+	assert.equal(params.stream, true);
+});
+
+test("toParams omits stream when the adapter is not streaming", () => {
+	const adapter = new ResponsesAdapter({ ...config(), stream: false });
+	const req: ModelRequest = {
+		messages: [{ role: "user", content: "hi" }],
+		tools: [],
+	};
+	const params = adapter.toParams(req) as { stream?: boolean };
+	assert.equal(params.stream, undefined);
+});
+
+test("toParams matches toRequestBody (no live-traffic change)", () => {
+	const adapter = new ResponsesAdapter(config());
+	const request_: ModelRequest = {
+		messages: [{ role: "user", content: "hi" }],
+		tools: [],
+		temperature: 0.5,
+		maxTokens: 768,
+	};
+	assert.deepEqual(adapter.toParams(request_), adapter.toRequestBody(request_));
+});
+
 test("parse extracts assistant text from output_text and resolves finish reason", () => {
 	const adapter = new ResponsesAdapter(config());
 	const response = adapter.parse({
