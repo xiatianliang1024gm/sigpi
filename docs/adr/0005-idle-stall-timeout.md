@@ -1,6 +1,6 @@
 # 0005 — Idle/stall timeout replaces total-duration deadline
 
-- **Status**: Accepted
+- **Status**: Superseded by ADR 0024
 - **Date**: 2026-07-12
 - **Commit**: `37f7373`
 

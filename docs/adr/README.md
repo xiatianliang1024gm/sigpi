@@ -35,7 +35,7 @@ To mitigate "large responses time out easily", model requests were switched to S
 
 | # | Title | Commit | One-liner |
 |---|-------|--------|-----------|
-| [0005](./0005-idle-stall-timeout.md) | Idle/stall timeout replaces total-duration deadline | `37f7373` | A single timer resets every frame, covering first-byte and mid-stream silence; no longer kills long-but-steady responses |
+| [0005](./0005-idle-stall-timeout.md) | Idle/stall timeout replaces total-duration deadline | `37f7373` | A single timer resets every frame, covering first-byte and mid-stream silence; no longer kills long-but-steady responses (superseded by 0022) |
 | [0006](./0006-streaming-unconditional-with-optout.md) | Streaming on unconditionally in transport + per-model `stream` opt-out + single-chunk JSON tolerance | `37f7373` | Provider constraints forced a reversal from "no new config" to a minimal `stream` switch |
 | [0007](./0007-both-adapters-delta-folding.md) | Both adapters do pure delta folding; `responses` does not rely on `response.completed` | `37f7373` | Chose robustness over the `response.completed` full-payload shortcut |
 | [0010](./0010-agent-turn-single-module.md) | Agent turn is a single deep module over a SessionStore interface | `—` | One-shot persists a session by default (`--no-session` = in-memory store); `AgentTurn` wraps `SessionRuntime`+`AgentRunner`; `SessionStore` becomes an interface |
@@ -76,7 +76,7 @@ Came from a `/grilling` session (grill-with-docs) triggered by a "stuck in think
 
 | # | Title | Commit | One-liner |
 |---|-------|--------|-----------|
-| [0020](./0020-streaming-render-and-interrupt-fix.md) | Streaming render of reasoning/content + interrupt-not-retry | `618e08c` | Adapter captures `reasoning_content`; one `onDelta` chain carries `{reasoningDelta, contentDelta}` → `model_delta` event (UI v1 renders reasoning); ESC aborts the turn instead of retrying; idle timer unchanged |
+| [0020](./0020-streaming-render-and-interrupt-fix.md) | Streaming render of reasoning/content + interrupt-not-retry | `618e08c` | Adapter captures `reasoning_content`; one `onDelta` chain carries `{reasoningDelta, contentDelta}` → `model_delta` event (UI v1 renders reasoning); ESC aborts the turn instead of retrying; idle timer unchanged (reasoning-forever gap superseded by 0024) |
 | [0021](./0021-context-budget-model-level.md) | Context budget moves to model level | `—` | `contextWindow`→`hard_context_limit`; `reserveTokens`/`keepRecentTokens` move into `[models.<id>]`; budget getter follows active model on `/model switch`; `maxTokens <= hard_context_limit` validated at load |
 
 ## Permission model alignment with Pi (2026-07-16)
@@ -95,3 +95,11 @@ and the skill-root invariant (ADR 0017, refined).
 |---|-------|--------|-----------|
 | [0022](./0022-adopt-pi-style-project-trust.md) | Adopt Pi-style project trust (replace in-process tool/permission restrictions) | `—` | Removes `bash.mode` + `allowedRoots`; adds per-directory project trust (`~/.sigpi/trust.json`, `defaultProjectTrust` default `ask`) gating skill + config loading; `--approve`/`--no-approve` |
 | [0023](./0023-remove-skill-root-write-invariant.md) | Remove the skill-root read-only write invariant | `—` | Deletes `assertNotSkillRoot`; guard was bypassable without a sandbox and gave false safety; project trust (ADR 0022) closes the untrusted-load path instead |
+
+## Model transport SDK + timeout/clamp pass (2026-07-16)
+
+Came from a `/grilling` session (grill-with-docs) triggered by "LLM stops responding mid-turn" — differential diagnosis against Pi (same model, no hang) pinned the cause on SigPi's request shaping + timeout semantics, not the model. Adopted the OpenAI SDK as the communication substrate, added a total request timeout beside the idle/stall timer, and clamped `max_tokens` to the context window. Supersedes ADR 0005 (its rejection of a second timer) and ADR 0020 (its accepted reasoning-forever gap + deferred `reasoning_timeout`). `reserveTokens` stays the ADR 0021 compaction headroom.
+
+| # | Title | Commit | One-liner |
+|---|-------|--------|-----------|
+| [0024](./0024-model-transport-adopts-openai-sdk.md) | Model transport adopts OpenAI SDK; total + idle timeouts; max_tokens clamp | `—` | SDK owns fetch/SSE/retry/timeout; SigPi keeps total+idle timeout semantics + error classification; max_tokens clamped to context; supersedes ADR 0005 + 0020 |
