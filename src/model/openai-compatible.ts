@@ -25,6 +25,11 @@ function buildSdkClient(config: ModelConfig): OpenAI {
 	return new OpenAI({
 		apiKey: config.apiKey,
 		baseURL: config.baseURL,
+		// Total request deadline (ADR-0024): the SDK aborts the connect/headers
+		// phase at `timeoutMs`. SigPi's own total timer (ModelTransport) extends
+		// that bound across the whole stream read, so a reasoning-forever model
+		// is killed even though the idle/stall timer keeps resetting on bytes.
+		timeout: config.timeoutMs,
 		maxRetries: 0,
 		fetch: (input: RequestInfo | URL, init?: RequestInit) =>
 			globalThis.fetch(input, init),

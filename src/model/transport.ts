@@ -139,21 +139,21 @@ function formatHttpErrorMessage(
 }
 
 /**
- * Merge an external (user/interrupt) abort signal with an internal timeout
- * signal into a single signal. Whichever fires first aborts the merged
- * controller, and the merged signal's `reason` is set to the firing signal's
- * reason so callers can tell a user interrupt from an idle/stall timeout.
+ * Merge several abort signals (user/interrupt, total-request timer, idle/stall
+ * timer) into one. Whichever fires first aborts the merged controller, and the
+ * merged signal's `reason` is set to the firing signal's reason so callers can
+ * tell a user interrupt from an idle/stall or total timeout (ADR-0024).
  */
 function mergeAbortSignals(
-	externalSignal: AbortSignal | undefined,
-	timeoutSignal: AbortSignal,
+	signals: Array<AbortSignal | undefined>,
 ): AbortSignal {
-	if (!externalSignal) {
-		return timeoutSignal;
+	const defined = signals.filter((s): s is AbortSignal => s !== undefined);
+	if (defined.length === 0) {
+		// No signals to merge: a controller that never fires.
+		return new AbortController().signal;
 	}
-
-	if (externalSignal.aborted) {
-		return externalSignal;
+	if (defined.length === 1) {
+		return defined[0];
 	}
 
 	const controller = new AbortController();
@@ -163,19 +163,15 @@ function mergeAbortSignals(
 		}
 		controller.abort(signal.reason);
 	};
-	const onExternalAbort = () => {
-		externalSignal.removeEventListener("abort", onExternalAbort);
-		timeoutSignal.removeEventListener("abort", onTimeoutAbort);
-		abortFrom(externalSignal);
-	};
-	const onTimeoutAbort = () => {
-		externalSignal.removeEventListener("abort", onExternalAbort);
-		timeoutSignal.removeEventListener("abort", onTimeoutAbort);
-		abortFrom(timeoutSignal);
-	};
-
-	externalSignal.addEventListener("abort", onExternalAbort, { once: true });
-	timeoutSignal.addEventListener("abort", onTimeoutAbort, { once: true });
+	for (const signal of defined) {
+		if (signal.aborted) {
+			// Already fired before we could subscribe (e.g. a pre-aborted
+			// user/interrupt signal) — propagate its reason immediately.
+			controller.abort(signal.reason);
+			break;
+		}
+		signal.addEventListener("abort", () => abortFrom(signal), { once: true });
+	}
 	return controller.signal;
 }
 
@@ -244,7 +240,8 @@ function extractSdkErrorBody(error: APIError): string {
 function mapSdkError(
 	error: unknown,
 	request: ModelRequest,
-	timeoutController: AbortController,
+	totalController: AbortController,
+	idleController: AbortController,
 	mergedSignal: AbortSignal,
 	timeoutMs: number,
 ): Error {
@@ -261,7 +258,10 @@ function mapSdkError(
 		if (isTurnInterruptedError(reason)) {
 			return reason;
 		}
-		if (timeoutController.signal.aborted) {
+		// A total or idle/stall timer firing means the turn hung, not a user
+		// interrupt — classify as `timeout` (ADR-0024). The user/interrupt path
+		// is handled above via the TurnInterruptedError reason.
+		if (totalController.signal.aborted || idleController.signal.aborted) {
 			return new ModelRequestError(
 				`Model request timed out after ${timeoutMs}ms.`,
 				"timeout",
@@ -502,19 +502,33 @@ export class ModelTransport {
 		adapter: WireFormatAdapter,
 		onDelta?: (delta: ModelDelta) => void,
 	): Promise<ModelResponse> {
-		const timeoutController = new AbortController();
+		// Total request timeout (ADR-0024): bounds the whole request from start
+		// to stream-end and is NOT reset on received bytes. This catches a
+		// reasoning-forever model that streams thinking indefinitely (the ADR
+		// 0020 accepted gap) — the idle/stall timer below is kept happy by those
+		// thinking bytes, so only a byte-independent total deadline stops it.
+		const totalController = new AbortController();
+		const totalTimer = setTimeout(
+			() => totalController.abort(new Error("model_total_timeout")),
+			this.config.timeoutMs,
+		);
 		// Idle/stall timer: bounds silence. For streaming it resets on every
 		// received chunk; for non-streaming it bounds the whole request. The
 		// OpenAI SDK owns the per-byte SSE read, so this timer is our
 		// dead-server / mid-stream-silence guard (ADR-0022).
+		const idleController = new AbortController();
 		const idleTimer = setTimeout(
-			() => timeoutController.abort(new Error("model_idle_timeout")),
+			() => idleController.abort(new Error("model_idle_timeout")),
 			this.config.timeoutMs,
 		);
-		const signal = mergeAbortSignals(
+		// One merged signal: a user/ESC interrupt, the byte-independent total
+		// deadline, or the idle/stall silence deadline — whichever fires first
+		// aborts the SDK request (ADR-0024).
+		const signal = mergeAbortSignals([
 			request.abortSignal,
-			timeoutController.signal,
-		);
+			totalController.signal,
+			idleController.signal,
+		]);
 		const params = adapter.toParams(request);
 
 		try {
@@ -531,11 +545,13 @@ export class ModelTransport {
 					return await this.readSdkStream(
 						result as AsyncIterable<unknown>,
 						adapter,
-						timeoutController,
+						totalController,
+						idleController,
 						idleTimer,
 						onDelta,
 					);
 				}
+				clearTimeout(totalTimer);
 				clearTimeout(idleTimer);
 				return adapter.parse(result);
 			}
@@ -552,22 +568,26 @@ export class ModelTransport {
 				return await this.readSdkStream(
 					result as AsyncIterable<unknown>,
 					adapter,
-					timeoutController,
+					totalController,
+					idleController,
 					idleTimer,
 					onDelta,
 				);
 			}
+			clearTimeout(totalTimer);
 			clearTimeout(idleTimer);
 			return adapter.parse(result);
 		} catch (error) {
 			throw mapSdkError(
 				error,
 				request,
-				timeoutController,
+				totalController,
+				idleController,
 				signal,
 				this.config.timeoutMs,
 			);
 		} finally {
+			clearTimeout(totalTimer);
 			clearTimeout(idleTimer);
 		}
 	}
@@ -575,18 +595,19 @@ export class ModelTransport {
 	private async readSdkStream(
 		stream: AsyncIterable<unknown>,
 		adapter: WireFormatAdapter,
-		timeoutController: AbortController,
+		totalController: AbortController,
+		idleController: AbortController,
 		idleTimer: ReturnType<typeof setTimeout>,
 		onDelta?: (delta: ModelDelta) => void,
 	): Promise<ModelResponse> {
 		const iterator = stream[Symbol.asyncIterator]();
 		const resetIdle = () => {
 			clearTimeout(idleTimer);
-			if (timeoutController.signal.aborted) {
+			if (idleController.signal.aborted) {
 				return;
 			}
 			idleTimer = setTimeout(
-				() => timeoutController.abort(new Error("model_idle_timeout")),
+				() => idleController.abort(new Error("model_idle_timeout")),
 				this.config.timeoutMs,
 			);
 		};
@@ -623,7 +644,11 @@ export class ModelTransport {
 			// finish_reason). Only a stream that ended WITHOUT a completion signal
 			// and produced no usable output is a genuine stream_error; the
 			// adapter's isComplete() distinguishes the two.
-			if (timeoutController.signal.aborted) {
+			// If the total or idle/stall timer fired, the stream ended early —
+			// classify that as a `timeout` rather than a generic stream_error.
+			// The total timer (bytes-independent) catches reasoning-forever; the
+			// idle timer catches a dead server / mid-stream silence (ADR-0024).
+			if (totalController.signal.aborted || idleController.signal.aborted) {
 				throw new ModelRequestError(
 					`Model request timed out after ${this.config.timeoutMs}ms.`,
 					"timeout",
