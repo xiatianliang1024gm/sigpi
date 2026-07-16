@@ -7,7 +7,7 @@ Project root is `.`. When investigating agent conversations, model requests, or 
 - Global: `~/.sigpi/config.toml`
 - Project override: `.sigpi/config.toml` (usually absent; falls back to global)
 
-Key sections: `[model]` (default model + manual selection), `[models.<id>]` (per-model `base_url`/`api_key`/timeout/retry), `[agent]` (context window, max steps), `[logging]`, `[storage]`, `[tools.bash]` (shell safety mode). Model resolution order: `MODEL_ID` env → last `/model` choice in `~/.sigpi/state.json` → `[model].default`.
+Key sections: `[model]` (default model + manual selection), `[models.<id>]` (per-model `base_url`/`api_key`/timeout/retry), `[agent]` (context window, max steps), `[logging]`, `[storage]`, `[tools.bash]` (bash command bounds), `[trust]` (project-resource trust: `default_project_trust = "ask" | "always" | "never"). Model resolution order: `MODEL_ID` env → last `/model` choice in `~/.sigpi/state.json` → `[model].default`.
 
 ## Codex hooks
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import { readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { stdin as input, stdout as output } from "node:process";
+import { createInterface } from "node:readline/promises";
 import type { ReadStream, WriteStream } from "node:tty";
 import { fileURLToPath } from "node:url";
 import type { TurnResult } from "./agent/turn.js";
@@ -22,6 +24,7 @@ import {
 	formatStatusBarForEvent,
 	runtimeToChatReplState,
 } from "./chat-repl.js";
+import type { AppConfig } from "./config.js";
 import {
 	getDefaultProjectConfigPath,
 	getDefaultUserConfigPath,
@@ -40,6 +43,11 @@ import {
 	renderPlanFull,
 	setCurrentPlan,
 } from "./plan-tracker.js";
+import {
+	type ProjectTrustResult,
+	resolveProjectTrust,
+	type TrustDecision,
+} from "./project-trust.js";
 import { createAgentRuntime, createRuntimeSessionStore } from "./runtime.js";
 import { formatSessionDetails } from "./session/format.js";
 import { InMemorySessionStore } from "./session/in-memory-store.js";
@@ -59,6 +67,69 @@ import type {
 	TurnProgressEvent,
 } from "./types.js";
 
+/**
+ * Resolve the effective config and the project-trust decision for the
+ * current working directory.
+ *
+ * The global config (which carries `defaultProjectTrust`) is always read
+ * first. If the project is trusted — because there are no gated resources,
+ * a per-run flag, a saved decision, or an interactive prompt — the project
+ * `.sigpi/config.toml` override is merged on top. See ADR 0022.
+ */
+async function resolveConfigAndTrust(opts: {
+	ui: boolean;
+	approve?: boolean;
+	noApprove?: boolean;
+	prompt?: (dir: string) => Promise<TrustDecision | null>;
+}): Promise<{ config: AppConfig; trust: ProjectTrustResult }> {
+	const cwd = process.cwd();
+	const homeDir = process.env.HOME ?? homedir();
+	const base = loadAppConfig({ readProjectConfig: false, homeDir });
+	const trust = await resolveProjectTrust({
+		cwd,
+		homeDir,
+		defaultTrust: base.trust.defaultProjectTrust,
+		approve: opts.approve,
+		noApprove: opts.noApprove,
+		prompt: opts.ui ? opts.prompt : undefined,
+	});
+	const config = trust.allows
+		? loadAppConfig({ readProjectConfig: true, homeDir })
+		: base;
+	return { config, trust };
+}
+
+/**
+ * Interactive project-trust prompt. Asks the user to trust the project's
+ * local resources (skills + config override). Written to stderr so the
+ * agent's stdout stream stays clean. Returns the chosen decision, or `null`
+ * to decline.
+ */
+async function promptForTrust(dir: string): Promise<TrustDecision | null> {
+	const rl = createInterface({ input: process.stdin, output: process.stderr });
+	try {
+		const answer = (
+			await rl.question(
+				`Trust project resources in ${dir}? [a]lways / [n]ever / [s]kip: `,
+			)
+		)
+			.trim()
+			.toLowerCase();
+		if (answer === "a" || answer === "always") return "always";
+		if (answer === "n" || answer === "never") return "never";
+		return null;
+	} finally {
+		rl.close();
+	}
+}
+
+function printTrustSkipWarning(cwd: string): void {
+	console.error(
+		`[trust] Skipping project-local resources (skills and .sigpi/config.toml) for ${cwd}: project not trusted. ` +
+			'Use --approve to load them for this run, or set defaultProjectTrust = "always" in ~/.sigpi/config.toml.',
+	);
+}
+
 function readPackageVersion(): string {
 	const pkgPath = fileURLToPath(new URL("../../package.json", import.meta.url));
 	const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
@@ -73,7 +144,7 @@ function printUsage(): void {
 	console.log("  pnpm dev init [--force]");
 	console.log("  pnpm dev config validate");
 	console.log(
-		'  pnpm dev ask [--session <id>] [--new] [--title <title>] "your question"',
+		'  pnpm dev ask [--session <id>] [--new] [--title <title>] [--approve | --no-approve] "your question"',
 	);
 	console.log("  pnpm dev session new [--title <title>]");
 	console.log("  pnpm dev session list");
@@ -96,7 +167,11 @@ async function runAsk(args: string[]): Promise<void> {
 		throw new Error('Missing prompt. Example: pnpm dev ask "What time is it?"');
 	}
 
-	const config = loadAppConfig();
+	const { config, trust } = await resolveConfigAndTrust({
+		ui: false,
+		approve: parsed.approve,
+		noApprove: parsed.noApprove,
+	});
 	// Make the model `fetch` proxy-aware (only installs when a proxy is
 	// configured via [models.<id>] proxy or HTTP(S)_PROXY env). Returns a
 	// status snapshot and prints a one-line notice to stderr.
@@ -120,11 +195,15 @@ async function runAsk(args: string[]): Promise<void> {
 			parsed.createSession || (!parsed.sessionId && !parsed.noSession),
 		sessionTitle: parsed.sessionTitle,
 		store,
+		includeProjectRoots: trust.allows,
 	});
 	runtime.logger.info(
 		"http_proxy_status",
 		proxyStatus as unknown as Record<string, JsonValue | undefined>,
 	);
+	if (trust.skipped) {
+		printTrustSkipWarning(process.cwd());
+	}
 	printSkillBootstrap(
 		runtime.loadedSkills.length,
 		runtime.skillWarnings.map((warning) => warning.message),
@@ -154,7 +233,12 @@ async function runAsk(args: string[]): Promise<void> {
 
 async function runChatWithArgs(args: string[]): Promise<void> {
 	const parsed = parseSessionArgs(args);
-	const config = loadAppConfig();
+	const { config, trust } = await resolveConfigAndTrust({
+		ui: true,
+		approve: parsed.approve,
+		noApprove: parsed.noApprove,
+		prompt: promptForTrust,
+	});
 	// Make the model `fetch` proxy-aware (only installs when a proxy is
 	// configured via [models.<id>] proxy or HTTP(S)_PROXY env). Returns a
 	// status snapshot and prints a one-line notice to stderr.
@@ -186,11 +270,15 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		sessionId: resolvedSessionId,
 		createSession: shouldCreateSession,
 		sessionTitle: parsed.sessionTitle,
+		includeProjectRoots: trust.allows,
 	});
 	runtime.logger.info(
 		"http_proxy_status",
 		proxyStatus as unknown as Record<string, JsonValue | undefined>,
 	);
+	if (trust.skipped) {
+		printTrustSkipWarning(process.cwd());
+	}
 	const state = runtimeToChatReplState(runtime);
 
 	printSkillBootstrap(
@@ -1090,8 +1178,19 @@ function cyan(value: string): string {
 
 async function runSessionCommand(args: string[]): Promise<void> {
 	const [subcommand, ...rest] = args;
-	const config = loadAppConfig();
-	const runtime = await createAgentRuntime({ config });
+	const parsed = parseSessionArgs(rest);
+	const { config, trust } = await resolveConfigAndTrust({
+		ui: false,
+		approve: parsed.approve,
+		noApprove: parsed.noApprove,
+	});
+	const runtime = await createAgentRuntime({
+		config,
+		includeProjectRoots: trust.allows,
+	});
+	if (trust.skipped) {
+		printTrustSkipWarning(process.cwd());
+	}
 	const { store } = runtime;
 	printSkillBootstrap(
 		runtime.loadedSkills.length,
@@ -1149,6 +1248,8 @@ function parseSessionArgs(args: string[]): {
 	noSession: boolean;
 	continueSession: boolean;
 	sessionTitle?: string;
+	approve: boolean;
+	noApprove: boolean;
 	rest: string[];
 } {
 	const rest: string[] = [];
@@ -1157,6 +1258,8 @@ function parseSessionArgs(args: string[]): {
 	let noSession = false;
 	let continueSession = false;
 	let sessionTitle: string | undefined;
+	let approve = false;
+	let noApprove = false;
 
 	for (let index = 0; index < args.length; index += 1) {
 		const value = args[index];
@@ -1179,6 +1282,16 @@ function parseSessionArgs(args: string[]): {
 
 		if (value === "--continue") {
 			continueSession = true;
+			continue;
+		}
+
+		if (value === "--approve" || value === "-a") {
+			approve = true;
+			continue;
+		}
+
+		if (value === "--no-approve" || value === "-na") {
+			noApprove = true;
 			continue;
 		}
 
@@ -1207,12 +1320,18 @@ function parseSessionArgs(args: string[]): {
 		);
 	}
 
+	if (approve && noApprove) {
+		throw new Error("--approve and --no-approve cannot be combined.");
+	}
+
 	return {
 		sessionId,
 		createSession,
 		noSession,
 		continueSession,
 		sessionTitle,
+		approve,
+		noApprove,
 		rest,
 	};
 }
@@ -1261,7 +1380,7 @@ async function runConfigCommand(args: string[]): Promise<void> {
 		);
 	}
 
-	const config = loadAppConfig();
+	const { config, trust } = await resolveConfigAndTrust({ ui: false });
 	const shellRuntime = detectShellRuntime(config.shell);
 	console.log(
 		JSON.stringify(
@@ -1297,6 +1416,11 @@ async function runConfigCommand(args: string[]): Promise<void> {
 				storage: config.storage,
 				shell: shellRuntime,
 				tools: config.tools,
+				trust: config.trust,
+				projectTrust: {
+					allowsProjectResources: trust.allows,
+					reason: trust.reason,
+				},
 			},
 			null,
 			2,

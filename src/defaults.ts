@@ -1,4 +1,3 @@
-import type { RunShellConfig } from "./config.js";
 import { buildSkillCatalogSummary } from "./skills/format.js";
 import type {
 	LoadedSkill,
@@ -9,7 +8,6 @@ import type {
 export function buildSystemPromptSections(
 	shellRuntime: ShellRuntime,
 	loadedSkills: LoadedSkill[] = [],
-	bashConfig: RunShellConfig = { mode: "workspace_write" },
 ): SystemPromptSection[] {
 	const skillSection =
 		loadedSkills.length > 0
@@ -62,7 +60,7 @@ ${buildSkillCatalogSummary(loadedSkills)}`,
 			content: [
 				`Current platform: ${shellRuntime.platform}.`,
 				`Current shell for bash: ${shellRuntime.shell} (${shellRuntime.displayName}).`,
-				`Tool safety mode: ${bashConfig.mode}.`,
+				"Treat bash and skill action processes as ordinary subprocesses; SigPi does not sandbox them — the operating system or container is the only real isolation boundary. Run SigPi only in contexts you trust.",
 				"When using bash, generate commands for the current shell and platform instead of assuming Unix syntax.",
 				"The bash tool runs each command in the project directory by default, but a `cd` in one command carries into later bash commands (like a terminal). If a command leaves the project directory, the working directory resets to the project directory.",
 				"For long output the bash tool writes the full output to a session file and returns the file path plus a preview; use the read tool to open it.",
@@ -105,9 +103,8 @@ ${buildSkillCatalogSummary(loadedSkills)}`,
 export function buildSystemPrompt(
 	shellRuntime: ShellRuntime,
 	loadedSkills: LoadedSkill[] = [],
-	bashConfig: RunShellConfig = { mode: "workspace_write" },
 ): string {
-	return buildSystemPromptSections(shellRuntime, loadedSkills, bashConfig)
+	return buildSystemPromptSections(shellRuntime, loadedSkills)
 		.map((section) => section.content)
 		.join(" ");
 }

@@ -4,6 +4,18 @@
 - **Date**: 2026-07-13
 - **Commit**: `5907ec3`
 
+## Update — ADR 0022 / 0023 (2026-07-16)
+
+The skill-root read-only invariant described below as the compensating control for
+load-implies-trust was **removed** by ADR 0023: without a sandbox it was bypassable
+(e.g. `npx`, subshells) and gave false safety. Load-implies-trust itself is
+**refined** by ADR 0022: a discovered skill is still trusted on load, but only
+within a *trusted project* (gated by **Project trust**). The core decision — no
+per-skill approval gate — remains. This ADR's Status stays Accepted for that core
+decision; only its compensating control and scope changed.
+
+---
+
 ## Context and Problem
 
 A design pass (`tmp/skill-trust.md`) proposed splitting skill handling into four

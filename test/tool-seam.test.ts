@@ -53,13 +53,13 @@ function toolCall(name: string, args: Record<string, unknown>): ToolCall {
 	return { id: "1", name, arguments: args, rawArguments: JSON.stringify(args) };
 }
 
-const bashConfig = { mode: "workspace_write" as const };
+const bashConfig = {};
 const readTracker = new ReadTracker();
 
 const grepTool = createGrepTool();
 const readTool = createReadTool(readTracker);
-const writeTool = createWriteTool(bashConfig, readTracker);
-const editTool = createEditTool(bashConfig, readTracker);
+const writeTool = createWriteTool(readTracker);
+const editTool = createEditTool(readTracker);
 const bashTool = createBashTool(
 	createShellRuntime(
 		process.platform === "win32" ? "powershell" : "zsh",

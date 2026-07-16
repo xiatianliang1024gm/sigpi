@@ -78,3 +78,20 @@ Came from a `/grilling` session (grill-with-docs) triggered by a "stuck in think
 |---|-------|--------|-----------|
 | [0020](./0020-streaming-render-and-interrupt-fix.md) | Streaming render of reasoning/content + interrupt-not-retry | `618e08c` | Adapter captures `reasoning_content`; one `onDelta` chain carries `{reasoningDelta, contentDelta}` → `model_delta` event (UI v1 renders reasoning); ESC aborts the turn instead of retrying; idle timer unchanged |
 | [0021](./0021-context-budget-model-level.md) | Context budget moves to model level | `—` | `contextWindow`→`hard_context_limit`; `reserveTokens`/`keepRecentTokens` move into `[models.<id>]`; budget getter follows active model on `/model switch`; `maxTokens <= hard_context_limit` validated at load |
+
+## Permission model alignment with Pi (2026-07-16)
+
+Removed SigPi's built-in tool-execution restrictions (`[tools.bash].mode`,
+`[tools].allowedRoots`) and the skill-root read-only write invariant (ADR 0017's
+compensating control), adopting Pi's permission philosophy instead: SigPi runs
+with the user's account permissions and treats the local environment as one trust
+boundary; isolation is the OS/container's job. The one built-in "permission"
+concept that remains is **project trust** (ADR 0022), which gates loading of
+project-local resources — not tool execution. Came from a `/grilling` session
+(grill-with-docs). Retires the `allowedRoots`/trusted-roots mechanism (ADR 0016)
+and the skill-root invariant (ADR 0017, refined).
+
+| # | Title | Commit | One-liner |
+|---|-------|--------|-----------|
+| [0022](./0022-adopt-pi-style-project-trust.md) | Adopt Pi-style project trust (replace in-process tool/permission restrictions) | `—` | Removes `bash.mode` + `allowedRoots`; adds per-directory project trust (`~/.sigpi/trust.json`, `defaultProjectTrust` default `ask`) gating skill + config loading; `--approve`/`--no-approve` |
+| [0023](./0023-remove-skill-root-write-invariant.md) | Remove the skill-root read-only write invariant | `—` | Deletes `assertNotSkillRoot`; guard was bypassable without a sandbox and gave false safety; project trust (ADR 0022) closes the untrusted-load path instead |

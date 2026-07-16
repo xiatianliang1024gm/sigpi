@@ -1,16 +1,12 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { z } from "zod";
-import type { RunShellConfig } from "../../config.js";
 import { asInlineCode, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
 import { createEditSummary } from "../edit-summary.js";
+import { resolveWritableWorkspacePath } from "../path-utils.js";
 import type { ReadTracker } from "../read-tracker.js";
 import { ToolExecutionError } from "../registry.js";
 import { joinRenderedSections, withRendered } from "../render.js";
-import {
-	resolveWritableWorkspacePath,
-	SandboxPolicyError,
-} from "../sandbox-policy.js";
 
 const editSchema = z.object({
 	file_path: z.string().min(1),
@@ -21,12 +17,7 @@ const editSchema = z.object({
 
 type EditArgs = z.infer<typeof editSchema>;
 
-export function createEditTool(
-	config: RunShellConfig = { mode: "workspace_write" },
-	tracker: ReadTracker,
-	allowedRoots: string[] = [],
-	skillRoots: string[] = [],
-): ToolDefinition<EditArgs> {
+export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 	return {
 		name: "edit",
 		description:
@@ -78,13 +69,9 @@ export function createEditTool(
 				({ resolved, relative } = resolveWritableWorkspacePath(
 					context.cwd,
 					file_path,
-					config.mode,
-					"edit",
-					allowedRoots,
-					skillRoots,
 				));
 			} catch (error) {
-				if (error instanceof SandboxPolicyError) {
+				if (error instanceof Error) {
 					throw new ToolExecutionError(error.message);
 				}
 				throw error;

@@ -4,6 +4,15 @@
 - **Date**: 2026-07-13
 - **Commit**: `—`
 
+## Update — removed by ADR 0022 (2026-07-16)
+
+The `allowedRoots` read/write allow-list and the *trusted roots* concept were
+**removed** by ADR 0022, which replaces SigPi's built-in tool-execution
+restrictions with Pi-style project trust. The workspace-write containment this ADR
+introduced is gone; isolation is now the operating system's / container's job, not
+SigPi's. This ADR's Status stays Accepted as a historical record; the mechanism it
+describes no longer ships.
+
 ## Context and Problem
 
 SigPi's tool-safety model blocks writes outside the working directory through two independent gates:

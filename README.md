@@ -134,10 +134,9 @@ pnpm dev ask "What time is it in UTC?"
 - Windows defaults to `powershell.exe`, but Git Bash / MSYS / Cygwin sessions are detected as `bash`
 - Override the shell with `[shell].kind = "zsh" | "bash" | "sh" | "pwsh" | "powershell" | "cmd"`
 - Override the executable path with `[shell].path = "..." `; if the path ends in `bash(.exe)`, `zsh(.exe)`, `sh(.exe)`, `pwsh(.exe)`, `powershell(.exe)`, or `cmd(.exe)`, the shell kind is inferred automatically
-- Set `[tools.bash].mode = "read_only" | "workspace_write" | "full_access"` to control the shared tool safety mode
-- The default `workspace_write` mode allows normal edits inside the workspace but blocks obvious dangerous commands and recognizable out-of-workspace writes
-- `read_only` also disables built-in file mutation tools and mutating skill actions
-- This is a guardrail against accidental damage, not OS-level isolation for untrusted shell commands or skill scripts
+- SigPi trusts the local environment and treats the OS/container as the only real isolation boundary — it does not impose an in-process workspace sandbox (ADR 0022)
+- Project-local resources (the project's skills under `.sigpi/skills` / `.agents/skills`, and its `.sigpi/config.toml` override) are gated by **project trust**: the agent prompts once in interactive chats, accepts `--approve` / `--no-approve` for a single run, or honors `[trust].default_project_trust = "always" | "ask" | "never"` in the global config
+- Global skills (`~/.sigpi/skills`, `~/.agents/skills`) and `AGENTS.md` / `CONTEXT.md` / `CLAUDE.md` always load; only project-local resources can be declined
 - The system prompt tells the agent which platform and shell it should target when using `bash`
 
 ## Configuration
@@ -238,7 +237,7 @@ e.g. run `scripts/setup.mjs` and read `references/guide.md`.
 ### Behavior
 
 - Skill scanning happens automatically at startup; invalid skills are skipped with warnings rather than failing startup.
-- The agent runs skill scripts through the `bash` tool, so the workspace sandbox (`read_only` / `workspace_write` / `full_access`) governs what they can do.
+- The agent runs skill scripts through the `bash` tool; because SigPi does not sandbox bash, run it only in directories you trust. Project trust (ADR 0022) gates which project-local resources load, but the shell itself runs with the account's normal permissions.
 
 ## Search tool notes
 
@@ -274,11 +273,10 @@ e.g. run `scripts/setup.mjs` and read `references/guide.md`.
 - It has a default timeout of 120 seconds (`[tools.bash].default_timeout_ms`), capped at 600 seconds (`[tools.bash].max_timeout_ms`)
 - It returns `stdout`, `stderr`, `exitCode`, `signal`, `ok`, `cwd`, and `cwdReset`
 - It returns `timedOut`, `stdoutTruncated`, and `stderrTruncated` flags
-- In `read_only` mode it blocks write and environment-modifying commands before execution
-- In `workspace_write` mode it blocks obvious dangerous commands and recognizable writes outside the current workspace
-- Complex shell syntax and skill action subprocesses are not strongly contained; use `full_access` only as an explicit escape hatch
-- Pass `run_in_background: true` to run a command detached; the tool returns a task id and a log path immediately and the turn continues. List tasks with the `/tasks` chat command and stop one with `/tasks stop <task-id>`; read the log file to follow progress.
 - It is best suited for read-only inspection commands unless you explicitly want the agent to change local state
+- SigPi does not sandbox the shell: commands run with the account's normal permissions, so restrict usage to directories you trust
+- There is no in-process write sandbox; rely on the OS/container for the only real isolation boundary
+- Pass `run_in_background: true` to run a command detached; the tool returns a task id and a log path immediately and the turn continues. List tasks with the `/tasks` chat command and stop one with `/tasks stop <task-id>`; read the log file to follow progress.
 
 ## Release Checks
 

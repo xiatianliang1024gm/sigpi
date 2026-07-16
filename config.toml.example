@@ -41,7 +41,10 @@ sessions_root = "~/.tinypi/projects"
 # kind = "zsh"
 # path = "/bin/zsh"
 
-[tools.run_shell]
-# Shared tool safety mode: read_only, workspace_write, or full_access.
-# This is a guardrail against accidental writes, not strong isolation for untrusted code.
-mode = "workspace_write"
+[trust]
+# How SigPi treats project-local resources (skills + project .sigpi/config.toml).
+#   ask (default): prompt in the REPL; headless one-shot skips them unless trusted.
+#   always:        load project resources without prompting.
+#   never:         ignore project resources (global config + global skills only).
+# A per-run --approve / --no-approve overrides this for a single run.
+default_project_trust = "ask"
