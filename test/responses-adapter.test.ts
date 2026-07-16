@@ -18,27 +18,6 @@ function config(): ModelConfig {
 	};
 }
 
-function request(messages: ModelRequest["messages"]): ModelRequest {
-	return { messages, tools: [] };
-}
-
-test("buildUrl appends the responses path", () => {
-	const adapter = new ResponsesAdapter(config());
-	assert.equal(adapter.buildUrl(), "https://example.test/v1/responses");
-});
-
-test("toRequestBody serializes input items from messages", () => {
-	const adapter = new ResponsesAdapter(config());
-	const body = adapter.toRequestBody(
-		request([{ role: "user", content: "hi" }]),
-	) as { model: string; input: unknown[]; tools?: unknown };
-	assert.equal(body.model, "demo");
-	assert.deepEqual(body.input, [
-		{ type: "message", role: "user", content: "hi" },
-	]);
-	assert.equal(body.tools, undefined);
-});
-
 test("toParams emits SDK-shaped responses params", () => {
 	const adapter = new ResponsesAdapter(config());
 	const req: ModelRequest = {
@@ -75,7 +54,7 @@ test("toParams omits stream when the adapter is not streaming", () => {
 	assert.equal(params.stream, undefined);
 });
 
-test("toParams matches toRequestBody (no live-traffic change)", () => {
+test("toParams emits SDK-shaped params for the responses schema (issue #26)", () => {
 	const adapter = new ResponsesAdapter(config());
 	const request_: ModelRequest = {
 		messages: [{ role: "user", content: "hi" }],
@@ -83,7 +62,14 @@ test("toParams matches toRequestBody (no live-traffic change)", () => {
 		temperature: 0.5,
 		maxTokens: 768,
 	};
-	assert.deepEqual(adapter.toParams(request_), adapter.toRequestBody(request_));
+	assert.deepEqual(adapter.toParams(request_), {
+		model: "demo",
+		input: [{ type: "message", role: "user", content: "hi" }],
+		tools: undefined,
+		temperature: 0.5,
+		max_output_tokens: 768,
+		stream: true,
+	});
 });
 
 test("parse extracts assistant text from output_text and resolves finish reason", () => {

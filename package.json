@@ -40,6 +40,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
+    "openai": "^6.47.0",
     "smol-toml": "^1.7.0",
     "undici": "^8.7.0",
     "yaml": "^2.6.1",

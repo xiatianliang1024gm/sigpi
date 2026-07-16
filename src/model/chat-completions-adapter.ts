@@ -67,26 +67,6 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 
 	constructor(private readonly config: ModelConfig) {}
 
-	buildUrl(): string {
-		const baseURL = this.config.baseURL.endsWith("/")
-			? this.config.baseURL.slice(0, -1)
-			: this.config.baseURL;
-
-		if (baseURL.endsWith("/chat/completions")) {
-			return baseURL;
-		}
-
-		if (baseURL.endsWith("/v1")) {
-			return `${baseURL}/chat/completions`;
-		}
-
-		return `${baseURL}/v1/chat/completions`;
-	}
-
-	toRequestBody(request: ModelRequest): Record<string, unknown> {
-		return this.toParams(request);
-	}
-
 	toParams(request: ModelRequest): Record<string, unknown> {
 		return {
 			model: this.config.name,

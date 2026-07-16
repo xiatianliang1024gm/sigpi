@@ -18,33 +18,6 @@ function config(): ModelConfig {
 	};
 }
 
-function request(messages: ModelRequest["messages"]): ModelRequest {
-	return { messages, tools: [] };
-}
-
-test("buildUrl appends the chat completions path", () => {
-	const adapter = new ChatCompletionsAdapter(config());
-	assert.equal(adapter.buildUrl(), "https://example.test/v1/chat/completions");
-});
-
-test("buildUrl keeps an explicit chat/completions base URL", () => {
-	const adapter = new ChatCompletionsAdapter({
-		...config(),
-		baseURL: "https://example.test/chat/completions",
-	});
-	assert.equal(adapter.buildUrl(), "https://example.test/chat/completions");
-});
-
-test("toRequestBody serializes messages and the model name", () => {
-	const adapter = new ChatCompletionsAdapter(config());
-	const body = adapter.toRequestBody(
-		request([{ role: "user", content: "hi" }]),
-	) as { model: string; messages: unknown[]; tools?: unknown };
-	assert.equal(body.model, "demo");
-	assert.deepEqual(body.messages, [{ role: "user", content: "hi" }]);
-	assert.equal(body.tools, undefined);
-});
-
 test("toParams emits SDK-shaped chat.completions params", () => {
 	const adapter = new ChatCompletionsAdapter(config());
 	const req: ModelRequest = {
@@ -79,7 +52,7 @@ test("toParams omits stream when the adapter is not streaming", () => {
 	assert.equal(params.stream, undefined);
 });
 
-test("toParams matches toRequestBody (no live-traffic change)", () => {
+test("toParams emits SDK-shaped params for the chat.completions schema (issue #26)", () => {
 	const adapter = new ChatCompletionsAdapter(config());
 	const request_: ModelRequest = {
 		messages: [{ role: "user", content: "hi" }],
@@ -87,7 +60,14 @@ test("toParams matches toRequestBody (no live-traffic change)", () => {
 		temperature: 0.4,
 		maxTokens: 256,
 	};
-	assert.deepEqual(adapter.toParams(request_), adapter.toRequestBody(request_));
+	assert.deepEqual(adapter.toParams(request_), {
+		model: "demo",
+		messages: [{ role: "user", content: "hi" }],
+		tools: undefined,
+		temperature: 0.4,
+		max_tokens: 256,
+		stream: true,
+	});
 });
 
 test("parse extracts assistant text, tool calls, and usage", () => {
