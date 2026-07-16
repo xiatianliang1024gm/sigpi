@@ -28,6 +28,7 @@ function request(
 const adapter: WireFormatAdapter = {
 	buildUrl: () => "https://example.test/v1/chat/completions",
 	toRequestBody: (req) => ({ model: "demo", messages: req.messages }),
+	toParams: (req) => ({ model: "demo", messages: req.messages }),
 	parse: (data) => ({
 		assistantText: (data as { text?: string }).text ?? null,
 		toolCalls: [],

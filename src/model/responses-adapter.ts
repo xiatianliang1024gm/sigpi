@@ -60,6 +60,10 @@ export class ResponsesAdapter implements WireFormatAdapter {
 	}
 
 	toRequestBody(request: ModelRequest): Record<string, unknown> {
+		return this.toParams(request);
+	}
+
+	toParams(request: ModelRequest): Record<string, unknown> {
 		return {
 			model: this.config.name,
 			input: request.messages.flatMap((message) =>
