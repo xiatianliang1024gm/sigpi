@@ -22,11 +22,7 @@ import {
 	detectShellRuntime,
 	sourceScript,
 } from "../../shell.js";
-import type {
-	RunShellMode,
-	ShellRuntime,
-	ToolDefinition,
-} from "../../types.js";
+import type { ShellRuntime, ToolDefinition } from "../../types.js";
 import { ReadTracker } from "../read-tracker.js";
 import { ToolExecutionError } from "../registry.js";
 import {
@@ -34,10 +30,6 @@ import {
 	joinRenderedSections,
 	withRendered,
 } from "../render.js";
-import {
-	evaluateCommandPolicy,
-	SandboxPolicyError,
-} from "../sandbox-policy.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -88,10 +80,8 @@ type BashArgs = z.infer<typeof bashSchema>;
 
 export function createBashTool(
 	shellRuntime: ShellRuntime,
-	config: RunShellConfig = { mode: "workspace_write" },
+	config: RunShellConfig = {},
 	tracker: ReadTracker,
-	allowedRoots: string[] = [],
-	skillRoots: string[] = [],
 ): ToolDefinition<BashArgs> {
 	return {
 		name: "bash",
@@ -159,45 +149,6 @@ export function createBashTool(
 			};
 			const outputDir =
 				bash?.outputDir ?? path.join(os.tmpdir(), "sigpi-bash-outputs");
-			const mode = config.mode;
-			try {
-				evaluateCommandPolicy(
-					command,
-					workingDir.current,
-					mode,
-					allowedRoots,
-					skillRoots,
-				);
-			} catch (denial) {
-				if (denial instanceof SandboxPolicyError) {
-					context.logger?.warn("tool_execution_failed", {
-						runId: context.runId,
-						sessionId: context.sessionId,
-						turnId: context.turnId,
-						toolName: "bash",
-						command,
-						mode,
-						reason: denial.message,
-					});
-					throw new ToolExecutionError(
-						`bash denied in ${mode} mode: ${denial.message}`,
-						withRendered(
-							{
-								command,
-								mode,
-								reason: denial.message,
-							},
-							joinRenderedSections([
-								`Command: ${command}`,
-								`Mode: ${mode}`,
-								`Reason: ${denial.message}`,
-							]),
-						),
-					);
-				}
-				throw denial;
-			}
-
 			const defaultTimeout = config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
 			const maxTimeout = config.maxTimeoutMs ?? MAX_TIMEOUT_MS;
 			const requestedTimeout = timeout ?? defaultTimeout;
@@ -409,7 +360,6 @@ export function createBashTool(
 				{
 					command,
 					description: description ?? null,
-					mode,
 					shell: shellRuntime.shell,
 					platform: shellRuntime.platform,
 					ok: result.ok,
@@ -431,7 +381,6 @@ export function createBashTool(
 				renderBashResult({
 					command,
 					description,
-					mode,
 					shell: shellRuntime.shell,
 					platform: shellRuntime.platform,
 					ok: result.ok,
@@ -495,7 +444,6 @@ function truncateHeadTail(value: string, maxChars: number): string {
 function renderBashResult(result: {
 	command: string;
 	description?: string;
-	mode: RunShellMode;
 	shell: string;
 	platform: NodeJS.Platform;
 	ok: boolean;
@@ -511,7 +459,6 @@ function renderBashResult(result: {
 	const sections = [
 		`Command: ${result.command}`,
 		result.description ? `Description: ${result.description}` : null,
-		`Mode: ${result.mode}`,
 		`Shell: ${result.shell} on ${result.platform}`,
 		`Cwd: ${result.cwd}`,
 		result.cwdReset
@@ -633,7 +580,7 @@ function stripQuoted(value: string): string {
 
 export const bashTool: ToolDefinition<BashArgs> = createBashTool(
 	detectShellRuntime(),
-	{ mode: "workspace_write" },
+	{},
 	new ReadTracker(),
 );
 

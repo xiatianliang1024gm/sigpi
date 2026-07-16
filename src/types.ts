@@ -156,8 +156,6 @@ export interface SkillWarning {
 
 export type ShellKind = "zsh" | "bash" | "sh" | "pwsh" | "powershell" | "cmd";
 
-export type RunShellMode = "read_only" | "workspace_write" | "full_access";
-
 export interface ShellRuntime {
 	platform: NodeJS.Platform;
 	shell: ShellKind;

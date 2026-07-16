@@ -85,94 +85,10 @@ test("bash captures command failure without throwing", async () => {
 	);
 });
 
-test("bash read_only mode rejects write commands before execution", async () => {
-	const shellRuntime = createShellRuntime("sh", "linux");
-	const tools = new ToolRegistry([
-		createBashTool(shellRuntime, { mode: "read_only" }, new ReadTracker()),
-	]);
-
-	const result = await tools.execute(
-		{
-			id: "call_shell_ro_1",
-			name: "bash",
-			arguments: { command: "touch blocked.txt" },
-			rawArguments: '{"command":"touch blocked.txt"}',
-		},
-		{ cwd: process.cwd(), shell: shellRuntime },
-	);
-
-	assert.equal(result.ok, false);
-	assert.match(result.error ?? "", /is not permitted in read_only mode/);
-});
-
-test("bash workspace_write mode rejects writes outside the workspace", async () => {
-	const shellRuntime = createShellRuntime("sh", "linux");
-	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
-	]);
-
-	const result = await tools.execute(
-		{
-			id: "call_shell_ww_1",
-			name: "bash",
-			arguments: { command: "touch ../escape.txt" },
-			rawArguments: '{"command":"touch ../escape.txt"}',
-		},
-		{ cwd: process.cwd(), shell: shellRuntime },
-	);
-
-	assert.equal(result.ok, false);
-	assert.match(result.error ?? "", /must stay within the working directory/);
-});
-
-test("bash workspace_write mode detects common external write targets", async () => {
-	const shellRuntime = createShellRuntime("sh", "linux");
-	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
-	]);
-
-	for (const command of [
-		"printf 'x' > ../escape.txt",
-		"printf 'x' | tee ../escape.txt",
-		"cp source.txt ../escape.txt",
-		"mv source.txt '../escape file.txt'",
-		"install source.txt ../bin/escape.txt",
-	]) {
-		const result = await tools.execute(
-			{
-				id: `call_shell_external_${command}`,
-				name: "bash",
-				arguments: { command },
-				rawArguments: JSON.stringify({ command }),
-			},
-			{ cwd: process.cwd(), shell: shellRuntime },
-		);
-
-		assert.equal(result.ok, false, command);
-		assert.match(
-			result.error ?? "",
-			/must stay within the working directory/,
-			command,
-		);
-	}
-});
-
 test("bash reports timeouts in command results", async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
+		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
 
 	const result = await tools.execute(
@@ -194,11 +110,7 @@ test("bash reports timeouts in command results", async () => {
 test("bash truncates long output and marks truncation flags", async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
+		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
 
 	const result = await tools.execute(
@@ -241,11 +153,7 @@ test("bash carries the working directory across calls within the project", async
 	};
 	const outputDir = await createTempDir("sigpi-bash-test-");
 	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
+		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
 	const ctx = {
 		cwd: startDir,
@@ -292,11 +200,7 @@ test("bash resets the working directory to the project dir when a command escape
 	};
 	const outputDir = await createTempDir("sigpi-bash-test-");
 	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
+		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
 	const ctx = {
 		cwd: startDir,
@@ -331,11 +235,7 @@ test("bash runs a command in the background and tracks it", async () => {
 	const outputDir = await createTempDir("sigpi-bash-test-");
 	const manager = new BackgroundTaskManager();
 	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
+		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
 	const ctx = {
 		cwd: startDir,
@@ -381,11 +281,7 @@ test("bash runs a command in the background and tracks it", async () => {
 test("bash rejects run_in_background when no task manager is available", async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
+		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
 	const ctx = { cwd: process.cwd() };
 
@@ -422,11 +318,7 @@ test("bash does not hit E2BIG with a very large captured-rc preamble", async () 
 	).join("\n");
 	await writeFile(rcFile, huge);
 	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
+		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
 	const ctx = {
 		cwd: startDir,
@@ -461,11 +353,7 @@ test("bash resets to the project working dir when maintainProjectWorkingDir is s
 	};
 	const outputDir = await createTempDir("sigpi-bash-test-");
 	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
+		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
 	const ctx = {
 		cwd: startDir,
@@ -579,7 +467,7 @@ test("buildSystemPrompt includes platform, shell, and tool safety details", () =
 
 	assert.match(prompt, /Current platform: win32/);
 	assert.match(prompt, /Current shell for bash: powershell/);
-	assert.match(prompt, /Tool safety mode: workspace_write/);
+	assert.match(prompt, /operating system or container/i);
 	assert.match(prompt, /not a strong sandbox/i);
 	assert.match(prompt, /glob tool with a pattern to find files by name/i);
 	assert.match(prompt, /when glob can answer it/i);
@@ -627,7 +515,7 @@ test("glob schema describes pattern-based file search", () => {
 });
 
 test("edit schema describes old_string, new_string, and replace_all", () => {
-	const edit = createEditTool({ mode: "workspace_write" }, new ReadTracker());
+	const edit = createEditTool(new ReadTracker());
 	const parameters = edit.parameters as {
 		properties?: {
 			file_path?: { description?: string };
@@ -749,9 +637,7 @@ test("update_plan accepts blank activeForm on non-active steps", async () => {
 test("write returns edit summary for TUI display", async () => {
 	const cwd = await createTempDir("sigpi-write-edit-summary-");
 	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nold\n");
-	const tools = new ToolRegistry([
-		createWriteTool({ mode: "workspace_write" }, new ReadTracker()),
-	]);
+	const tools = new ToolRegistry([createWriteTool(new ReadTracker())]);
 
 	const result = await tools.execute(
 		{
@@ -810,7 +696,7 @@ test("edit requires a prior read and performs an exact unique replacement", asyn
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
 		createReadTool(tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createEditTool(tracker),
 	]);
 
 	// Without reading first, edit is rejected (read-before-edit).
@@ -864,9 +750,7 @@ test("edit requires a prior read and performs an exact unique replacement", asyn
 
 test("edit rejects editing a file that does not exist", async () => {
 	const cwd = await createTempDir("sigpi-edit-noexist-");
-	const tools = new ToolRegistry([
-		createEditTool({ mode: "workspace_write" }, new ReadTracker()),
-	]);
+	const tools = new ToolRegistry([createEditTool(new ReadTracker())]);
 
 	const result = await tools.execute(
 		{
@@ -886,59 +770,10 @@ test("edit rejects editing a file that does not exist", async () => {
 	assert.match(result.error ?? "", /does not exist/i);
 });
 
-test("read_only tool safety mode rejects edit and write", async () => {
-	const cwd = await createTempDir("sigpi-read-only-tools-");
-	await writeWorkspaceFile(cwd, "demo.txt", "alpha\n");
-	const tools = createDefaultToolRegistry(undefined, { mode: "read_only" });
-
-	await tools.execute(
-		{
-			id: "call_read_ro",
-			name: "read",
-			arguments: { file_path: "demo.txt" },
-			rawArguments: "{}",
-		},
-		{ cwd },
-	);
-
-	const editResult = await tools.execute(
-		{
-			id: "call_edit_ro_1",
-			name: "edit",
-			arguments: {
-				file_path: "demo.txt",
-				old_string: "alpha",
-				new_string: "beta",
-			},
-			rawArguments: "{}",
-		},
-		{ cwd },
-	);
-	assert.equal(editResult.ok, false);
-	assert.match(editResult.error ?? "", /is not permitted in read_only mode/);
-
-	const writeResult = await tools.execute(
-		{
-			id: "call_write_ro_1",
-			name: "write",
-			arguments: { file_path: "demo.txt", content: "beta\n" },
-			rawArguments: "{}",
-		},
-		{ cwd },
-	);
-	assert.equal(writeResult.ok, false);
-	assert.match(writeResult.error ?? "", /is not permitted in read_only mode/);
-	assert.equal(await readFile(path.join(cwd, "demo.txt"), "utf8"), "alpha\n");
-});
-
 test("createBashTool respects shell runtime in results", async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-		),
+		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
 
 	const result = await tools.execute(
@@ -1426,7 +1261,7 @@ test("edit fails when old_string is not found", async () => {
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
 		createReadTool(tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createEditTool(tracker),
 	]);
 	await tools.execute(
 		{
@@ -1460,7 +1295,7 @@ test("edit fails when old_string matches multiple locations without replace_all"
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
 		createReadTool(tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createEditTool(tracker),
 	]);
 	await tools.execute(
 		{
@@ -1490,7 +1325,7 @@ test("edit replace_all replaces every occurrence", async () => {
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
 		createReadTool(tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createEditTool(tracker),
 	]);
 	await tools.execute(
 		{
@@ -1528,7 +1363,7 @@ test("edit with empty new_string deletes text", async () => {
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
 		createReadTool(tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createEditTool(tracker),
 	]);
 	await tools.execute(
 		{
@@ -1565,7 +1400,7 @@ test("edit fails when the file changed on disk since it was read", async () => {
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
 		createReadTool(tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createEditTool(tracker),
 	]);
 	await tools.execute(
 		{
@@ -1600,7 +1435,7 @@ test("edit allows consecutive edits after refreshing the read fingerprint", asyn
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
 		createReadTool(tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createEditTool(tracker),
 	]);
 	await tools.execute(
 		{
@@ -1651,7 +1486,7 @@ test("edit does not normalize newlines and requires an exact CRLF/LF match", asy
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
 		createReadTool(tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createEditTool(tracker),
 	]);
 	await tools.execute(
 		{
@@ -1696,9 +1531,7 @@ test("edit does not normalize newlines and requires an exact CRLF/LF match", asy
 
 test("edit requires a non-empty old_string", async () => {
 	const cwd = await createTempDir("sigpi-edit-empty-");
-	const tools = new ToolRegistry([
-		createEditTool({ mode: "workspace_write" }, new ReadTracker()),
-	]);
+	const tools = new ToolRegistry([createEditTool(new ReadTracker())]);
 	const result = await tools.execute(
 		{
 			id: "e",
@@ -1714,9 +1547,7 @@ test("edit requires a non-empty old_string", async () => {
 
 test("write creates a new file and parent directories", async () => {
 	const cwd = await createTempDir("sigpi-write-create-");
-	const tools = new ToolRegistry([
-		createWriteTool({ mode: "workspace_write" }, new ReadTracker()),
-	]);
+	const tools = new ToolRegistry([createWriteTool(new ReadTracker())]);
 	const result = await tools.execute(
 		{
 			id: "w",
@@ -1736,9 +1567,7 @@ test("write creates a new file and parent directories", async () => {
 test("write overwrites an existing file without requiring a prior read", async () => {
 	const cwd = await createTempDir("sigpi-write-overwrite-");
 	await writeWorkspaceFile(cwd, "demo.txt", "old\n");
-	const tools = new ToolRegistry([
-		createWriteTool({ mode: "workspace_write" }, new ReadTracker()),
-	]);
+	const tools = new ToolRegistry([createWriteTool(new ReadTracker())]);
 	const result = await tools.execute(
 		{
 			id: "w",
@@ -1758,8 +1587,8 @@ test("bash cat records a read so a later edit is allowed", async () => {
 	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nbeta\n");
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
-		createBashTool(shellRuntime, { mode: "workspace_write" }, tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createBashTool(shellRuntime, {}, tracker),
+		createEditTool(tracker),
 	]);
 	const cat = await tools.execute(
 		{
@@ -1797,8 +1626,8 @@ test("bash piped command does not record a read", async () => {
 	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nbeta\n");
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
-		createBashTool(shellRuntime, { mode: "workspace_write" }, tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createBashTool(shellRuntime, {}, tracker),
+		createEditTool(tracker),
 	]);
 	const cat = await tools.execute(
 		{
@@ -1833,8 +1662,8 @@ test("bash sed -n 'X,Yp' records a read", async () => {
 	await writeWorkspaceFile(cwd, "demo.txt", "a\nb\nc\nd\ne\n");
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
-		createBashTool(shellRuntime, { mode: "workspace_write" }, tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createBashTool(shellRuntime, {}, tracker),
+		createEditTool(tracker),
 	]);
 	const sed = await tools.execute(
 		{
@@ -1864,8 +1693,8 @@ test("bash grep records a read of the single file", async () => {
 	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nbeta\n");
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
-		createBashTool(shellRuntime, { mode: "workspace_write" }, tracker),
-		createEditTool({ mode: "workspace_write" }, tracker),
+		createBashTool(shellRuntime, {}, tracker),
+		createEditTool(tracker),
 	]);
 	const grep = await tools.execute(
 		{
@@ -1939,14 +1768,12 @@ test("read result object omits the path field", async () => {
 	assert.equal("path" in (result.data as Record<string, unknown>), false);
 });
 
-// --- Trusted roots (tools.allowed_roots) ---
+// --- Write/edit outside the workspace (no write sandbox; OS is the boundary) ---
 
-test("write tool permits a path under an allowed root outside the workspace", async () => {
+test("write tool writes to a path outside the workspace directory", async () => {
 	const cwd = await createTempDir("sigpi-write-trusted-root-");
 	const scratch = await createTempDir("sigpi-write-trusted-scratch-");
-	const tools = new ToolRegistry([
-		createWriteTool({ mode: "workspace_write" }, new ReadTracker(), [scratch]),
-	]);
+	const tools = new ToolRegistry([createWriteTool(new ReadTracker())]);
 
 	const result = await tools.execute(
 		{
@@ -1965,31 +1792,7 @@ test("write tool permits a path under an allowed root outside the workspace", as
 	assert.equal(existsSync(path.join(scratch, "note.txt")), true);
 });
 
-test("write tool still rejects a path outside both cwd and allowed roots", async () => {
-	const cwd = await createTempDir("sigpi-write-blocked-");
-	const scratch = await createTempDir("sigpi-write-blocked-scratch-");
-	const tools = new ToolRegistry([
-		createWriteTool({ mode: "workspace_write" }, new ReadTracker(), [scratch]),
-	]);
-
-	const result = await tools.execute(
-		{
-			id: "call_write_blocked_1",
-			name: "write",
-			arguments: {
-				file_path: path.join(cwd, "..", "escape.txt"),
-				content: "hi",
-			},
-			rawArguments: "{}",
-		},
-		{ cwd },
-	);
-
-	assert.equal(result.ok, false);
-	assert.match(result.error ?? "", /working directory/);
-});
-
-test("edit tool permits a path under an allowed root outside the workspace", async () => {
+test("edit tool edits a path outside the workspace directory", async () => {
 	const cwd = await createTempDir("sigpi-edit-trusted-root-");
 	const scratch = await createTempDir("sigpi-edit-trusted-scratch-");
 	const notePath = path.join(scratch, "note.txt");
@@ -1997,7 +1800,7 @@ test("edit tool permits a path under an allowed root outside the workspace", asy
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
 		createReadTool(tracker),
-		createEditTool({ mode: "workspace_write" }, tracker, [scratch]),
+		createEditTool(tracker),
 	]);
 
 	// Read-before-edit must be satisfied even for trusted-root paths.
@@ -2089,16 +1892,11 @@ test("glob and grep succeed on a skill discovery root (read capability unchanged
 	assert.equal(grepResult.ok, true);
 });
 
-test("bash workspace_write mode permits writes under an allowed root", async () => {
+test("bash writes to a path outside the workspace directory", async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const scratch = await createTempDir("sigpi-bash-trusted-scratch-");
 	const tools = new ToolRegistry([
-		createBashTool(
-			shellRuntime,
-			{ mode: "workspace_write" },
-			new ReadTracker(),
-			[scratch],
-		),
+		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
 
 	const result = await tools.execute(
@@ -2113,27 +1911,4 @@ test("bash workspace_write mode permits writes under an allowed root", async () 
 
 	assert.equal(result.ok, true);
 	assert.equal(existsSync(path.join(scratch, "out.txt")), true);
-});
-
-test("bash read_only mode still blocks writes even under an allowed root", async () => {
-	const shellRuntime = createShellRuntime("sh", "linux");
-	const scratch = await createTempDir("sigpi-bash-ro-scratch-");
-	const tools = new ToolRegistry([
-		createBashTool(shellRuntime, { mode: "read_only" }, new ReadTracker(), [
-			scratch,
-		]),
-	]);
-
-	const result = await tools.execute(
-		{
-			id: "call_bash_ro_1",
-			name: "bash",
-			arguments: { command: `touch ${path.join(scratch, "out.txt")}` },
-			rawArguments: "{}",
-		},
-		{ cwd: process.cwd(), shell: shellRuntime },
-	);
-
-	assert.equal(result.ok, false);
-	assert.match(result.error ?? "", /read_only/);
 });

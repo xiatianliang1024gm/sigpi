@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -46,8 +45,8 @@ test("alias maps drive parseTomlConfig for every section", () => {
 		},
 		storage: { sessions_root: "sr" },
 		shell: { kind: "bash", path: "p" },
+		trust: { default_project_trust: "ask" },
 		bash: {
-			mode: "read_only",
 			default_timeout_ms: 1,
 			max_timeout_ms: 1,
 			max_output_length: 1,
@@ -61,6 +60,7 @@ test("alias maps drive parseTomlConfig for every section", () => {
 		logging: "logging",
 		storage: "storage",
 		shell: "shell",
+		trust: "trust",
 		bash: "tools.bash",
 	};
 
@@ -134,7 +134,6 @@ kind = "bash"
 path = "/bin/bash"
 
 [tools.bash]
-mode = "read_only"
 `);
 
 	assert.deepEqual(parsed, {
@@ -173,28 +172,9 @@ mode = "read_only"
 			path: "/bin/bash",
 		},
 		tools: {
-			bash: {
-				mode: "read_only",
-			},
+			bash: {},
 		},
 	});
-});
-
-test("parseTomlConfig maps tools.allowed_roots into tools.allowedRoots", () => {
-	const parsed = parseTomlConfig(`
-[tools]
-allowed_roots = ["/tmp", "/var/scratch"]
-`);
-	assert.deepEqual(parsed.tools?.allowedRoots, ["/tmp", "/var/scratch"]);
-});
-
-test("renderDefaultConfigToml seeds allowed_roots with the OS temp dir", () => {
-	const rendered = renderDefaultConfigToml();
-	assert.match(rendered, /\[tools\]/);
-	assert.ok(
-		rendered.includes(`allowed_roots = ["${os.tmpdir()}"]`),
-		`expected init template to seed allowed_roots with ${os.tmpdir()}`,
-	);
 });
 
 test("loadAppConfig merges user config, project config, and env overrides", async () => {
@@ -265,7 +245,6 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 			AGENT_PROCESS_OUTPUT: "compact",
 			AGENT_LOG_TO_CONSOLE: "true",
 			AGENT_SHELL_PATH: "/bin/custom-bash",
-			AGENT_RUN_SHELL_MODE: "full_access",
 		},
 	});
 
@@ -288,7 +267,6 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 	assert.equal(config.storage.sessionsRoot, path.join(homeDir, "sessions"));
 	assert.equal(config.shell.kind, "bash");
 	assert.equal(config.shell.path, "/bin/custom-bash");
-	assert.equal(config.tools.bash.mode, "full_access");
 });
 
 test("loadAppConfig parses [tools.bash] keys", async () => {
@@ -306,7 +284,6 @@ test("loadAppConfig parses [tools.bash] keys", async () => {
 			'api_key = "k"',
 			'name = "n"',
 			"[tools.bash]",
-			'mode = "read_only"',
 			"default_timeout_ms = 90000",
 			"max_timeout_ms = 300000",
 			"max_output_length = 20000",
@@ -317,7 +294,6 @@ test("loadAppConfig parses [tools.bash] keys", async () => {
 	);
 
 	const config = loadAppConfig({ cwd, homeDir, env: {} });
-	assert.equal(config.tools.bash.mode, "read_only");
 	assert.equal(config.tools.bash.defaultTimeoutMs, 90000);
 	assert.equal(config.tools.bash.maxTimeoutMs, 300000);
 	assert.equal(config.tools.bash.maxOutputLength, 20000);
@@ -427,7 +403,6 @@ test("loadAppConfig defaults [tools.bash] bounds when unset", async () => {
 	);
 
 	const config = loadAppConfig({ cwd, homeDir, env: {} });
-	assert.equal(config.tools.bash.mode, "workspace_write");
 	assert.equal(config.tools.bash.defaultTimeoutMs, 120000);
 	assert.equal(config.tools.bash.maxTimeoutMs, 600000);
 	assert.equal(config.tools.bash.maxOutputLength, 30000);

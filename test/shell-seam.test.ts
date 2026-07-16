@@ -44,11 +44,7 @@ for (const shell of POSIX_SHELLS) {
 	}, async () => {
 		const shellRuntime = createShellRuntime(shell, "linux");
 		const tools = new ToolRegistry([
-			createBashTool(
-				shellRuntime,
-				{ mode: "workspace_write" },
-				new ReadTracker(),
-			),
+			createBashTool(shellRuntime, {}, new ReadTracker()),
 		]);
 
 		const result = await tools.execute(
@@ -71,11 +67,7 @@ for (const shell of POSIX_SHELLS) {
 	}, async () => {
 		const shellRuntime = createShellRuntime(shell, "linux");
 		const tools = new ToolRegistry([
-			createBashTool(
-				shellRuntime,
-				{ mode: "workspace_write" },
-				new ReadTracker(),
-			),
+			createBashTool(shellRuntime, {}, new ReadTracker()),
 		]);
 
 		const result = await tools.execute(
@@ -114,11 +106,7 @@ for (const shell of POSIX_SHELLS) {
 		);
 		await mkdir(outputDir, { recursive: true });
 		const tools = new ToolRegistry([
-			createBashTool(
-				shellRuntime,
-				{ mode: "workspace_write" },
-				new ReadTracker(),
-			),
+			createBashTool(shellRuntime, {}, new ReadTracker()),
 		]);
 		const ctx = {
 			cwd: startDir,
@@ -159,11 +147,7 @@ for (const shell of POSIX_SHELLS) {
 		const envFile = path.join(tmpdir(), `sigpi-env-${shell}-${Date.now()}.sh`);
 		await writeFile(envFile, "export SIGPI_SEAM_VAR=loaded\n", "utf8");
 		const tools = new ToolRegistry([
-			createBashTool(
-				shellRuntime,
-				{ mode: "workspace_write", envFile },
-				new ReadTracker(),
-			),
+			createBashTool(shellRuntime, { envFile }, new ReadTracker()),
 		]);
 		try {
 			const result = await tools.execute(

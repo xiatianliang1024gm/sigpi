@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { realpathSync, symlinkSync, writeFileSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-// The runtime-wiring test below writes a project-level config at
-// <cwd>/.sigpi/config.toml. Because project config overrides user config, a
-// leftover file would silently hijack `allowed_roots` for the whole repo (and
-// for the user's real agent runs). Remove it after every test to keep the
-// working tree clean and the user's ~/.sigpi/config.toml authoritative.
+// Tests below exercise the read-containment boundary: the read/grep/glob tools
+// may only read paths within the working directory unless the path is listed
+// in `allowedReadRoots`. A few tests write a project-level config at
+// <cwd>/.sigpi/config.toml, so the afterEach above removes it to keep the
+// working tree clean for the user's real agent runs.
 test.afterEach(async () => {
 	await rm(path.join(process.cwd(), ".sigpi"), {
 		recursive: true,
@@ -16,7 +16,6 @@ test.afterEach(async () => {
 	});
 });
 
-import { createAgentRuntime } from "../src/runtime.js";
 import { globTool } from "../src/tools/builtin/glob.js";
 import { grepTool } from "../src/tools/builtin/grep.js";
 import { createReadTool } from "../src/tools/builtin/read.js";
@@ -290,67 +289,5 @@ test("listWorkspaceFilesFallback honors allowedRoots for an outside-cwd startPat
 	assert.ok(
 		files.some((file) => file.endsWith("SKILL.md")),
 		`expected SKILL.md in results: ${JSON.stringify(files)}`,
-	);
-});
-
-// ---------------------------------------------------------------------------
-// Runtime wiring: config.tools.allowed_roots must reach context.allowedReadRoots
-// ---------------------------------------------------------------------------
-
-test("config.tools.allowed_roots flows into read tool's trusted roots at runtime", async () => {
-	const scratch = await createTempDir("sigpi-runtime-trusted-");
-	const notePath = path.join(scratch, "note.txt");
-	writeFileSync(notePath, "hello from scratch\n");
-
-	// Write a real config file carrying allowed_roots, then let the runtime
-	// load it from disk — mirroring the actual user scenario.
-	const configDir = path.join(cwd, ".sigpi");
-	await mkdir(configDir, { recursive: true });
-	await writeFile(
-		path.join(configDir, "config.toml"),
-		[
-			"[model]",
-			'active = "test"',
-			"",
-			"[models.test]",
-			'base_url = "https://example.test/v1"',
-			'api_key = "test-key"',
-			'name = "test-model"',
-			"timeout_ms = 2000",
-			"max_retries = 0",
-			"retry_base_delay_ms = 10",
-			"",
-			"[tools]",
-			`allowed_roots = ["${scratch}"]`,
-		].join("\n"),
-		"utf8",
-	);
-
-	const runtime = await createAgentRuntime();
-	// The runner wires config.tools.allowed_roots into its trusted read roots.
-	const runnerOptions = (
-		runtime.runner as unknown as {
-			options: { allowedReadRoots: string[] };
-		}
-	).options;
-	assert.ok(
-		runnerOptions.allowedReadRoots.includes(scratch),
-		`expected ${scratch} in allowedReadRoots: ${JSON.stringify(runnerOptions.allowedReadRoots)}`,
-	);
-
-	const result = await runtime.tools.execute(
-		{
-			id: "runtime_read_trusted_1",
-			name: "read",
-			arguments: { file_path: notePath },
-			rawArguments: JSON.stringify({ file_path: notePath }),
-		},
-		{ cwd, allowedReadRoots: runnerOptions.allowedReadRoots },
-	);
-
-	assert.equal(result.ok, true);
-	assert.match(
-		(result.data as { rendered: string }).rendered,
-		/hello from scratch/,
 	);
 });

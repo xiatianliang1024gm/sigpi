@@ -25,6 +25,24 @@ export function resolveWorkspacePath(
 	return { resolved, relative };
 }
 
+/**
+ * Resolve a target path for a mutating tool (write/edit) against `cwd`.
+ *
+ * SigPi runs with the account's permissions and treats the local environment
+ * as a single trust boundary (the OS/container is the real isolation); it does
+ * not impose an in-process workspace write sandbox. The path is therefore
+ * resolved to its absolute form and returned with its lexically-computed
+ * relative form — no containment or mode check is performed (see ADR 0022).
+ */
+export function resolveWritableWorkspacePath(
+	cwd: string,
+	relativePath: string,
+): { resolved: string; relative: string } {
+	const resolved = path.resolve(cwd, relativePath);
+	const relative = path.relative(cwd, resolved);
+	return { resolved, relative };
+}
+
 export function isWithin(target: string, root: string): boolean {
 	const resolvedTarget = path.resolve(target);
 	const resolvedRoot = path.resolve(root);

@@ -1,17 +1,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import type { RunShellConfig } from "../../config.js";
 import { asInlineCode, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
 import { createWriteSummary } from "../edit-summary.js";
+import { resolveWritableWorkspacePath } from "../path-utils.js";
 import type { ReadTracker } from "../read-tracker.js";
 import { ToolExecutionError } from "../registry.js";
 import { joinRenderedSections, withRendered } from "../render.js";
-import {
-	resolveWritableWorkspacePath,
-	SandboxPolicyError,
-} from "../sandbox-policy.js";
 
 const writeSchema = z.object({
 	file_path: z.string().min(1),
@@ -21,10 +17,7 @@ const writeSchema = z.object({
 type WriteArgs = z.infer<typeof writeSchema>;
 
 export function createWriteTool(
-	config: RunShellConfig = { mode: "workspace_write" },
 	tracker: ReadTracker,
-	allowedRoots: string[] = [],
-	skillRoots: string[] = [],
 ): ToolDefinition<WriteArgs> {
 	return {
 		name: "write",
@@ -58,13 +51,9 @@ export function createWriteTool(
 				({ resolved, relative } = resolveWritableWorkspacePath(
 					context.cwd,
 					file_path,
-					config.mode,
-					"write",
-					allowedRoots,
-					skillRoots,
 				));
 			} catch (error) {
-				if (error instanceof SandboxPolicyError) {
+				if (error instanceof Error) {
 					throw new ToolExecutionError(error.message);
 				}
 				throw error;

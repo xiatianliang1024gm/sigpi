@@ -4,13 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { parse } from "smol-toml";
 import { z } from "zod";
+import type { ProjectTrustPreference } from "./project-trust.js";
 import { loadAgentStateSync } from "./state.js";
-import type {
-	LogLevel,
-	ProcessOutputMode,
-	RunShellMode,
-	ShellKind,
-} from "./types.js";
+import type { LogLevel, ProcessOutputMode, ShellKind } from "./types.js";
 
 const modelConfigSchema = z.object({
 	baseURL: z.string().min(1),
@@ -88,14 +84,11 @@ const shellConfigSchema = z.object({
 	path: z.string().min(1).optional(),
 });
 
-const runShellModeSchema = z.enum([
-	"read_only",
-	"workspace_write",
-	"full_access",
-]);
+const trustConfigSchema = z.object({
+	defaultProjectTrust: z.enum(["ask", "always", "never"]).default("ask"),
+});
 
 const bashConfigSchema = z.object({
-	mode: runShellModeSchema.default("workspace_write"),
 	defaultTimeoutMs: z.number().int().positive().default(120_000),
 	maxTimeoutMs: z.number().int().positive().default(600_000),
 	maxOutputLength: z.number().int().positive().default(30_000),
@@ -114,9 +107,9 @@ const appConfigSchema = z.object({
 	tools: z
 		.object({
 			bash: bashConfigSchema.default({}),
-			allowedRoots: z.array(z.string()).default([]),
 		})
 		.default({}),
+	trust: trustConfigSchema.default({}),
 });
 
 /**
@@ -162,15 +155,14 @@ const SHELL_ALIASES: Record<string, string> = {
 	path: "path",
 };
 const BASH_ALIASES: Record<string, string> = {
-	mode: "mode",
 	defaultTimeoutMs: "default_timeout_ms",
 	maxTimeoutMs: "max_timeout_ms",
 	maxOutputLength: "max_output_length",
 	maintainProjectWorkingDir: "maintain_project_working_dir",
 	envFile: "env_file",
 };
-const TOOLS_ALIASES: Record<string, string> = {
-	allowedRoots: "allowed_roots",
+const TRUST_ALIASES: Record<string, string> = {
+	defaultProjectTrust: "default_project_trust",
 };
 
 /**
@@ -186,7 +178,7 @@ export const CONFIG_ALIASES = {
 	storage: STORAGE_ALIASES,
 	shell: SHELL_ALIASES,
 	bash: BASH_ALIASES,
-	tools: TOOLS_ALIASES,
+	trust: TRUST_ALIASES,
 };
 
 /**
@@ -240,10 +232,10 @@ const tomlRootSchema = z.object({
 	logging: snakeFields(loggingConfigSchema, LOGGING_ALIASES).optional(),
 	storage: snakeFields(storageConfigSchema, STORAGE_ALIASES).optional(),
 	shell: snakeFields(shellConfigSchema, SHELL_ALIASES).optional(),
+	trust: snakeFields(trustConfigSchema, TRUST_ALIASES).optional(),
 	tools: z
 		.object({
 			bash: snakeFields(bashConfigSchema, BASH_ALIASES).optional(),
-			allowed_roots: z.array(z.string()).optional(),
 		})
 		.partial()
 		.optional(),
@@ -290,13 +282,16 @@ export interface StorageConfig {
 	sessionsRoot: string;
 }
 
+export interface TrustConfig {
+	defaultProjectTrust: ProjectTrustPreference;
+}
+
 export interface ShellConfig {
 	kind?: ShellKind;
 	path?: string;
 }
 
 export interface RunShellConfig {
-	mode: RunShellMode;
 	/** Default per-command timeout in ms (clamped to maxTimeoutMs). */
 	defaultTimeoutMs?: number;
 	/** Hard ceiling per-command timeout in ms. */
@@ -311,12 +306,6 @@ export interface RunShellConfig {
 
 export interface ToolsConfig {
 	bash: RunShellConfig;
-	/**
-	 * Absolute paths trusted for both reading and writing, in addition to the
-	 * working directory. Seeded by `init` with the OS temp dir; the schema
-	 * default is `[]` so the code's safety default stays strict.
-	 */
-	allowedRoots: string[];
 }
 
 export interface AppConfig {
@@ -328,11 +317,15 @@ export interface AppConfig {
 	storage: StorageConfig;
 	shell: ShellConfig;
 	tools: ToolsConfig;
+	trust: TrustConfig;
 }
 
 interface PartialToolsConfig {
 	bash?: Partial<RunShellConfig>;
-	allowedRoots?: string[];
+}
+
+interface PartialTrustConfig {
+	defaultProjectTrust?: ProjectTrustPreference;
 }
 
 interface PartialConfig {
@@ -344,12 +337,21 @@ interface PartialConfig {
 	storage?: Partial<StorageConfig>;
 	shell?: Partial<ShellConfig>;
 	tools?: PartialToolsConfig;
+	trust?: PartialTrustConfig;
 }
 
 export interface LoadAppConfigOptions {
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
 	homeDir?: string;
+	/**
+	 * Whether to merge the project's `.sigpi/config.toml` override. Project
+	 * config is trust-gated (ADR 0022): callers pass `false` when the project
+	 * is not trusted (headless default, or a saved/per-run decline) and `true`
+	 * once trust is granted. Defaults to `true` so callers that don't gate
+	 * (and existing tests) keep merging project overrides.
+	 */
+	readProjectConfig?: boolean;
 }
 
 export interface InitializeUserConfigOptions {
@@ -365,9 +367,15 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
 	const userConfigPath = path.join(homeDir, ".sigpi", "config.toml");
 	const projectConfigPath = path.join(cwd, ".sigpi", "config.toml");
 
+	// Project config is trust-gated (ADR 0022): only merged once the project
+	// is trusted. Callers pass `readProjectConfig: false` for the pre-trust
+	// load (to read the global `defaultProjectTrust`) and `true` once trust
+	// is granted. Defaults to `true` for backward compatibility.
+	const readProjectConfig = options.readProjectConfig ?? true;
+
 	const fileConfig = mergeConfigs(
 		readConfigFile(userConfigPath),
-		readConfigFile(projectConfigPath),
+		readProjectConfig ? readConfigFile(projectConfigPath) : {},
 	);
 	const envConfig = readEnvConfig(env);
 	const merged = mergeConfigs(fileConfig, envConfig);
@@ -412,9 +420,11 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
 					? expandHomePath(merged.shell.path, homeDir)
 					: undefined,
 			},
+			trust: {
+				defaultProjectTrust: merged.trust?.defaultProjectTrust ?? "ask",
+			},
 			tools: {
 				...merged.tools,
-				allowedRoots: merged.tools?.allowedRoots ?? [],
 			},
 		});
 
@@ -510,9 +520,6 @@ export function renderDefaultConfigToml(): string {
 		'# path = "/bin/zsh"',
 		"",
 		"[tools.bash]",
-		"# Shared tool safety mode: read_only, workspace_write, or full_access.",
-		"# This is a guardrail against accidental writes, not strong isolation for untrusted code.",
-		'mode = "workspace_write"',
 		"# Command timeout bounds (milliseconds). default_timeout_ms must be <= max_timeout_ms.",
 		"# default_timeout_ms = 120000",
 		"# max_timeout_ms = 600000",
@@ -523,12 +530,13 @@ export function renderDefaultConfigToml(): string {
 		"# Optional shell script sourced before each command so env vars persist.",
 		'# env_file = "~/.sigpi/bash-env.sh"',
 		"",
-		"[tools]",
-		"# Trusted paths for both reading and writing, in addition to the",
-		"# working directory. Lets the agent use a scratch location (e.g. the",
-		"# OS temp dir) without dropping to full_access. Defaults to the OS",
-		"# temp dir; remove or edit to tighten or widen the sandbox.",
-		`allowed_roots = ["${os.tmpdir()}"]`,
+		"[trust]",
+		"# How SigPi treats project-local resources (skills + project .sigpi/config.toml).",
+		"#   ask (default): prompt in the REPL; headless one-shot skips them unless trusted.",
+		"#   always:        load project resources without prompting.",
+		"#   never:         ignore project resources (global config + global skills only).",
+		"# A per-run --approve / --no-approve overrides this for a single run.",
+		'default_project_trust = "ask"',
 		"",
 	].join("\n");
 }
@@ -593,14 +601,14 @@ export function parseTomlConfig(content: string): PartialConfig {
 		logging: mapSection<LoggingConfig>(validated.logging, LOGGING_ALIASES),
 		storage: mapSection<StorageConfig>(validated.storage, STORAGE_ALIASES),
 		shell: mapSection<ShellConfig>(validated.shell, SHELL_ALIASES),
+		...(validated.trust
+			? { trust: mapSection<TrustConfig>(validated.trust, TRUST_ALIASES) }
+			: {}),
 		tools: validated.tools
 			? {
 					bash: validated.tools.bash
 						? mapSection<RunShellConfig>(validated.tools.bash, BASH_ALIASES)
 						: undefined,
-					...(validated.tools.allowed_roots
-						? { allowedRoots: validated.tools.allowed_roots }
-						: {}),
 				}
 			: undefined,
 	};
@@ -657,9 +665,6 @@ function readEnvConfig(env: NodeJS.ProcessEnv): PartialConfig {
 		},
 		tools: {
 			bash: dropUndefined({
-				mode: parseOptionalRunShellMode(
-					env.AGENT_BASH_MODE ?? env.AGENT_RUN_SHELL_MODE,
-				),
 				defaultTimeoutMs: parseOptionalInt(env.BASH_DEFAULT_TIMEOUT_MS),
 				maxTimeoutMs: parseOptionalInt(env.BASH_MAX_TIMEOUT_MS),
 				maxOutputLength: parseOptionalInt(env.BASH_MAX_OUTPUT_LENGTH),
@@ -810,6 +815,18 @@ function parseOptionalLevel(raw: string | undefined): LogLevel | undefined {
 	}
 }
 
+function parseOptionalProcessOutputMode(
+	raw: string | undefined,
+): ProcessOutputMode | undefined {
+	switch (raw) {
+		case "compact":
+		case "detailed":
+			return raw;
+		default:
+			return undefined;
+	}
+}
+
 function parseOptionalApiFormat(
 	raw: string | undefined,
 ): ModelConfig["apiFormat"] | undefined {
@@ -838,26 +855,6 @@ function parseOptionalShellKind(
 	}
 }
 
-function parseOptionalRunShellMode(
-	raw: string | undefined,
-): RunShellMode | undefined {
-	switch (raw) {
-		case "read_only":
-		case "workspace_write":
-		case "full_access":
-			return raw;
-		default:
-			return undefined;
-	}
-}
-
-function parseOptionalProcessOutputMode(
-	raw: string | undefined,
-): ProcessOutputMode | undefined {
-	if (raw === undefined) return undefined;
-	return raw as ProcessOutputMode;
-}
-
 function expandHomePath(rawPath: string, homeDir: string): string {
 	if (rawPath === "~") {
 		return homeDir;
@@ -881,6 +878,5 @@ function mergeToolConfig(
 			...(base?.bash ?? {}),
 			...(override.bash ?? {}),
 		},
-		allowedRoots: override.allowedRoots ?? base?.allowedRoots,
 	};
 }

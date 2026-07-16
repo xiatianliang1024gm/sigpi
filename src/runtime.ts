@@ -29,7 +29,7 @@ import {
 	type SessionStore,
 } from "./session/store.js";
 import { captureRcDefinitions, detectShellRuntime } from "./shell.js";
-import { collectSkillRoots, loadSkillCatalog } from "./skills/catalog.js";
+import { loadSkillCatalog } from "./skills/catalog.js";
 import { BackgroundTaskManager } from "./tools/background.js";
 import { createDefaultToolRegistry } from "./tools/index.js";
 import { buildTrustedReadRoots } from "./tools/path-utils.js";
@@ -81,6 +81,14 @@ export interface CreateAgentRuntimeArgs {
 	sessionTitle?: string;
 	createSession?: boolean;
 	config?: AppConfig;
+	/**
+	 * Whether to scan project skill roots (`.sigpi/skills`, `.agents/skills`
+	 * walked up from cwd). Gated by project trust (ADR 0022): the CLI passes
+	 * `false` when the project is not trusted and `true` once trust is granted.
+	 * Defaults to `true` so callers that don't gate (and existing tests) keep
+	 * loading project skills.
+	 */
+	includeProjectRoots?: boolean;
 	/** Override the session store (e.g. an in-memory store for `--no-session`). */
 	store?: SessionStore;
 }
@@ -115,6 +123,7 @@ export async function loadRuntimeSkillCatalog(args: {
 	cwd?: string;
 	homeDir?: string;
 	logger?: RuntimeLogger;
+	includeProjectRoots?: boolean;
 }): Promise<{
 	loadedSkills: LoadedSkill[];
 	warnings: SkillWarning[];
@@ -123,7 +132,11 @@ export async function loadRuntimeSkillCatalog(args: {
 	const cwd = args.cwd ?? process.cwd();
 	const homeDir = args.homeDir ?? process.env.HOME ?? "";
 
-	const catalog = await loadSkillCatalog({ cwd, homeDir });
+	const catalog = await loadSkillCatalog({
+		cwd,
+		homeDir,
+		includeProjectRoots: args.includeProjectRoots ?? true,
+	});
 
 	args.logger?.info("skills_loaded", {
 		loadedSkillCount: catalog.loadedSkills.length,
@@ -210,16 +223,15 @@ export async function createAgentRuntime(
 		cwd,
 		homeDir,
 		logger: runLogger,
+		includeProjectRoots: args.includeProjectRoots ?? true,
 	});
 	const systemPromptSections = buildSystemPromptSections(
 		shellRuntime,
 		skillCatalog.loadedSkills,
-		config.tools.bash,
 	);
 	const systemPrompt = buildSystemPrompt(
 		shellRuntime,
 		skillCatalog.loadedSkills,
-		config.tools.bash,
 	);
 	const systemPromptFingerprint = createSystemPromptFingerprint(systemPrompt);
 	const store =
@@ -230,12 +242,7 @@ export async function createAgentRuntime(
 			logger: runLogger,
 		});
 	const compactionHooks = createCompactionHookRegistry();
-	const tools = createDefaultToolRegistry(
-		shellRuntime,
-		config.tools.bash,
-		config.tools.allowedRoots,
-		collectSkillRoots(cwd, homeDir),
-	);
+	const tools = createDefaultToolRegistry(shellRuntime, config.tools.bash);
 	// Holder for the *active* model so the context budget getter can track
 	// `/model switch` each turn (ADR-0021). The context never caches a budget;
 	// it re-reads this holder on every compaction / estimate.
@@ -306,7 +313,6 @@ export async function createAgentRuntime(
 	const trustedReadRoots = await buildTrustedReadRoots([
 		bashOutputDir,
 		...skillCatalog.loadedSkills.map((skill) => skill.dir),
-		...config.tools.allowedRoots,
 	]);
 
 	const runner = new AgentRunner({
