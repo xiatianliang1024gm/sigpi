@@ -6,6 +6,10 @@ import {
 	APIUserAbortError,
 } from "openai";
 import type { ModelConfig } from "../config.js";
+import {
+	estimateRecentMessagesTokens,
+	estimateToolSchemaTokens,
+} from "../context-window.js";
 import { isTurnInterruptedError } from "../interrupt.js";
 import type {
 	JsonValue,
@@ -185,6 +189,37 @@ function truncate(value: string, maxChars: number): JsonValue {
 	}
 
 	return `${value.slice(0, maxChars)}\n...[truncated]`;
+}
+
+/**
+ * Headroom subtracted from the context window when capping `max_tokens`, so a
+ * request is never sized right up against the model's hard limit. Kept
+ * separate from `reserveTokens`, which stays the compaction headroom
+ * (ADR-0021 untouched) — see issue #29.
+ */
+export const MAX_TOKENS_CLAMP_BUFFER_TOKENS = 4096;
+
+/**
+ * Cap the requested output-token budget so the model is never asked to
+ * generate more than fits the remaining context window. Without this, an
+ * absurd `max_tokens` (e.g. 100000) makes the turn generate for minutes and
+ * then stop at `finish_reason: "length"` (hard truncation). The cap is
+ * `hardContextLimit - estimatedInputTokens - MAX_TOKENS_CLAMP_BUFFER_TOKENS`.
+ * When the caller leaves `maxTokens` unset, the cap itself is used so the
+ * outbound request is always bounded by the context fit rather than left to
+ * the provider default (issue #29).
+ */
+export function clampMaxTokens(
+	request: ModelRequest,
+	hardContextLimit: number,
+): number {
+	const estimatedInputTokens =
+		estimateRecentMessagesTokens(request.messages) +
+		estimateToolSchemaTokens(request.tools);
+	const available =
+		hardContextLimit - estimatedInputTokens - MAX_TOKENS_CLAMP_BUFFER_TOKENS;
+	const requested = request.maxTokens ?? Number.POSITIVE_INFINITY;
+	return Math.max(1, Math.min(requested, available));
 }
 
 const HTTP_STATUS_TEXT: Record<number, string> = {
@@ -369,6 +404,19 @@ export class ModelTransport {
 		const maxAttempts = this.config.maxRetries + 1;
 		const startedAt = Date.now();
 
+		// Cap the outbound `max_tokens` to the remaining context window so the
+		// model never spends minutes generating then truncates at
+		// `finish_reason: "length"` (issue #29). Computed once per `generate`
+		// so every HTTP attempt sends the same bounded request.
+		const clampedMaxTokens = clampMaxTokens(
+			request,
+			this.config.hardContextLimit ?? 200_000,
+		);
+		const clampedRequest =
+			request.maxTokens === clampedMaxTokens
+				? request
+				: { ...request, maxTokens: clampedMaxTokens };
+
 		this.logger?.info("model_request_started", {
 			runId: request.context?.runId,
 			sessionId: request.context?.sessionId,
@@ -381,6 +429,8 @@ export class ModelTransport {
 			timeoutMs: this.config.timeoutMs,
 			maxRetries: this.config.maxRetries,
 			stream: this.config.stream,
+			requestedMaxTokens: request.maxTokens,
+			maxTokensClamp: clampedMaxTokens,
 			host: hostOf(this.config.baseURL),
 			proxyActive: getProxyStatus().configured,
 			proxyUrl: getProxyStatus().proxyUrl,
@@ -392,7 +442,7 @@ export class ModelTransport {
 		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
 			try {
 				const response = await this.performRequest(
-					request,
+					clampedRequest,
 					makeAdapter(),
 					onDelta,
 				);

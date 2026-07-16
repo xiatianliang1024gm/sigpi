@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ModelConfig } from "../src/config.js";
-import { ModelRequestError, ModelTransport } from "../src/model/transport.js";
+import {
+	clampMaxTokens,
+	MAX_TOKENS_CLAMP_BUFFER_TOKENS,
+	ModelRequestError,
+	ModelTransport,
+} from "../src/model/transport.js";
 import type { ModelRequest } from "../src/types.js";
 import {
 	type LocalModelServer,
@@ -162,4 +167,74 @@ test("transport classifies an unparseable body as invalid_json without retrying"
 			assert.equal(server.captured.length, 1);
 		},
 	);
+});
+
+test("clampMaxTokens caps an absurd max_tokens to the remaining context fit", () => {
+	// 100k window, small input (~5 tokens): available = 100000 - 5 - 4096.
+	const req: ModelRequest = {
+		messages: [{ role: "user", content: "hi" }],
+		tools: [],
+		maxTokens: 100_000,
+	};
+	const clamped = clampMaxTokens(req, 100_000);
+	assert.equal(clamped, 100_000 - 5 - MAX_TOKENS_CLAMP_BUFFER_TOKENS);
+	assert.ok(clamped < 100_000, "absurd max_tokens is capped below the request");
+});
+
+test("clampMaxTokens leaves a fitting max_tokens untouched", () => {
+	const req: ModelRequest = {
+		messages: [{ role: "user", content: "hi" }],
+		tools: [],
+		maxTokens: 1000,
+	};
+	const clamped = clampMaxTokens(req, 200_000);
+	assert.equal(clamped, 1000);
+});
+
+test("clampMaxTokens uses the full remaining context when max_tokens is unset", () => {
+	const req: ModelRequest = {
+		messages: [{ role: "user", content: "hi" }],
+		tools: [],
+	};
+	const clamped = clampMaxTokens(req, 200_000);
+	assert.equal(clamped, 200_000 - 5 - MAX_TOKENS_CLAMP_BUFFER_TOKENS);
+	assert.ok(Number.isFinite(clamped));
+});
+
+test("clampMaxTokens accounts for tool schemas in the input estimate", () => {
+	const withoutTools = clampMaxTokens(
+		{ messages: [{ role: "user", content: "hi" }], tools: [] },
+		200_000,
+	);
+	const withTools = clampMaxTokens(
+		{
+			messages: [{ role: "user", content: "hi" }],
+			tools: [
+				{
+					type: "function",
+					function: {
+						name: "glob",
+						description: "Find files".repeat(200),
+						parameters: { type: "object", properties: {} },
+					},
+				},
+			],
+		},
+		200_000,
+	);
+	assert.ok(
+		withTools < withoutTools,
+		"tool schemas shrink the available output budget",
+	);
+});
+
+test("clampMaxTokens floors at 1 even when the input already overfills the window", () => {
+	const big = "x".repeat(1_000_000); // ~250k chars => ~250k tokens
+	const req: ModelRequest = {
+		messages: [{ role: "user", content: big }],
+		tools: [],
+		maxTokens: 100_000,
+	};
+	const clamped = clampMaxTokens(req, 200_000);
+	assert.equal(clamped, 1);
 });
