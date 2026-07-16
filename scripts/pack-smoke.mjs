@@ -43,6 +43,8 @@ await writeTestConfig(packageDir, {
 
 const childEnv = {
 	TINYPI_FAKE_OPENAI_HANDLER: handlerPath,
+	// Hermetic HOME: the packaged CLI must not read the host's ~/.sigpi config.
+	HOME: await createTempDir("sigpi-pack-home-"),
 };
 const nodeArgs = ["--import", bootstrapPath];
 
