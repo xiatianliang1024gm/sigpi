@@ -7,18 +7,13 @@ import type { ModelDelta, ModelRequest, ModelResponse } from "../types.js";
  * owns HTTP resilience and just calls these three methods.
  */
 export interface WireFormatAdapter {
-	/** Build the request URL for this format. */
-	buildUrl(): string;
-	/** Serialize a model request into this format's request body. */
-	toRequestBody(request: ModelRequest): Record<string, unknown>;
 	/**
 	 * Translate a SigPi {@link ModelRequest} into OpenAI-SDK call params for
 	 * this format (`chat.completions.create` or `responses.create`): model,
 	 * messages/input, tools, temperature, `max_tokens` / `max_output_tokens`,
-	 * and the stream flag. This is the SDK-facing seam (ADR-0022); the old
-	 * transport still uses {@link toRequestBody}. The two currently emit the
-	 * same shape — the SDK client builds the request URL and HTTP envelope,
-	 * so the params are exactly the body the legacy transport would POST.
+	 * and the stream flag. The SDK client builds the request URL and HTTP
+	 * envelope, so the params are exactly the request body the legacy
+	 * transport used to POST. This is the SDK-facing seam (ADR-0022).
 	 */
 	toParams(request: ModelRequest): Record<string, unknown>;
 	/** Parse a successful (non-streaming) JSON response body into a {@link ModelResponse}. */

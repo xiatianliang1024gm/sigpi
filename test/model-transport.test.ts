@@ -2,22 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ModelConfig } from "../src/config.js";
 import { ModelRequestError, ModelTransport } from "../src/model/transport.js";
-import type { WireFormatAdapter } from "../src/model/wire-format.js";
 import type { ModelRequest } from "../src/types.js";
-
-function config(overrides: Partial<ModelConfig> = {}): ModelConfig {
-	return {
-		baseURL: "https://example.test/v1",
-		apiKey: "secret",
-		name: "demo",
-		apiFormat: "chat_completions",
-		stream: true,
-		timeoutMs: 100,
-		maxRetries: 0,
-		retryBaseDelayMs: 1,
-		...overrides,
-	};
-}
+import {
+	type LocalModelServer,
+	startLocalModelServer,
+} from "./helpers/model-server.js";
 
 function request(
 	messages: ModelRequest["messages"] = [{ role: "user", content: "hi" }],
@@ -25,17 +14,34 @@ function request(
 	return { messages, tools: [] };
 }
 
-const adapter: WireFormatAdapter = {
-	buildUrl: () => "https://example.test/v1/chat/completions",
-	toRequestBody: (req) => ({ model: "demo", messages: req.messages }),
-	toParams: (req) => ({ model: "demo", messages: req.messages }),
-	parse: (data) => ({
-		assistantText: (data as { text?: string }).text ?? null,
-		toolCalls: [],
-		finishReason: null,
-		usage: undefined,
-		rawResponse: data,
-	}),
+async function withServer(
+	configOverrides: Partial<ModelConfig>,
+	handler: Parameters<typeof startLocalModelServer>[0],
+	fn: (server: LocalModelServer) => Promise<void>,
+): Promise<void> {
+	const server = await startLocalModelServer(handler, configOverrides);
+	try {
+		await fn(server);
+	} finally {
+		await server.close();
+	}
+}
+
+const nullAdapter = (model = "test-model") => ({
+	toParams: (req: ModelRequest) => ({ model, messages: req.messages }),
+	parse: (data: unknown) => {
+		const choices = (
+			data as { choices?: Array<{ message?: { content?: string | null } }> }
+		).choices;
+		const assistantText = choices?.[0]?.message?.content ?? null;
+		return {
+			assistantText,
+			toolCalls: [],
+			finishReason: null,
+			usage: undefined,
+			rawResponse: data,
+		};
+	},
 	accumulate: () => {},
 	onDelta: () => null,
 	getPartialView: () => ({
@@ -52,116 +58,107 @@ const adapter: WireFormatAdapter = {
 		usage: undefined,
 		rawResponse: undefined,
 	}),
-};
-
-function mockFetch(
-	handler: (input: string, init?: { body?: string }) => Promise<Response>,
-) {
-	const original = globalThis.fetch;
-	let calls = 0;
-	globalThis.fetch = (async (input: unknown, init?: unknown) => {
-		calls += 1;
-		return handler(input as string, init as { body?: string });
-	}) as typeof fetch;
-	return {
-		get calls() {
-			return calls;
-		},
-		restore() {
-			globalThis.fetch = original;
-		},
-	};
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-	return new Response(JSON.stringify(body), { status });
-}
+});
 
 test("transport returns the parsed response on first success", async () => {
-	const m = mockFetch(async () => jsonResponse({ text: "ok" }));
-	try {
-		const result = await new ModelTransport(config()).generate(
-			request(),
-			() => adapter,
-		);
-		assert.equal(result.assistantText, "ok");
-		assert.equal(m.calls, 1);
-	} finally {
-		m.restore();
-	}
+	await withServer(
+		{ stream: false },
+		() => ({
+			kind: "json",
+			body: { choices: [{ message: { role: "assistant", content: "ok" } }] },
+		}),
+		async (server) => {
+			const transport = new ModelTransport(server.config, server.client);
+			const result = await transport.generate(request(), nullAdapter);
+			assert.equal(result.assistantText, "ok");
+			assert.equal(server.captured.length, 1);
+		},
+	);
 });
 
 test("transport retries retryable 5xx errors then succeeds", async () => {
-	const m = mockFetch(async () => {
-		if (m.calls < 2) {
-			return new Response("boom", { status: 500 });
-		}
-		return jsonResponse({ text: "ok" });
-	});
-	try {
-		const result = await new ModelTransport(config({ maxRetries: 1 })).generate(
-			request(),
-			() => adapter,
-		);
-		assert.equal(result.assistantText, "ok");
-		assert.equal(m.calls, 2);
-	} finally {
-		m.restore();
-	}
+	let attempts = 0;
+	await withServer(
+		{ stream: false },
+		() => {
+			attempts += 1;
+			if (attempts < 2) {
+				return { kind: "error", status: 500, body: "boom" };
+			}
+			return {
+				kind: "json",
+				body: { choices: [{ message: { role: "assistant", content: "ok" } }] },
+			};
+		},
+		async (server) => {
+			const transport = new ModelTransport(
+				{ ...server.config, maxRetries: 1 },
+				server.client,
+			);
+			const result = await transport.generate(request(), nullAdapter);
+			assert.equal(result.assistantText, "ok");
+			assert.equal(attempts, 2);
+		},
+	);
 });
 
 test("transport does not retry non-retryable http errors", async () => {
-	const m = mockFetch(async () => new Response("bad", { status: 400 }));
-	try {
-		await assert.rejects(
-			() =>
-				new ModelTransport(config({ maxRetries: 3 })).generate(
-					request(),
-					() => adapter,
-				),
-			(error) =>
-				error instanceof ModelRequestError && error.kind === "http_error",
-		);
-		assert.equal(m.calls, 1);
-	} finally {
-		m.restore();
-	}
+	await withServer(
+		{ stream: false },
+		() => ({ kind: "error", status: 400, body: "bad" }),
+		async (server) => {
+			await assert.rejects(
+				() =>
+					new ModelTransport(
+						{ ...server.config, maxRetries: 3 },
+						server.client,
+					).generate(request(), nullAdapter),
+				(error) =>
+					error instanceof ModelRequestError && error.kind === "http_error",
+			);
+			assert.equal(server.captured.length, 1);
+		},
+	);
 });
 
 test("transport classifies a network failure and retries it", async () => {
-	const m = mockFetch(async () => {
-		throw new Error("connection reset");
-	});
-	try {
-		await assert.rejects(
-			() =>
-				new ModelTransport(config({ maxRetries: 1 })).generate(
-					request(),
-					() => adapter,
-				),
-			(error) =>
-				error instanceof ModelRequestError && error.kind === "network_error",
-		);
-		assert.equal(m.calls, 2);
-	} finally {
-		m.restore();
-	}
+	await withServer(
+		{ stream: false },
+		() => ({ kind: "reset" }),
+		async (server) => {
+			await assert.rejects(
+				() =>
+					new ModelTransport(
+						{ ...server.config, maxRetries: 1, timeoutMs: 2000 },
+						server.client,
+					).generate(request(), nullAdapter),
+				(error) =>
+					error instanceof ModelRequestError && error.kind === "network_error",
+			);
+			assert.equal(server.captured.length, 2);
+		},
+	);
 });
 
-test("transport classifies an empty body as empty_response without retrying", async () => {
-	const m = mockFetch(async () => new Response("", { status: 200 }));
-	try {
-		await assert.rejects(
-			() =>
-				new ModelTransport(config({ maxRetries: 3 })).generate(
-					request(),
-					() => adapter,
-				),
-			(error) =>
-				error instanceof ModelRequestError && error.kind === "empty_response",
-		);
-		assert.equal(m.calls, 1);
-	} finally {
-		m.restore();
-	}
+test("transport classifies an unparseable body as invalid_json without retrying", async () => {
+	await withServer(
+		{ stream: false },
+		() => ({
+			kind: "invalidJson",
+			status: 200,
+			body: "<html>nope</html>",
+		}),
+		async (server) => {
+			await assert.rejects(
+				() =>
+					new ModelTransport(
+						{ ...server.config, maxRetries: 3 },
+						server.client,
+					).generate(request(), nullAdapter),
+				(error) =>
+					error instanceof ModelRequestError && error.kind === "invalid_json",
+			);
+			assert.equal(server.captured.length, 1);
+		},
+	);
 });

@@ -1,3 +1,10 @@
+import type OpenAI from "openai";
+import {
+	APIConnectionError,
+	APIConnectionTimeoutError,
+	APIError,
+	APIUserAbortError,
+} from "openai";
 import type { ModelConfig } from "../config.js";
 import { isTurnInterruptedError } from "../interrupt.js";
 import type {
@@ -131,6 +138,12 @@ function formatHttpErrorMessage(
 	}`;
 }
 
+/**
+ * Merge an external (user/interrupt) abort signal with an internal timeout
+ * signal into a single signal. Whichever fires first aborts the merged
+ * controller, and the merged signal's `reason` is set to the firing signal's
+ * reason so callers can tell a user interrupt from an idle/stall timeout.
+ */
 function mergeAbortSignals(
 	externalSignal: AbortSignal | undefined,
 	timeoutSignal: AbortSignal,
@@ -166,46 +179,6 @@ function mergeAbortSignals(
 	return controller.signal;
 }
 
-function parseJsonResponse(
-	bodyText: string,
-	baseDetails: Record<string, JsonValue | undefined>,
-): unknown {
-	if (bodyText.trim() === "") {
-		throw new ModelRequestError(
-			"Model response body was empty.",
-			"empty_response",
-			{ ...baseDetails },
-		);
-	}
-
-	try {
-		return JSON.parse(bodyText) as unknown;
-	} catch (error) {
-		throw new ModelRequestError(
-			`Model response was not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-			"invalid_json",
-			{ ...baseDetails, bodyPreview: bodyText },
-		);
-	}
-}
-
-type ReadBodyResult =
-	| { ok: true; text: string }
-	| { ok: false; readError: string };
-
-async function safeReadResponseText(
-	response: Response,
-): Promise<ReadBodyResult> {
-	try {
-		return { ok: true, text: await response.text() };
-	} catch (error) {
-		return {
-			ok: false,
-			readError: error instanceof Error ? error.message : String(error),
-		};
-	}
-}
-
 function truncate(value: string, maxChars: number): JsonValue {
 	if (value.length <= maxChars) {
 		return value;
@@ -214,25 +187,178 @@ function truncate(value: string, maxChars: number): JsonValue {
 	return `${value.slice(0, maxChars)}\n...[truncated]`;
 }
 
+const HTTP_STATUS_TEXT: Record<number, string> = {
+	400: "Bad Request",
+	401: "Unauthorized",
+	403: "Forbidden",
+	404: "Not Found",
+	409: "Conflict",
+	422: "Unprocessable Entity",
+	429: "Too Many Requests",
+	500: "Internal Server Error",
+	502: "Bad Gateway",
+	503: "Service Unavailable",
+	504: "Gateway Timeout",
+};
+
+function statusTextFor(status: number): string {
+	return HTTP_STATUS_TEXT[status] ?? "";
+}
+
 /**
- * Model transport — owns HTTP resilience for every wire format: fetch,
- * timeout, abort merging, response-body reading, error classification,
- * JSON parsing, and the retry/backoff loop. It is format-agnostic; the
- * {@link WireFormatAdapter} supplies the URL, request body, and parser.
+ * Recover the response body text from an OpenAI SDK `APIError` for inclusion
+ * in the `http_error` log message. The SDK stores a parsed JSON body on
+ * `error.error`; for text bodies it surfaces the text at the start of
+ * `error.message` (e.g. "502 upstream failed").
+ */
+function extractSdkErrorBody(error: APIError): string {
+	const body = error.error as unknown;
+	if (typeof body === "string") {
+		return body;
+	}
+	if (body && typeof body === "object") {
+		const obj = body as Record<string, unknown>;
+		if (typeof obj.message === "string") {
+			return obj.message;
+		}
+		if (typeof obj.error === "string") {
+			return obj.error;
+		}
+		try {
+			return JSON.stringify(obj);
+		} catch {
+			return "";
+		}
+	}
+	const message = typeof error.message === "string" ? error.message : "";
+	const match = message.match(/^\d+\s+(.*)$/s);
+	return match ? (match[1]?.trim() ?? message) : message;
+}
+
+/**
+ * Translate an OpenAI SDK error into SigPi's {@link ModelRequestError} so the
+ * agent loop's retry/backoff (`isRetryableRequestError`) and log taxonomy stay
+ * unchanged. The SDK error class name is captured in `details.sdkErrorType`
+ * for observability.
+ */
+function mapSdkError(
+	error: unknown,
+	request: ModelRequest,
+	timeoutController: AbortController,
+	mergedSignal: AbortSignal,
+	timeoutMs: number,
+): Error {
+	if (error instanceof ModelRequestError) {
+		return error;
+	}
+
+	// The SDK aborts the call when our merged signal fires. Disambiguate the
+	// three abort sources by inspecting the signal's reason / which side
+	// aborted, so ESC (TurnInterruptedError) re-throws without being retried
+	// while a hung turn classifies as `timeout`.
+	if (error instanceof APIUserAbortError) {
+		const reason = mergedSignal.reason;
+		if (isTurnInterruptedError(reason)) {
+			return reason;
+		}
+		if (timeoutController.signal.aborted) {
+			return new ModelRequestError(
+				`Model request timed out after ${timeoutMs}ms.`,
+				"timeout",
+				{ timeoutMs, sdkErrorType: "APIUserAbortError" },
+			);
+		}
+		if (request.abortSignal?.aborted) {
+			return new ModelRequestError(
+				"Model request was cancelled by user interrupt.",
+				"aborted",
+				{ sdkErrorType: "APIUserAbortError" },
+			);
+		}
+		return new ModelRequestError("Model request was cancelled.", "aborted", {
+			sdkErrorType: "APIUserAbortError",
+		});
+	}
+
+	if (error instanceof APIConnectionTimeoutError) {
+		return new ModelRequestError(
+			`Model request timed out after ${timeoutMs}ms.`,
+			"timeout",
+			{ timeoutMs, sdkErrorType: "APIConnectionTimeoutError" },
+		);
+	}
+
+	if (error instanceof APIConnectionError) {
+		const cause =
+			error.cause instanceof Error ? error.cause.message : undefined;
+		return new ModelRequestError(
+			`Model request failed due to a network error: ${error.message}`,
+			"network_error",
+			{
+				error: error.message,
+				cause,
+				sdkErrorType: "APIConnectionError",
+			},
+		);
+	}
+
+	if (error instanceof APIError) {
+		// A streamed SSE `error` payload arrives over a 200 HTTP response, so the
+		// SDK surfaces it as an `APIError` with no HTTP status. That is a
+		// mid-stream failure (retryable), distinct from a real HTTP status error.
+		const status = typeof error.status === "number" ? error.status : 0;
+		if (status === 0) {
+			return new ModelRequestError(
+				`Model request failed mid-stream: ${error.message}`,
+				"stream_error",
+				{ sdkErrorType: error.constructor.name },
+			);
+		}
+		const statusText = statusTextFor(status);
+		const bodyText = extractSdkErrorBody(error);
+		return new ModelRequestError(
+			formatHttpErrorMessage(status, statusText, bodyText),
+			"http_error",
+			{
+				httpStatus: status,
+				httpStatusText: statusText,
+				bodyPreview: bodyText ? truncate(bodyText, 300) : undefined,
+				sdkErrorType: error.constructor.name,
+			},
+		);
+	}
+
+	// OpenAIError / JSON-parse failures on a 2xx body: surface as invalid_json
+	// so the failure kind is preserved for the agent loop.
+	const message = error instanceof Error ? error.message : String(error);
+	return new ModelRequestError(
+		`Model request failed: ${message}`,
+		"invalid_json",
+		{
+			error: message,
+			sdkErrorType: error instanceof Error ? error.constructor.name : "unknown",
+		},
+	);
+}
+
+/**
+ * Model transport — owns HTTP resilience for the openai-compatible path over
+ * the OpenAI SDK substrate. The SDK owns fetch, SSE framing, per-call body
+ * reading, and (when configured) the total request timeout; this class owns
+ * the idle/stall timeout, the retry/backoff loop, the {@link
+ * RequestFailureKind} taxonomy, and the ESC-interrupt-not-retry rule. It is
+ * format-agnostic: the {@link WireFormatAdapter} supplies `toParams` (SDK call
+ * params) and the chunk → `ModelDelta` / `ModelResponse` mappers.
  */
 export class ModelTransport {
 	private readonly config: ModelConfig;
 	private readonly logger?: RuntimeLogger;
-	private readonly fetchImpl: typeof fetch;
+	private readonly client: OpenAI;
 
-	constructor(
-		config: ModelConfig,
-		logger?: RuntimeLogger,
-		fetchImpl: typeof fetch = globalThis.fetch,
-	) {
+	constructor(config: ModelConfig, client: OpenAI, logger?: RuntimeLogger) {
 		this.config = config;
 		this.logger = logger;
-		this.fetchImpl = fetchImpl;
+		this.client = client;
 	}
 
 	async generate(
@@ -240,7 +366,6 @@ export class ModelTransport {
 		makeAdapter: () => WireFormatAdapter,
 		onDelta?: (delta: ModelDelta) => void,
 	): Promise<ModelResponse> {
-		const url = makeAdapter().buildUrl();
 		const maxAttempts = this.config.maxRetries + 1;
 		const startedAt = Date.now();
 
@@ -256,7 +381,7 @@ export class ModelTransport {
 			timeoutMs: this.config.timeoutMs,
 			maxRetries: this.config.maxRetries,
 			stream: this.config.stream,
-			host: hostOf(url),
+			host: hostOf(this.config.baseURL),
 			proxyActive: getProxyStatus().configured,
 			proxyUrl: getProxyStatus().proxyUrl,
 			fetchImpl: getProxyStatus().fetchImpl,
@@ -267,16 +392,26 @@ export class ModelTransport {
 		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
 			try {
 				const response = await this.performRequest(
-					url,
 					request,
 					makeAdapter(),
 					onDelta,
 				);
-				// A hard truncation (max_tokens / content filter) is not recoverable
-				// by retrying with the same limit, so surface it as an error rather
-				// than returning a partial answer. The summarizer and checkpoint
-				// paths handle their own truncation (purpose "summary"), so leave
-				// those responses untouched.
+
+				// Backstop for a graceful stream end after the user pressed ESC:
+				// some servers close the connection cleanly on abort, so the SDK
+				// never throws. Re-throw the interrupt so the turn loop stops.
+				if (
+					request.abortSignal?.aborted &&
+					isTurnInterruptedError(request.abortSignal.reason)
+				) {
+					throw request.abortSignal.reason;
+				}
+
+				// A hard truncation (max_tokens / content filter) is not
+				// recoverable by retrying with the same limit, so surface it as
+				// an error rather than returning a partial answer. The summarizer
+				// and checkpoint paths handle their own truncation (purpose
+				// "summary"), so leave those responses untouched.
 				if (
 					(response.finishReason === "length" ||
 						response.finishReason === "content_filter") &&
@@ -288,6 +423,7 @@ export class ModelTransport {
 						{ finishReason: response.finishReason },
 					);
 				}
+
 				this.logger?.info("model_request_succeeded", {
 					runId: request.context?.runId,
 					sessionId: request.context?.sessionId,
@@ -305,6 +441,18 @@ export class ModelTransport {
 			} catch (error) {
 				if (isTurnInterruptedError(error)) {
 					throw error;
+				}
+
+				// The SDK may end a stream gracefully on a mid-stream abort (no
+				// throw), so a graceful completion/error surfaces as a normal
+				// retryable failure here. If the abort was the user pressing ESC,
+				// re-throw the interrupt so the turn loop stops and nothing is
+				// retried.
+				if (
+					request.abortSignal?.aborted &&
+					isTurnInterruptedError(request.abortSignal.reason)
+				) {
+					throw request.abortSignal.reason;
 				}
 
 				const normalized = normalizeRequestError(error);
@@ -350,155 +498,93 @@ export class ModelTransport {
 	}
 
 	private async performRequest(
-		url: string,
 		request: ModelRequest,
 		adapter: WireFormatAdapter,
 		onDelta?: (delta: ModelDelta) => void,
 	): Promise<ModelResponse> {
 		const timeoutController = new AbortController();
-		// Total-deadline timer. For the streaming path this is cleared once we
-		// know the response is an event stream; there the idle/stall timer inside
-		// readSseStream governs instead (reset on every received chunk).
-		const timeout = setTimeout(
-			() => timeoutController.abort(new Error("model_timeout")),
+		// Idle/stall timer: bounds silence. For streaming it resets on every
+		// received chunk; for non-streaming it bounds the whole request. The
+		// OpenAI SDK owns the per-byte SSE read, so this timer is our
+		// dead-server / mid-stream-silence guard (ADR-0022).
+		const idleTimer = setTimeout(
+			() => timeoutController.abort(new Error("model_idle_timeout")),
 			this.config.timeoutMs,
 		);
 		const signal = mergeAbortSignals(
 			request.abortSignal,
 			timeoutController.signal,
 		);
+		const params = adapter.toParams(request);
 
 		try {
-			const response = await this.fetchImpl(url, {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					authorization: `Bearer ${this.config.apiKey}`,
-				},
-				body: JSON.stringify(adapter.toRequestBody(request)),
-				signal,
-			});
-			const baseDetails: Record<string, JsonValue | undefined> = {
-				httpStatus: response.status,
-				httpStatusText: response.statusText,
-			};
-
-			if (!response.ok) {
-				const bodyResult = await safeReadResponseText(response);
-				const preview = bodyResult.ok ? bodyResult.text : "";
-				throw new ModelRequestError(
-					formatHttpErrorMessage(response.status, response.statusText, preview),
-					"http_error",
-					{ ...baseDetails, bodyPreview: preview },
+			if (this.config.apiFormat === "responses") {
+				const result = await this.client.responses.create(
+					params as unknown as Parameters<
+						typeof this.client.responses.create
+					>[0],
+					{ signal, maxRetries: 0 } as Parameters<
+						typeof this.client.responses.create
+					>[1],
 				);
+				if (this.config.stream) {
+					return await this.readSdkStream(
+						result as AsyncIterable<unknown>,
+						adapter,
+						timeoutController,
+						idleTimer,
+						onDelta,
+					);
+				}
+				clearTimeout(idleTimer);
+				return adapter.parse(result);
 			}
 
-			const streaming =
-				this.config.stream && ModelTransport.isEventStream(response);
-			if (streaming) {
-				clearTimeout(timeout);
-				return await this.readSseStream(
-					response,
+			const result = await this.client.chat.completions.create(
+				params as unknown as Parameters<
+					typeof this.client.chat.completions.create
+				>[0],
+				{ signal, maxRetries: 0 } as Parameters<
+					typeof this.client.chat.completions.create
+				>[1],
+			);
+			if (this.config.stream) {
+				return await this.readSdkStream(
+					result as AsyncIterable<unknown>,
 					adapter,
 					timeoutController,
+					idleTimer,
 					onDelta,
 				);
 			}
-
-			// Non-streaming path: the total-deadline timer above stays armed and
-			// covers the whole request (connect + body download), matching the
-			// historical behaviour for stream=false or single-JSON responses.
-			const bodyResult = await safeReadResponseText(response);
-			baseDetails.bodyByteLength = bodyResult.ok ? bodyResult.text.length : 0;
-
-			if (!bodyResult.ok) {
-				throw new ModelRequestError(
-					`Model response body could not be read: ${bodyResult.readError}`,
-					"body_read_failed",
-					{ ...baseDetails, bodyReadError: bodyResult.readError },
-				);
-			}
-
-			const data = parseJsonResponse(bodyResult.text, baseDetails);
-			return adapter.parse(data);
+			clearTimeout(idleTimer);
+			return adapter.parse(result);
 		} catch (error) {
-			// A user interrupt aborts the merged signal with the
-			// TurnInterruptedError as its reason, so the read rejects with that
-			// error directly (not a DOMException). Surface it before the generic
-			// AbortError/network branches so the turn loop can stop promptly
-			// (spec-0020 interrupt fix).
-			if (isTurnInterruptedError(error)) {
-				throw error;
-			}
-			if (error instanceof DOMException && error.name === "AbortError") {
-				if (request.abortSignal?.aborted) {
-					const reason = request.abortSignal.reason;
-					if (isTurnInterruptedError(reason)) {
-						throw reason;
-					}
-					throw new ModelRequestError(
-						"Model request was cancelled by user interrupt.",
-						"aborted",
-					);
-				}
-
-				throw new ModelRequestError(
-					`Model request timed out after ${this.config.timeoutMs}ms.`,
-					"timeout",
-					{
-						timeoutMs: this.config.timeoutMs,
-					},
-				);
-			}
-
-			if (error instanceof ModelRequestError) {
-				throw error;
-			}
-
-			throw new ModelRequestError(
-				`Model request failed due to a network error: ${error instanceof Error ? error.message : String(error)}`,
-				"network_error",
-				{
-					error: error instanceof Error ? error.message : String(error),
-					cause:
-						error instanceof Error && error.cause instanceof Error
-							? error.cause.message
-							: undefined,
-					proxyActive: getProxyStatus().configured,
-					proxyUrl: getProxyStatus().proxyUrl,
-				},
+			throw mapSdkError(
+				error,
+				request,
+				timeoutController,
+				signal,
+				this.config.timeoutMs,
 			);
 		} finally {
-			clearTimeout(timeout);
+			clearTimeout(idleTimer);
 		}
 	}
 
-	private async readSseStream(
-		response: Response,
+	private async readSdkStream(
+		stream: AsyncIterable<unknown>,
 		adapter: WireFormatAdapter,
 		timeoutController: AbortController,
+		idleTimer: ReturnType<typeof setTimeout>,
 		onDelta?: (delta: ModelDelta) => void,
 	): Promise<ModelResponse> {
-		const reader = response.body?.getReader();
-		if (!reader) {
-			throw new ModelRequestError(
-				"Model SSE response had no readable body stream.",
-				"stream_error",
-				{ httpStatus: response.status },
-			);
-		}
-
-		const decoder = new TextDecoder();
-		let buffer = "";
-		let sawDone = false;
-		let frameCount = 0;
-
-		let idleTimer: ReturnType<typeof setTimeout> | null = setTimeout(
-			() => timeoutController.abort(new Error("model_idle_timeout")),
-			this.config.timeoutMs,
-		);
+		const iterator = stream[Symbol.asyncIterator]();
 		const resetIdle = () => {
-			if (idleTimer) clearTimeout(idleTimer);
+			clearTimeout(idleTimer);
+			if (timeoutController.signal.aborted) {
+				return;
+			}
 			idleTimer = setTimeout(
 				() => timeoutController.abort(new Error("model_idle_timeout")),
 				this.config.timeoutMs,
@@ -506,166 +592,57 @@ export class ModelTransport {
 		};
 
 		try {
-			while (!sawDone) {
-				const { value, done } = await reader.read();
-				if (value && value.byteLength > 0) {
+			while (true) {
+				const { value, done } = await iterator.next();
+				if (value !== undefined) {
 					resetIdle();
 				}
 				if (done) {
 					break;
 				}
 
-				buffer += decoder.decode(value, { stream: true });
-
-				let separator = buffer.indexOf("\n\n");
-				while (separator !== -1) {
-					const block = buffer.slice(0, separator);
-					buffer = buffer.slice(separator + 2);
-					const result = this.processSseBlock(block, adapter, onDelta);
-					if (result === "done") {
-						sawDone = true;
-						break;
-					}
-					if (result === "frame") {
-						frameCount += 1;
-					}
-					separator = buffer.indexOf("\n\n");
+				// The SDK consumes the `[DONE]` sentinel internally, so every
+				// yielded value is a real frame. Feed it through and let `finalize`
+				// assemble; `getPartialView`/`finalize` own finish_reason detection
+				// (incl. truncated).
+				adapter.accumulate(value);
+				const delta = adapter.onDelta(value);
+				if (delta && onDelta) {
+					onDelta(delta);
 				}
 			}
 
-			if (!sawDone && buffer.trim().length > 0) {
-				const result = this.processSseBlock(buffer, adapter, onDelta);
-				if (result === "done") {
-					sawDone = true;
-				} else if (result === "frame") {
-					frameCount += 1;
-				}
-			}
-
-			if (sawDone) {
-				return adapter.finalize();
-			}
-
-			if (frameCount > 0) {
-				let partial: ModelResponse;
-				try {
-					partial = adapter.finalize();
-				} catch (error) {
-					throw new ModelRequestError(
-						`Model SSE stream ended before a complete response could be assembled: ${error instanceof Error ? error.message : String(error)}`,
-						"stream_error",
-						{ httpStatus: response.status, frameCount },
-					);
-				}
-				// The [DONE] sentinel was never received. If the provider already
-				// signalled completion via finish_reason, the accumulated content
-				// is intact and usable (only the sentinel was dropped). Otherwise
-				// the response was truncated mid-stream and must be surfaced as a
-				// failed (retryable) stream so the turn loop does not silently
-				// persist a partial answer.
-				if (partial.finishReason) {
-					return partial;
-				}
+			const response = adapter.finalize();
+			// If the idle/stall timer fired, the stream ended because the server
+			// went quiet — classify that as a `timeout` (matching the pre-stream
+			// abort path) rather than a generic stream_error. A complete turn
+			// always carries a `finish_reason`, so a missing one on a stream that
+			// was NOT idle-timed out means it was truncated mid-answer (the old
+			// transport's "ended before [DONE]" stream_error). Surface it rather
+			// than silently accepting a partial turn.
+			if (timeoutController.signal.aborted) {
 				throw new ModelRequestError(
-					"Model SSE stream ended before [DONE] with an incomplete response (missing finish_reason).",
-					"stream_error",
-					{ httpStatus: response.status, frameCount },
+					`Model request timed out after ${this.config.timeoutMs}ms.`,
+					"timeout",
+					{ timeoutMs: this.config.timeoutMs },
 				);
 			}
-
-			throw new ModelRequestError(
-				"Model SSE stream ended with no data frames.",
-				"stream_error",
-				{ httpStatus: response.status },
-			);
+			if (response.finishReason == null) {
+				throw new ModelRequestError(
+					"Model SSE stream ended without a finish_reason; the response is incomplete.",
+					"stream_error",
+					{},
+				);
+			}
+			return response;
 		} finally {
-			if (idleTimer) clearTimeout(idleTimer);
+			clearTimeout(idleTimer);
 			try {
-				await reader.cancel();
+				await iterator.return?.(undefined);
 			} catch {
-				// Reader may already be closed or errored; nothing to do.
+				// Iterator teardown is best-effort; the SDK stream is already
+				// aborting via the merged signal.
 			}
 		}
-	}
-
-	private processSseBlock(
-		block: string,
-		adapter: WireFormatAdapter,
-		onDelta?: (delta: ModelDelta) => void,
-	): "done" | "frame" | "ignore" {
-		const parsed = ModelTransport.parseSseBlock(block);
-		if (!parsed) {
-			return "ignore";
-		}
-
-		if (parsed.eventType === "error") {
-			throw new ModelRequestError(
-				`Model SSE error event: ${parsed.data}`,
-				"stream_error",
-				{},
-			);
-		}
-
-		if (parsed.data === "[DONE]") {
-			return "done";
-		}
-
-		let frame: unknown;
-		try {
-			frame = JSON.parse(parsed.data);
-		} catch {
-			throw new ModelRequestError(
-				"Model SSE frame was not valid JSON.",
-				"stream_error",
-				{ framePreview: parsed.data.slice(0, 200) },
-			);
-		}
-
-		adapter.accumulate(frame);
-		if (onDelta) {
-			const delta = adapter.onDelta(frame);
-			if (delta) {
-				onDelta(delta);
-			}
-		}
-		return "frame";
-	}
-
-	private static parseSseBlock(
-		block: string,
-	): { eventType: string; data: string } | null {
-		const dataParts: string[] = [];
-		let eventType = "message";
-		for (const line of block.split("\n")) {
-			if (line === "") {
-				continue;
-			}
-			if (line.startsWith(":")) {
-				continue;
-			}
-			const colon = line.indexOf(":");
-			if (colon === -1) {
-				continue;
-			}
-			const field = line.slice(0, colon);
-			let value = line.slice(colon + 1);
-			if (value.startsWith(" ")) {
-				value = value.slice(1);
-			}
-			if (field === "data") {
-				dataParts.push(value);
-			} else if (field === "event") {
-				eventType = value;
-			}
-		}
-		if (dataParts.length === 0) {
-			return null;
-		}
-		return { eventType, data: dataParts.join("\n") };
-	}
-
-	private static isEventStream(response: Response): boolean {
-		const contentType = response.headers?.get("content-type") ?? "";
-		return contentType.toLowerCase().includes("text/event-stream");
 	}
 }
