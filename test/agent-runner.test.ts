@@ -3,12 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { z } from "zod";
 import { ConversationContext } from "../src/agent/context.js";
-import { AgentRunner } from "../src/agent/runner.js";
+import { AgentRunner, summarizeToolExecutions } from "../src/agent/runner.js";
 import { TurnInterruptController } from "../src/interrupt.js";
 import { createShellRuntime } from "../src/shell.js";
 import { createDefaultToolRegistry } from "../src/tools/index.js";
 import { ToolRegistry } from "../src/tools/registry.js";
-import type { TurnProgressEvent } from "../src/types.js";
+import type { ExecutedToolCall, TurnProgressEvent } from "../src/types.js";
 import {
 	createTempDir,
 	MockProvider,
@@ -235,7 +235,10 @@ test("assembles a local max-steps fallback without a final model call", async ()
 	);
 	assert.match(result.outputText ?? "", /Current goal: loop forever/);
 	assert.match(result.outputText ?? "", /Work done this turn:/);
-	assert.match(result.outputText ?? "", /glob/);
+	// glob is a search tool and is excluded from the file-op turn summary
+	// (ADR-0022); with no file read/modify ops the summary reports none.
+	assert.match(result.outputText ?? "", /No tool results were captured\./);
+	assert.doesNotMatch(result.outputText ?? "", /glob/);
 	assert.match(result.outputText ?? "", /go on/);
 	assert.equal(result.resumable, true);
 });
@@ -991,4 +994,52 @@ test("runner nudges the model to verify changes before finishing", async () => {
 	);
 	assert.equal(await readFile(`${cwd}/note.txt`, "utf8"), "updated\n");
 	assert.equal(provider.requests.length, 4);
+});
+
+test("summarizeToolExecutions records only file read/modify ops (ADR-0022)", () => {
+	const exec = (
+		name: string,
+		args: Record<string, unknown>,
+	): ExecutedToolCall => ({
+		toolCall: {
+			id: `${name}-${Math.random()}`,
+			name,
+			arguments: args,
+			rawArguments: JSON.stringify(args),
+		},
+		result: { ok: true, data: {} },
+	});
+
+	const executions: ExecutedToolCall[] = [
+		exec("read", { file_path: "/a.ts" }),
+		exec("bash", { command: "pwd && ls -la" }),
+		exec("grep", { pattern: "foo" }),
+		exec("glob", { pattern: "**/*.ts" }),
+		exec("edit", { file_path: "/a.ts" }),
+		exec("write", { file_path: "/b.ts" }),
+		exec("update-plan", { plan: [] }),
+		exec("read", { file_path: "/a.ts" }),
+	];
+
+	const summary = summarizeToolExecutions(executions);
+
+	// bash/grep/glob/update-plan excluded; /a.ts collapsed to a single Modified.
+	assert.deepEqual(summary, ["Modified /a.ts", "Modified /b.ts"]);
+});
+
+test("summarizeToolExecutions caps at 20 lines", () => {
+	const exec = (i: number): ExecutedToolCall => ({
+		toolCall: {
+			id: `read-${i}`,
+			name: "read",
+			arguments: { file_path: `/file-${i}.ts` },
+			rawArguments: `{"file_path":"/file-${i}.ts"}`,
+		},
+		result: { ok: true, data: {} },
+	});
+
+	const executions = Array.from({ length: 50 }, (_, i) => exec(i));
+	const summary = summarizeToolExecutions(executions);
+
+	assert.equal(summary.length, 20);
 });
