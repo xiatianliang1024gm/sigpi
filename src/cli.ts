@@ -30,6 +30,7 @@ import {
 	getDefaultUserConfigPath,
 	initializeUserConfig,
 	loadAppConfig,
+	readDefaultProjectTrust,
 } from "./config.js";
 import { InputHistory } from "./input-history.js";
 import { TurnInterruptController } from "./interrupt.js";
@@ -84,18 +85,19 @@ async function resolveConfigAndTrust(opts: {
 }): Promise<{ config: AppConfig; trust: ProjectTrustResult }> {
 	const cwd = process.cwd();
 	const homeDir = process.env.HOME ?? homedir();
-	const base = loadAppConfig({ readProjectConfig: false, homeDir });
+	// Read the global default trust preference without validating the full
+	// config: the only config source may be the still-gated project config,
+	// which would otherwise fail model validation before trust is resolved.
+	const defaultTrust = readDefaultProjectTrust(homeDir);
 	const trust = await resolveProjectTrust({
 		cwd,
 		homeDir,
-		defaultTrust: base.trust.defaultProjectTrust,
+		defaultTrust,
 		approve: opts.approve,
 		noApprove: opts.noApprove,
 		prompt: opts.ui ? opts.prompt : undefined,
 	});
-	const config = trust.allows
-		? loadAppConfig({ readProjectConfig: true, homeDir })
-		: base;
+	const config = loadAppConfig({ readProjectConfig: trust.allows, homeDir });
 	return { config, trust };
 }
 
