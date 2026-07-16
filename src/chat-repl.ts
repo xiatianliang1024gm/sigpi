@@ -176,16 +176,16 @@ async function renderStatusBar(
 		? `${shortenWorkingDirectory(cwd)} (${branch})`
 		: shortenWorkingDirectory(cwd);
 
-	const segments: string[] = [];
+	const segments: string[] = [state.modelName];
 	const limitStr = formatCompactNumber(limit);
 	if (usedTokens === null) {
 		// No provider-reported usage yet (fresh session, after /recover, or a
 		// legacy resume with no `usage`). Honest `?` beats a wrong estimate.
-		segments.push(`tokens ?/${limitStr}`);
+		segments.push(`?/${limitStr}`);
 	} else {
 		const usedStr = formatCompactNumber(usedTokens);
 		const percentUsed = Math.round((usedTokens / limit) * 100);
-		const tokenSegment = `tokens ${usedStr}/${limitStr} (${percentUsed}%)`;
+		const tokenSegment = `${usedStr}/${limitStr} (${percentUsed}%)`;
 		const cacheHitRate = usage ? computeCacheHitRate(usage) : null;
 		segments.push(
 			cacheHitRate ? `${tokenSegment} Hit(${cacheHitRate}%)` : tokenSegment,

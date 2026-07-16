@@ -1,4 +1,4 @@
-# 0022 — Status bar revision: `?` before first response, git branch, drop model prefix
+# 0022 — Status bar revision: `?` before first response, git branch, drop `model`/`tokens` prefixes
 
 - **Status**: Accepted
 - **Date**: 2026-07-16
@@ -13,10 +13,16 @@ The status bar (`src/chat-repl.ts:169-182`) currently renders:
 model {modelName} | tokens {used}/{limit} ({pct}%) | {cwd}
 ```
 
+This revision keeps the same segments but drops the `model ` and `tokens ` labels (the leading position already identifies each), and replaces the pre-response token estimate with `?`:
+
+```
+{modelName} | ?/{limit} | {cwd} ({branch})
+```
+
 Three concrete defects:
 
 1. **Token number is wrong before the first model response.** `formatStatusBar` calls `estimateContextTokens` (`src/chat-repl.ts:132-145`), which falls back to a `chars/4` heuristic when `lastUsage` is `null` (`src/context-window.ts:80-150`). The heuristic is known to be inaccurate — especially for CJK content and code — so the user sees a confidently-wrong number on a fresh session.
-2. **The `model {modelName}` prefix is redundant.** The active model is already visible in the prompt area and in `/model` output; the status bar is a footer for *session state*, not a model picker.
+2. **The `model ` prefix is noise.** The model name stays as the first segment (it is *not* shown in the prompt area, so the status bar is where the user sees it), but the literal `model ` label adds no information — the leading position already identifies it as the model. The status bar is a footer for *session state*, not a model picker, so a bare name is enough.
 3. **No git branch.** When the user is inside a repo, the branch is the most useful piece of cwd context — far more so than the absolute path alone.
 
 Additionally, after `ConversationContext.recover()` clears `lastUsage` (`src/agent/context.ts:233, 344`), the status bar silently falls back to the heuristic again, re-introducing defect (1) mid-session.
@@ -109,9 +115,9 @@ When `cacheRead + input === 0` (trivial request, or provider doesn't report cach
 
 **Q15 — Placement?**
 
-- A: inline with tokens — `tokens 12.3K/183.6K (7%) Hit(85.3%) | ~/repo (main)`. Chosen — the cache rate is a property of the same response that produced the token count, so they belong together.
-- B: separate segment — `tokens 12.3K/183.6K (7%) | Hit(85.3%) | ~/repo (main)`. Rejected — visually distinct but the `|` separator would imply they're independent metrics when they're not.
-- C: after cwd — `tokens 12.3K/183.6K (7%) | ~/repo (main) | Hit(85.3%)`. Rejected — splits context info from its efficiency metric.
+- A: inline with tokens — `12.3K/183.6K (7%) Hit(85.3%) | ~/repo (main)`. Chosen — the cache rate is a property of the same response that produced the token count, so they belong together.
+- B: separate segment — `12.3K/183.6K (7%) | Hit(85.3%) | ~/repo (main)`. Rejected — visually distinct but the `|` separator would imply they're independent metrics when they're not.
+- C: after cwd — `12.3K/183.6K (7%) | ~/repo (main) | Hit(85.3%)`. Rejected — splits context info from its efficiency metric.
 
 **Q16 — Cache segment lifecycle?**
 
@@ -128,15 +134,15 @@ The bar has two redraw paths: the prompt redraw (`formatStatusBar`, used when id
 ## Decision
 
 1. **Token segment** in `formatStatusBar`:
-   - If `state.runtime.context.getLastUsage()` is `null`: render `tokens ?/{limit}` (no percentage).
-   - Otherwise: render `tokens {lastUsage.totalTokens}/{limit} ({pct}%)`.
+   - If `state.runtime.context.getLastUsage()` is `null`: render `?/{limit}` (no percentage).
+   - Otherwise: render `{lastUsage.totalTokens}/{limit} ({pct}%)`.
    - **No** trailing-delta estimate. The display stays at the last response's number until the next response lands.
 2. **Cache hit rate segment** — appended inline to the token segment (no `|` separator):
    - If `lastUsage` is `null`: omit.
    - If `cacheRead + input === 0`: omit (no cacheable input, or provider doesn't report cache fields).
    - Otherwise: render `Hit({pct}%)` where `pct = cacheRead / (cacheRead + input) * 100`, one decimal place.
-   - Examples: `tokens 12.3K/183.6K (7%) Hit(85.3%) | ~/repo (main)`, `tokens 12.3K/183.6K (7%) Hit(0.0%) | ~/repo (main)`, `tokens 12.3K/183.6K (7%) | ~/repo (main)` (no cache segment).
-2. **Drop the `model {modelName}` segment** entirely.
+   - Examples: `12.3K/183.6K (7%) Hit(85.3%) | ~/repo (main)`, `12.3K/183.6K (7%) Hit(0.0%) | ~/repo (main)`, `12.3K/183.6K (7%) | ~/repo (main)` (no cache segment).
+2. **Drop the `model ` prefix, keep the model name.** The first segment is now the bare `{modelName}` (no `model ` label). The name is retained because the prompt area does not show it, so the status bar is the user's only at-a-glance view of the active model.
 3. **Git branch segment**: append `(branch)` to the cwd segment.
    - Normal: `~/repo (main)`.
    - Detached: `~/repo (@a1b2c3d)` (short SHA, prefixed with `@`).
@@ -157,6 +163,6 @@ The bar has two redraw paths: the prompt redraw (`formatStatusBar`, used when id
 - **Stale-but-honest**: between responses, the token number does not update as the user types. This is a deliberate trade — staleness is preferable to a wrong estimate. The next response refreshes it.
 - **Git branch is best-effort**: a slow or broken git never blocks the prompt. The segment silently disappears.
 - **Async ripple**: `formatStatusBar` and `formatStatusBarForEvent` are now `async`. Callers in `cli.ts` already `await` setup, so the change is local. Any future sync caller must be audited.
-- **Test coverage**: new `describe("status bar revision", ...)` block in `test/chat-repl.test.ts` covering: `?` before first response, exact `lastUsage.totalTokens` after, no trailing delta on new user message, `?` after `recover()`, git branch normal / detached / absent, no `model` segment anywhere, **resume with persisted `usage` shows the real number (not `?`)**, **resume without `usage` (old session) shows `?`**, **cache hit rate shown when `cacheRead + input > 0`**, **cache hit rate hidden when `cacheRead + input === 0`**, **cache hit rate hidden when `lastUsage` is `null`**, **`Hit(0.0%)` shown for legitimate zero hit rate**. Git is mocked via scoped `vi.mock("../src/git.js", ...)`; `lastUsage` is driven through the real `ConversationContext`; resume is exercised by constructing a `MessageEntry[]` with `usage` set on the last assistant message and calling `hydrateState`.
-- **Removed**: `model {modelName}` prefix. The model is still visible in the prompt area and via `/model`.
-- **Live-then-truth token number during a turn**: the token count may tick up (live `chars/4` estimate via `formatStatusBarForEvent`) while a turn runs and then settle to the provider's `totalTokens` (ground truth) once the response is recorded. This is expected progress feedback from the event redraw, *not* the "stale estimate" decision 1 prohibits (that rule is scoped to the idle / prompt redraw). Concretely: a fresh session shows `?`, typing and pressing Enter shows a rising `tokens N/limit` during generation, and on completion it snaps to `tokens {lastUsage.totalTokens}/limit (pct%) [Hit(x%)]`. Two tests encode it: `formatStatusBarForEvent uses live context token estimate` and `formatStatusBarForEvent uses event token estimate when available`.
+- **Test coverage**: new `describe("status bar revision", ...)` block in `test/chat-repl.test.ts` covering: `?` before first response, exact `lastUsage.totalTokens` after, no trailing delta on new user message, `?` after `recover()`, git branch normal / detached / absent, model name at the start with no `model ` prefix, **resume with persisted `usage` shows the real number (not `?`)**, **resume without `usage` (old session) shows `?`**, **cache hit rate shown when `cacheRead + input > 0`**, **cache hit rate hidden when `cacheRead + input === 0`**, **cache hit rate hidden when `lastUsage` is `null`**, **`Hit(0.0%)` shown for legitimate zero hit rate**. Git is mocked via scoped `vi.mock("../src/git.js", ...)`; `lastUsage` is driven through the real `ConversationContext`; resume is exercised by constructing a `MessageEntry[]` with `usage` set on the last assistant message and calling `hydrateState`.
+- **Dropped the `model ` prefix; kept the model name.** The first segment is the bare `{modelName}`. The prompt area does not surface the active model, so the status bar is where the user sees it; only the redundant `model ` label was removed.
+- **Live-then-truth token number during a turn**: the token count may tick up (live `chars/4` estimate via `formatStatusBarForEvent`) while a turn runs and then settle to the provider's `totalTokens` (ground truth) once the response is recorded. This is expected progress feedback from the event redraw, *not* the "stale estimate" decision 1 prohibits (that rule is scoped to the idle / prompt redraw). Concretely: a fresh session shows `?`, typing and pressing Enter shows a rising `N/limit` during generation, and on completion it snaps to `{lastUsage.totalTokens}/limit (pct%) [Hit(x%)]`. Two tests encode it: `formatStatusBarForEvent uses live context token estimate` and `formatStatusBarForEvent uses event token estimate when available`.
