@@ -18,6 +18,9 @@ export type ResponseSpec =
 			frameGapMs?: number;
 			/** Write the first frame, then keep the connection open forever. */
 			stallAfterFirstFrame?: boolean;
+			/** Keep emitting frames forever (cycling the list) — simulates a
+			 *  reasoning-forever stream that never completes. */
+			loop?: boolean;
 	  }
 	| { kind: "error"; status: number; statusText?: string; body: string }
 	/** 2xx with an invalid JSON body — forces the SDK's JSON.parse to throw. */
@@ -183,11 +186,32 @@ function writeSpec(res: http.ServerResponse, spec: ResponseSpec): void {
 			res.setHeader("cache-control", "no-cache");
 			const frames = spec.frames;
 			const writeFrame = (index: number) => {
+				if (!res.writable) {
+					// Client aborted / connection closed; stop emitting.
+					return;
+				}
 				if (index >= frames.length) {
+					if (spec.loop) {
+						// Reason-forever: keep emitting frames; the consumer's total
+						// timeout must abort the turn (closes the ADR 0020 gap).
+						try {
+							res.write(frames[(index - 1) % frames.length]);
+						} catch {
+							return;
+						}
+						const gap =
+							spec.frameGapMs && spec.frameGapMs > 0 ? spec.frameGapMs : 10;
+						setTimeout(() => writeFrame(index + 1), gap);
+						return;
+					}
 					res.end();
 					return;
 				}
-				res.write(frames[index]);
+				try {
+					res.write(frames[index]);
+				} catch {
+					return;
+				}
 				if (spec.stallAfterFirstFrame && index === 0) {
 					// Keep the connection open; the idle timer must abort.
 					return;

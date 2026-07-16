@@ -44,7 +44,7 @@ const chatAdapter = (config: LocalModelServer["config"]) => () =>
 const responsesAdapter = (config: LocalModelServer["config"]) => () =>
 	new ResponsesAdapter(config);
 
-test("idle/stall timeout lets a slow-but-steady SSE stream succeed (total deadline would have killed it)", async () => {
+test("idle/stall timer keeps a steady stream alive when it finishes within the total timeout budget", async () => {
 	const frames = [
 		chatFrame({ content: "a" }),
 		chatFrame({ content: "b" }),
@@ -54,7 +54,7 @@ test("idle/stall timeout lets a slow-but-steady SSE stream succeed (total deadli
 	];
 	await withServer(
 		{ timeoutMs: 300 },
-		() => ({ kind: "sse", frames, frameGapMs: 100 }),
+		() => ({ kind: "sse", frames, frameGapMs: 40 }),
 		async (server) => {
 			const transport = new ModelTransport(server.config, server.client);
 			const result = await transport.generate(
@@ -63,8 +63,61 @@ test("idle/stall timeout lets a slow-but-steady SSE stream succeed (total deadli
 			);
 			assert.equal(result.assistantText, "abc");
 			assert.equal(result.finishReason, "stop");
-			// Total wall-clock (~460ms) exceeds timeoutMs (300ms) but the stream
-			// succeeds because the idle timer resets on every received frame.
+			// Wall-clock (~200ms) is under timeoutMs (300ms), so the idle timer
+			// (reset on every frame) keeps it alive and the total timer never
+			// fires — both timers share timeoutMs (ADR-0024).
+		},
+	);
+});
+
+test("a reasoning-forever stream is killed by the total timeout, not an infinite hang", async () => {
+	// The model streams thinking bytes forever (no content, no [DONE]): the
+	// idle/stall timer is kept happy by those bytes, so only the
+	// byte-independent total timer (request start -> stream end) stops it.
+	const thinking = [
+		chatFrame({ reasoning_content: "thinking" }),
+		chatFrame({ reasoning_content: "still thinking" }),
+	];
+	await withServer(
+		{ timeoutMs: 200 },
+		() => ({ kind: "sse", frames: thinking, frameGapMs: 20, loop: true }),
+		async (server) => {
+			const transport = new ModelTransport(server.config, server.client);
+			await assert.rejects(
+				() => transport.generate(request(), chatAdapter(server.config)),
+				(error) =>
+					error instanceof ModelRequestError &&
+					error.kind === "timeout" &&
+					/timed out after 200ms/.test(error.message),
+			);
+		},
+	);
+});
+
+test("a steady stream exceeding the total timeout is killed even though bytes keep arriving", async () => {
+	// ADR-0024 accepts the ADR-0005 trade-off: a single timeoutMs bounds both
+	// silence (idle) and total duration. This stream feeds bytes steadily
+	// (≈400ms > timeoutMs 200ms) so the idle timer never fires — the total
+	// timer must catch it. Locks in the freeze fix (issue #28).
+	const frames = [
+		chatFrame({ content: "a" }),
+		chatFrame({ content: "b" }),
+		chatFrame({ content: "c" }),
+		chatFrame({}, "stop"),
+		SSE_DONE,
+	];
+	await withServer(
+		{ timeoutMs: 200 },
+		() => ({ kind: "sse", frames, frameGapMs: 100 }),
+		async (server) => {
+			const transport = new ModelTransport(server.config, server.client);
+			await assert.rejects(
+				() => transport.generate(request(), chatAdapter(server.config)),
+				(error) =>
+					error instanceof ModelRequestError &&
+					error.kind === "timeout" &&
+					/timed out after 200ms/.test(error.message),
+			);
 		},
 	);
 });
