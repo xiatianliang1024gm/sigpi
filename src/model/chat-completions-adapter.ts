@@ -133,6 +133,10 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 		return this.convert(validateChatCompletionsResponse(this.accumulated));
 	}
 
+	isComplete(): boolean {
+		return this.accumulated?.choices[0]?.finish_reason != null;
+	}
+
 	onDelta(frame: unknown): ModelDelta | null {
 		if (!isPlainObject(frame)) {
 			return null;

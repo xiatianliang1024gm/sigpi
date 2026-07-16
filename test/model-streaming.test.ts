@@ -194,6 +194,45 @@ test("responses streams and folds message text deltas", async () => {
 	);
 });
 
+test("responses stream without response.completed/status still completes (gateway regression)", async () => {
+	// Some responses-API gateways (e.g. third-party OpenAI gateways) stream a
+	// normal [DONE] but omit the formal response.completed event, so the
+	// adapter's finishReason stays null. The turn must still complete with the
+	// accumulated text rather than failing with stream_error.
+	const frames = [
+		responsesFrame({
+			type: "response.output_item.added",
+			item: { id: "msg_1", type: "message", role: "assistant", content: [] },
+		}),
+		responsesFrame({
+			type: "response.output_text.delta",
+			item_id: "msg_1",
+			delta: "hel",
+		}),
+		responsesFrame({
+			type: "response.output_text.delta",
+			item_id: "msg_1",
+			delta: "lo",
+		}),
+		SSE_DONE,
+	];
+	await withServer(
+		{ apiFormat: "responses", timeoutMs: 200 },
+		() => ({ kind: "sse", frames }),
+		async (server) => {
+			const transport = new ModelTransport(server.config, server.client);
+			const result = await transport.generate(
+				request(),
+				responsesAdapter(server.config),
+			);
+			assert.equal(result.assistantText, "hello");
+			// No response.completed/status was streamed, so finishReason is null,
+			// but the turn is a normal completion (SDK consumed [DONE]).
+			assert.equal(result.finishReason, null);
+		},
+	);
+});
+
 test("responses streams and folds function_call argument deltas (real OpenAI string-delta shape)", async () => {
 	const frames = [
 		responsesFrame({

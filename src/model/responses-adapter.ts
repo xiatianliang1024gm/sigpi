@@ -188,6 +188,18 @@ export class ResponsesAdapter implements WireFormatAdapter {
 		return this.convert(validateResponsesResponse(this.accumulated));
 	}
 
+	isComplete(): boolean {
+		// A responses stream is complete when the provider signalled completion
+		// (response.completed/status) or actually produced output. Some gateways
+		// stream [DONE] but omit response.completed, leaving status undefined —
+		// the accumulated output is still a usable, completed turn.
+		return (
+			this.accumulated.status !== undefined ||
+			this.accumulated.output_text !== undefined ||
+			this.accumulated.output.length > 0
+		);
+	}
+
 	onDelta(frame: unknown): ModelDelta | null {
 		if (!isPlainObject(frame)) {
 			return null;

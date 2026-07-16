@@ -40,4 +40,15 @@ export interface WireFormatAdapter {
 	getPartialView(): ModelResponse;
 	/** Emit the complete {@link ModelResponse} assembled from accumulated frames. */
 	finalize(): ModelResponse;
+	/**
+	 * Report whether the stream reached a normal completion signal (the SDK
+	 * consumed the `[DONE]` sentinel / terminal event). The transport returns
+	 * {@link finalize} whenever this is true, even if the provider omitted an
+	 * explicit `finish_reason` — some responses-API gateways stream `[DONE]`
+	 * but no `response.completed`/`status` event, and the pre-SDK transport
+	 * treated a `[DONE]` as success regardless of `finish_reason`. When false
+	 * (the stream ended without a completion signal), the transport requires a
+	 * `finish_reason` to avoid silently accepting a truncated response.
+	 */
+	isComplete(): boolean;
 }

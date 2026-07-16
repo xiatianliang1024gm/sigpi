@@ -58,6 +58,7 @@ const nullAdapter = (model = "test-model") => ({
 		usage: undefined,
 		rawResponse: undefined,
 	}),
+	isComplete: () => false,
 });
 
 test("transport returns the parsed response on first success", async () => {
