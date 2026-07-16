@@ -235,8 +235,9 @@ const tomlRootSchema = z.object({
 	trust: snakeFields(trustConfigSchema, TRUST_ALIASES).optional(),
 	tools: z
 		.object({
-			bash: snakeFields(bashConfigSchema, BASH_ALIASES).optional(),
+			bash: snakeFields(bashConfigSchema, BASH_ALIASES, true).optional(),
 		})
+		.strict()
 		.partial()
 		.optional(),
 });
@@ -601,9 +602,63 @@ function mapSection<T>(
 	return out as Partial<T>;
 }
 
+/**
+ * Execution-guard keys removed by ADR 0023. A config that still carries them
+ * must fail to load with a clear, actionable error rather than being silently
+ * stripped (which would mask a now-invalid setup).
+ */
+const REMOVED_BASH_KEYS = new Set(["mode", "allowed_roots"]);
+
+/**
+ * Validate parsed TOML against `tomlRootSchema`, which is `.strict()` on the
+ * `tools` section and its `bash` subsection. On an unrecognized-key error,
+ * rewrite the message so removed execution guards point the user at the
+ * replacement (`[trust] default_project_trust`) instead of a bare Zod error.
+ */
+function parseTrustedSchema(parsed: unknown): z.infer<typeof tomlRootSchema> {
+	try {
+		return tomlRootSchema.parse(parsed);
+	} catch (error) {
+		if (error instanceof z.ZodError) {
+			throw new Error(describeConfigSchemaError(error));
+		}
+		throw error;
+	}
+}
+
+function describeConfigSchemaError(error: z.ZodError): string {
+	const removed: string[] = [];
+	const others: string[] = [];
+	for (const issue of error.issues) {
+		if (issue.code === "unrecognized_keys") {
+			const keys = (issue as { keys?: string[] }).keys ?? [];
+			for (const key of keys) {
+				if (REMOVED_BASH_KEYS.has(key)) {
+					removed.push(key);
+				} else {
+					others.push([...issue.path, key].join("."));
+				}
+			}
+		} else {
+			others.push(`${issue.path.join(".") || "<root>"}: ${issue.message}`);
+		}
+	}
+	const parts: string[] = [];
+	if (removed.length > 0) {
+		parts.push(
+			`Config contains removed execution-guard keys that can no longer be loaded: ${removed.join(", ")}. These guards were removed (ADR 0023); SigPi now runs with the account's own permissions. ` +
+				'Control project-resource loading with [trust] default_project_trust = "ask" | "always" | "never" instead.',
+		);
+	}
+	if (others.length > 0) {
+		parts.push(`Unrecognized config keys: ${others.join(", ")}.`);
+	}
+	return parts.join(" ");
+}
+
 export function parseTomlConfig(content: string): PartialConfig {
 	const parsed = parse(content);
-	const validated = tomlRootSchema.parse(parsed);
+	const validated = parseTrustedSchema(parsed);
 
 	return {
 		modelId: validated.model?.default ?? validated.model?.active,
