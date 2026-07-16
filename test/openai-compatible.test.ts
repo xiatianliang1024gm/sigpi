@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ModelConfig } from "../src/config.js";
 import { OpenAICompatibleProvider } from "../src/model/openai-compatible.js";
+import { clampMaxTokens } from "../src/model/transport.js";
+import type { ModelRequest } from "../src/types.js";
 import {
 	chatFrame,
 	type LocalModelServer,
@@ -802,6 +804,86 @@ test("ESC during a hung turn re-throws TurnInterruptedError and is not retried",
 			);
 			// The interrupt must not be retried.
 			assert.equal(server.captured.length, 1);
+		},
+	);
+});
+
+test("provider clamps an oversized max_tokens to the remaining context fit (chat)", async () => {
+	await withServer(
+		{ stream: false, hardContextLimit: 8192 },
+		() =>
+			chatJson({
+				choices: [{ message: { role: "assistant", content: "ok" } }],
+			}),
+		async (server) => {
+			const provider = createProvider(server, {
+				stream: false,
+				hardContextLimit: 8192,
+			});
+			const request: ModelRequest = {
+				messages: [{ role: "user", content: "hi" }],
+				tools: [],
+				maxTokens: 100_000,
+			};
+			await provider.generate(request);
+			const body = server.captured[0]?.body as Record<string, unknown>;
+			assert.equal(body.max_tokens, clampMaxTokens(request, 8192));
+			assert.ok(
+				(body.max_tokens as number) < 100_000,
+				"oversized max_tokens is clamped below the request",
+			);
+		},
+	);
+});
+
+test("provider bounds max_tokens to the context fit when max_tokens is unset (chat)", async () => {
+	await withServer(
+		{ stream: false, hardContextLimit: 8192 },
+		() =>
+			chatJson({
+				choices: [{ message: { role: "assistant", content: "ok" } }],
+			}),
+		async (server) => {
+			const provider = createProvider(server, {
+				stream: false,
+				hardContextLimit: 8192,
+			});
+			const request: ModelRequest = {
+				messages: [{ role: "user", content: "hi" }],
+				tools: [],
+			};
+			await provider.generate(request);
+			const body = server.captured[0]?.body as Record<string, unknown>;
+			// Outbound max_tokens is always set (never undefined) and equals the
+			// remaining-context cap.
+			assert.equal(body.max_tokens, clampMaxTokens(request, 8192));
+			assert.ok(Number.isFinite(body.max_tokens as number));
+		},
+	);
+});
+
+test("provider clamps an oversized max_tokens on the responses API (max_output_tokens)", async () => {
+	await withServer(
+		{ apiFormat: "responses", stream: false, hardContextLimit: 8192 },
+		() => responsesJson({ status: "completed", output_text: "ok", output: [] }),
+		async (server) => {
+			const provider = createProvider(server, {
+				apiFormat: "responses",
+				stream: false,
+				hardContextLimit: 8192,
+			});
+			const request: ModelRequest = {
+				messages: [{ role: "user", content: "hi" }],
+				tools: [],
+				maxTokens: 100_000,
+			};
+			await provider.generate(request);
+			const body = server.captured[0]?.body as Record<string, unknown>;
+			assert.equal(body.max_output_tokens, clampMaxTokens(request, 8192));
+			assert.ok(
+				(body.max_output_tokens as number) < 100_000,
+				"oversized max_output_tokens is clamped below the request",
+			);
 		},
 	);
 });
