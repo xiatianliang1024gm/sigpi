@@ -53,8 +53,13 @@ test("idle/stall timer keeps a steady stream alive when it finishes within the t
 		SSE_DONE,
 	];
 	await withServer(
-		{ timeoutMs: 300 },
-		() => ({ kind: "sse", frames, frameGapMs: 40 }),
+		// Generous margin: the stream finishes in ~120ms but loopback/SSE read
+		// overhead can add substantial latency, so timeoutMs (500) stays well
+		// above the expected completion time. The idle timer (reset on every
+		// frame) keeps it alive and the total timer never fires — both timers
+		// share timeoutMs (ADR-0024).
+		{ timeoutMs: 500 },
+		() => ({ kind: "sse", frames, frameGapMs: 30 }),
 		async (server) => {
 			const transport = new ModelTransport(server.config, server.client);
 			const result = await transport.generate(
