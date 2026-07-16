@@ -497,10 +497,10 @@ test("formatStatusBar includes tokens and cwd", async () => {
 		const state = runtimeToChatReplState(runtime);
 		const status = await formatStatusBar(state);
 
-		assert.doesNotMatch(status, /^model /);
+		assert.match(status, /^test-model /);
 		// Before the first response there is no provider-reported usage, so
 		// the token count is an honest `?` rather than a drift-prone estimate.
-		assert.match(status, /tokens \?\//);
+		assert.match(status, /\?\//);
 		assert.match(status, /\| .*sigpi-chat-repl-status-/);
 	} finally {
 		restoreHome();
@@ -553,7 +553,7 @@ test("formatStatusBarForEvent uses live context token estimate (default unit)", 
 			estimatedContextTokens: 12_345,
 		});
 
-		assert.match(status, /tokens 12\.3K\//);
+		assert.match(status, /12\.3K\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -574,7 +574,7 @@ test("formatStatusBar shows tokens and (contextWindow-reserveTokens) limit", asy
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 		const status = await formatStatusBar(state);
-		assert.match(status, /tokens \?\/183\.6K/);
+		assert.match(status, /\?\/183\.6K/);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -601,7 +601,7 @@ test("formatStatusBarForEvent uses event token estimate when available", async (
 			estimatedContextTokens: 12_345,
 		});
 
-		assert.match(status, /tokens 12\.3K\//);
+		assert.match(status, /12\.3K\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -629,8 +629,8 @@ test("formatStatusBarForEvent recomputes from state when event has no token esti
 		});
 		// Falls back to recomputing from state via ground-truth usage, which is
 		// `?` before the first response.
-		assert.doesNotMatch(status, /^model /);
-		assert.match(status, /tokens \?\//);
+		assert.match(status, /^test-model /);
+		assert.match(status, /\?\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -751,7 +751,7 @@ test("formatStatusBar omits cache hit rate when no usage has been recorded", asy
 		const status = await formatStatusBar(state);
 
 		assert.doesNotMatch(status, /Hit\(/);
-		assert.match(status, /tokens \?\//);
+		assert.match(status, /\?\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -799,7 +799,7 @@ test("formatStatusBar shows the provider's totalTokens from the last response", 
 
 		const status = await formatStatusBar(state);
 		// Ground truth is totalTokens (1_050 -> 1.1K), not a chars/4 estimate.
-		assert.match(status, /tokens 1\.1K\//);
+		assert.match(status, /1\.1K\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -855,7 +855,7 @@ test("formatStatusBar keeps the last response's count while a follow-up is typed
 		);
 
 		const status = await formatStatusBar(state);
-		assert.match(status, /tokens 1\.1K\//);
+		assert.match(status, /1\.1K\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -900,11 +900,11 @@ test("formatStatusBar resets to ? after in-memory state is cleared", async () =>
 				},
 			},
 		);
-		assert.match(await formatStatusBar(state), /tokens 1\.1K\//);
+		assert.match(await formatStatusBar(state), /1\.1K\//);
 
 		// Clearing in-memory state (e.g. /recover) drops the ground truth.
 		state.runtime.context.reset();
-		assert.match(await formatStatusBar(state), /tokens \?\//);
+		assert.match(await formatStatusBar(state), /\?\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -955,7 +955,7 @@ test("formatStatusBar hides cache hit rate when there is no cacheable input", as
 
 		const status = await formatStatusBar(state);
 		assert.doesNotMatch(status, /Hit\(/);
-		assert.match(status, /tokens 50\//);
+		assert.match(status, /50\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -1039,7 +1039,7 @@ test("formatStatusBar shows @shortSha for a detached HEAD", async () => {
 	}
 });
 
-test("formatStatusBar never includes a model segment", async () => {
+test("formatStatusBar includes a model segment at the start", async () => {
 	const cwd = await realpath(
 		await createTempDir("sigpi-chat-repl-status-nomodel-"),
 	);
@@ -1079,10 +1079,10 @@ test("formatStatusBar never includes a model segment", async () => {
 		);
 
 		const status = await formatStatusBar(state);
-		// No `model {name}` segment (anchored at start, as the cwd path can
-		// legitimately contain the substring "model").
-		assert.doesNotMatch(status, /^model /);
-		assert.match(status, /tokens 1\.1K\//);
+		// The model name is anchored at the start (the cwd path can
+		// legitimately contain the substring "model", so we anchor at start).
+		assert.match(status, /^test-model /);
+		assert.match(status, /1\.1K\//);
 		assert.match(status, /Hit\(80\.0%\)/);
 	} finally {
 		restoreHome();
@@ -1137,7 +1137,7 @@ test("formatStatusBar restores token count from a resumed session with usage", a
 
 		const status = await formatStatusBar(state);
 		// Real number restored from the persisted entry, not `?`.
-		assert.match(status, /tokens 1\.1K\//);
+		assert.match(status, /1\.1K\//);
 		assert.match(status, /Hit\(80\.0%\)/);
 	} finally {
 		restoreHome();
@@ -1169,7 +1169,7 @@ test("formatStatusBar shows ? for a resumed session without usage", async () => 
 		});
 
 		const status = await formatStatusBar(state);
-		assert.match(status, /tokens \?\//);
+		assert.match(status, /\?\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
