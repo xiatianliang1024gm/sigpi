@@ -18,7 +18,7 @@ await writeTestConfig(cwd, {
 	reserveTokens: 0,
 });
 
-const validatedConfig = await runCliCommand({
+const validatedConfig = await runTrustedCli({
 	cwd,
 	commandArgs: ["config", "validate"],
 });
@@ -32,8 +32,19 @@ const childEnv = {
 	AGENT_SESSIONS_ROOT: path.join(cwd, ".sessions-root"),
 };
 const nodeArgs = ["--import", bootstrapPath];
+// The integration harness runs SigPi's own test fixtures in a project directory
+// that carries a gating marker (.sigpi/config.toml). Because ADR 0022 gates
+// project-local resources behind trust and headless runs default to deny,
+// every command opts into the project config/skills via --approve.
+async function runTrustedCli(args) {
+	return runCliCommand({
+		...args,
+		commandArgs: [...args.commandArgs, "--approve"],
+	});
+}
 
-const firstAsk = await runCliCommand({
+
+const firstAsk = await runTrustedCli({
 	cwd,
 	commandArgs: ["ask", "--new", "--title", "save-session", "save state"],
 	env: childEnv,
@@ -50,7 +61,7 @@ const storagePaths = resolveSessionStoragePaths({
 const sessionPath = path.join(storagePaths.sessionsDir, `${savedSessionId}.meta.json`);
 assert.match(await readFile(sessionPath, "utf8"), /save state/);
 
-const resumedAsk = await runCliCommand({
+const resumedAsk = await runTrustedCli({
 	cwd,
 	commandArgs: ["ask", "--session", savedSessionId, "follow up"],
 	env: childEnv,
@@ -60,7 +71,7 @@ assert.equal(resumedAsk.code, 0);
 assert.match(resumedAsk.stdout, /resume ok/);
 assert.match(resumedAsk.stdout, new RegExp(savedSessionId));
 
-const shownSession = await runCliCommand({
+const shownSession = await runTrustedCli({
 	cwd,
 	commandArgs: ["session", "show", savedSessionId],
 	env: childEnv,
@@ -70,14 +81,14 @@ assert.equal(shownSession.code, 0);
 assert.match(shownSession.stdout, /"turnCount": 2/);
 assert.match(shownSession.stdout, /"lastCompletedUserInput": "follow up"/);
 
-const baseChat = await runCliCommand({
+const baseChat = await runTrustedCli({
 	cwd,
 	commandArgs: ["ask", "--new", "--title", "chat-base", "base state"],
 	env: childEnv,
 	nodeArgs,
 });
 const baseChatSessionId = extractSessionId(baseChat.stdout);
-const updatedTarget = await runCliCommand({
+const updatedTarget = await runTrustedCli({
 	cwd,
 	commandArgs: ["ask", "--session", savedSessionId, "refresh target"],
 	env: childEnv,
@@ -85,7 +96,7 @@ const updatedTarget = await runCliCommand({
 });
 assert.equal(updatedTarget.code, 0);
 
-const chat = await runCliCommand({
+const chat = await runTrustedCli({
 	cwd,
 	commandArgs: ["chat", "--session", baseChatSessionId],
 	input: "chat question\n",
@@ -97,7 +108,7 @@ assert.equal(chat.code, 0);
 assert.match(chat.stdout, /chat ok/);
 assert.match(chat.stdout, new RegExp(baseChatSessionId));
 
-const refreshBeforeResume = await runCliCommand({
+const refreshBeforeResume = await runTrustedCli({
 	cwd,
 	commandArgs: ["ask", "--session", savedSessionId, "refresh before resume"],
 	env: childEnv,
@@ -105,7 +116,7 @@ const refreshBeforeResume = await runCliCommand({
 });
 assert.equal(refreshBeforeResume.code, 0);
 
-const sessionCommand = await runCliCommand({
+const sessionCommand = await runTrustedCli({
 	cwd,
 	commandArgs: ["chat", "--session", baseChatSessionId],
 	input: "/session\n",
@@ -116,7 +127,7 @@ const sessionCommand = await runCliCommand({
 assert.equal(sessionCommand.code, 0);
 assert.match(sessionCommand.stdout, new RegExp(baseChatSessionId));
 
-const summaryCommand = await runCliCommand({
+const summaryCommand = await runTrustedCli({
 	cwd,
 	commandArgs: ["chat", "--session", baseChatSessionId],
 	input: "/summary\n",
@@ -127,7 +138,7 @@ const summaryCommand = await runCliCommand({
 assert.equal(summaryCommand.code, 0);
 assert.match(summaryCommand.stdout, /Context window:/);
 
-const compactCommand = await runCliCommand({
+const compactCommand = await runTrustedCli({
 	cwd,
 	commandArgs: ["chat", "--session", baseChatSessionId],
 	input: "/compact\n",
@@ -138,7 +149,7 @@ const compactCommand = await runCliCommand({
 assert.equal(compactCommand.code, 0);
 assert.match(compactCommand.stdout, /Context compacted/);
 
-const resumeCommand = await runCliCommand({
+const resumeCommand = await runTrustedCli({
 	cwd,
 	commandArgs: ["chat", "--session", baseChatSessionId],
 	input: "/resume\n",
@@ -150,7 +161,7 @@ assert.equal(resumeCommand.code, 0);
 assert.match(resumeCommand.stdout, /Attached session:/);
 assert.match(resumeCommand.stdout, new RegExp(baseChatSessionId));
 
-const exitCommand = await runCliCommand({
+const exitCommand = await runTrustedCli({
 	cwd,
 	commandArgs: ["chat", "--session", baseChatSessionId],
 	input: "/exit\n",
@@ -161,7 +172,7 @@ const exitCommand = await runCliCommand({
 assert.equal(exitCommand.code, 0);
 
 // No-args invocation must default to interactive chat (not print usage).
-const noArgsChat = await runCliCommand({
+const noArgsChat = await runTrustedCli({
   cwd,
   commandArgs: [],
   input: "/exit\n",
@@ -173,7 +184,7 @@ assert.equal(noArgsChat.code, 0);
 assert.match(noArgsChat.stdout, /Interactive chat started/);
 assert.doesNotMatch(noArgsChat.stdout, /Usage:/);
 
-const toolFailure = await runCliCommand({
+const toolFailure = await runTrustedCli({
 	cwd,
 	commandArgs: ["ask", "tool fail"],
 	env: childEnv,
@@ -182,7 +193,7 @@ const toolFailure = await runCliCommand({
 assert.equal(toolFailure.code, 0);
 assert.match(toolFailure.stdout, /tool error surfaced/);
 
-const modelFailure = await runCliCommand({
+const modelFailure = await runTrustedCli({
 	cwd,
 	commandArgs: ["ask", "model boom"],
 	env: childEnv,
@@ -194,7 +205,7 @@ assert.match(
 	/The model provider returned a server error \(HTTP 500\)\. Retry shortly\./,
 );
 
-const maxStepsAsk = await runCliCommand({
+const maxStepsAsk = await runTrustedCli({
 	cwd,
 	commandArgs: ["ask", "loop steps"],
 	env: { ...childEnv, AGENT_MAX_STEPS: "3" },
