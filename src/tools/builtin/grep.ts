@@ -65,7 +65,8 @@ export function createGrepTool(
 		description:
 			"Search file contents for a pattern using ripgrep. Use this to find symbols, strings, config keys, or the files that mention a term. " +
 			"Where glob finds files by name, grep finds lines inside them. Patterns use ripgrep regex syntax; regex metacharacters must be escaped. " +
-			"Respects .gitignore (gitignored files are skipped); to search a gitignored file, pass its path directly.",
+			"Respects .gitignore (gitignored files are skipped); to search a gitignored file, pass its path directly. " +
+			'`path` sets the search root and may be a parent directory (e.g. "..") or an absolute path to search anywhere on the filesystem; the `glob` filter and matches are scoped downward from it.',
 		inputSchema: grepSchema,
 		parameters: {
 			type: "object",
@@ -78,12 +79,12 @@ export function createGrepTool(
 				path: {
 					type: "string",
 					description:
-						"Optional path to search within, relative to the workspace root. A directory scopes the search; a file path searches just that file (and bypasses .gitignore). Defaults to the workspace root.",
+						'Directory or file to search, resolved against the current working directory. A directory scopes the search; a file path searches just that file (and bypasses .gitignore). Defaults to the current working directory. May be a parent directory (e.g. "..") or an absolute path to search anywhere on the filesystem.',
 				},
 				glob: {
 					type: "string",
 					description:
-						"Optional ripgrep glob to narrow which files are searched, such as src/**/*.ts or *.md.",
+						"Optional ripgrep glob to narrow which files are searched, such as src/**/*.ts or *.md. Matched downward from `path`; it must not contain a leading ../ or absolute path.",
 				},
 				type: {
 					type: "string",

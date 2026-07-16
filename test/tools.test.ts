@@ -505,7 +505,7 @@ test("glob schema describes pattern-based file search", () => {
 	);
 	assert.match(
 		String(parameters.properties?.path?.description),
-		/subdirectory/i,
+		/parent directory|absolute path/i,
 	);
 });
 
