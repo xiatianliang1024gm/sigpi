@@ -1005,28 +1005,37 @@ function buildMaxStepsFallbackAnswer(
 	return lines.join("\n");
 }
 
-function summarizeToolExecutions(
+export function summarizeToolExecutions(
 	toolExecutions: readonly ExecutedToolCall[],
 ): string[] {
-	const facts: string[] = [];
-	const seen = new Set<string>();
+	// Only file read/modify operations belong in the turn summary. Classify by
+	// tool name (not argument shape) so bash/grep/glob/update-plan are excluded
+	// and edit/write are labeled as modifications, not reads. See ADR-0022.
+	const FILE_OP_TOOLS = new Set(["read", "edit", "write"]);
 
+	// Accumulate one status per path; "modified" wins over "read" so a file that
+	// was both read and changed is recorded once as Modified.
+	const statusByPath = new Map<string, "read" | "modified">();
 	for (const execution of toolExecutions) {
+		if (!FILE_OP_TOOLS.has(execution.toolCall.name)) {
+			continue;
+		}
 		const pathArg = execution.toolCall.arguments.file_path;
-		const commandArg = execution.toolCall.arguments.command;
-		const fact =
-			typeof pathArg === "string"
-				? `Read ${pathArg}`
-				: typeof commandArg === "string"
-					? `Ran ${commandArg}`
-					: `Called ${execution.toolCall.name}`;
-		if (!seen.has(fact)) {
-			seen.add(fact);
-			facts.push(fact);
+		if (typeof pathArg !== "string") {
+			continue;
+		}
+		const status = execution.toolCall.name === "read" ? "read" : "modified";
+		if (statusByPath.get(pathArg) !== "modified") {
+			statusByPath.set(pathArg, status);
 		}
 	}
 
-	return facts;
+	const facts: string[] = [];
+	for (const [path, status] of statusByPath) {
+		facts.push(status === "modified" ? `Modified ${path}` : `Read ${path}`);
+	}
+
+	return facts.slice(0, 20);
 }
 
 function truncateProgressToolResult(value: string): string {
