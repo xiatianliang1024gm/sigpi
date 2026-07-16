@@ -1767,6 +1767,7 @@ test("runChatReplLoop records only model-reaching inputs in input history", asyn
 					completionStatus: "completed",
 					outputText: `echo:${line}`,
 					toolExecutions: [],
+					resumable: false,
 				}),
 			},
 		);
@@ -1826,6 +1827,7 @@ test("runChatReplLoop records the original line, not the expanded /skill form", 
 					completionStatus: "completed",
 					outputText: `echo:${line}`,
 					toolExecutions: [],
+					resumable: false,
 				}),
 			},
 		);
