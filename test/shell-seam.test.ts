@@ -111,7 +111,6 @@ for (const shell of POSIX_SHELLS) {
 		const ctx = {
 			cwd: startDir,
 			bash: { workingDir, outputDir },
-			allowedReadRoots: [outputDir],
 		};
 		const subDir = path.join(startDir, `shell-seam-cd-${shell}`);
 		await mkdir(subDir, { recursive: true });

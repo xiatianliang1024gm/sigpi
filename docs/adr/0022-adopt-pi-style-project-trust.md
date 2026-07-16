@@ -57,6 +57,15 @@ accepted
   unless a closer decision exists).
 - **Security boundary is now explicitly the OS/container**, not SigPi. Running
   in untrusted or unattended contexts requires an external sandbox.
+- **Read containment is also removed (for consistency with the write change).**
+  `read` / `grep` / `glob` no longer enforce a `cwd`-escape check or an
+  `allowedReadRoots` allow-list: `resolveWorkspacePath` resolves any path
+  freely and `trustedReadRoots` plumbing is gone. The OS/container governs what
+  is reachable. This closes the inconsistency where the read guard was bypassable
+  via `bash` (already unrestricted after ADR 0023), giving a false sense of safety
+  — the same rationale that removed the write guard. The only residual read-side
+  behavior is the read-before-edit fingerprint check, which is a correctness
+  guard, not a boundary.
 - **ADR 0017 (load-implies-trust) is refined:** skills still auto-load and are
   trusted with no separate gate, but only within a trusted project. Its
   compensating skill-root write guard is removed (see ADR 0023).

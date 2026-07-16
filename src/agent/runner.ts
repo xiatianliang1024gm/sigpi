@@ -634,7 +634,6 @@ export class AgentRunner {
 								sessionId: this.options.sessionId ?? null,
 								turnId,
 								abortSignal: interruptController?.getAbortSignal(),
-								allowedReadRoots: this.options.allowedReadRoots,
 								bash: this.options.bashToolContext,
 							})
 							.finally(() => {

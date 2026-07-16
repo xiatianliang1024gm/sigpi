@@ -26,43 +26,6 @@ export function isRgUnavailable(error: unknown): boolean {
 	);
 }
 
-export async function listWorkspaceFilesFallback(args: {
-	cwd: string;
-	startPath: string;
-	glob?: string;
-	maxResults: number;
-	allowedRoots?: string[];
-}): Promise<{ files: string[]; totalFound: number }> {
-	const { resolved } = resolveWorkspacePath(
-		args.cwd,
-		args.startPath,
-		args.allowedRoots ?? [],
-	);
-	const rootStat = await stat(resolved);
-	const matcher = args.glob ? createGlobMatcher(args.glob) : null;
-	const files: string[] = [];
-
-	if (rootStat.isFile()) {
-		const relative = toPosix(path.relative(args.cwd, resolved));
-		if (!matcher || matcher(relative)) {
-			files.push(relative);
-		}
-
-		return { files: files.slice(0, args.maxResults), totalFound: files.length };
-	}
-
-	await walkWorkspace(resolved, args.cwd, async (relativePath) => {
-		if (!matcher || matcher(relativePath)) {
-			files.push(relativePath);
-		}
-	});
-
-	return {
-		files: files.slice(0, args.maxResults),
-		totalFound: files.length,
-	};
-}
-
 function buildFallbackRegex(pattern: string, caseSensitive: boolean): RegExp {
 	const flags = caseSensitive ? "" : "i";
 	try {
@@ -85,13 +48,8 @@ export async function grepWorkspaceContentFallback(args: {
 	output_mode: "content" | "files_with_matches" | "count";
 	head_limit: number;
 	offset: number;
-	allowedRoots?: string[];
 }): Promise<{ output: string; resultCount: number; degraded: boolean }> {
-	const { resolved } = resolveWorkspacePath(
-		args.cwd,
-		args.startPath,
-		args.allowedRoots ?? [],
-	);
+	const { resolved } = resolveWorkspacePath(args.cwd, args.startPath);
 	const matcher = args.glob ? createGlobMatcher(args.glob) : null;
 	const regex = buildFallbackRegex(args.pattern, args.case_sensitive);
 	const degraded = Boolean(args.type) || args.multiline;

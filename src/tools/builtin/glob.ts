@@ -154,11 +154,7 @@ export function createGlobTool(
 		},
 		execute: async ({ pattern, path: searchPath }, context) => {
 			const resolvedPath = searchPath ?? ".";
-			const { resolved } = resolveWorkspacePath(
-				context.cwd,
-				resolvedPath,
-				context.allowedReadRoots ?? [],
-			);
+			const { resolved } = resolveWorkspacePath(context.cwd, resolvedPath);
 
 			// Try ripgrep first for speed
 			const rgResult = await tryRg(
