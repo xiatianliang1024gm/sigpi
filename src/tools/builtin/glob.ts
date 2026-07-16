@@ -127,11 +127,10 @@ export function createGlobTool(
 	return {
 		name: "glob",
 		description:
-			"Find files by name pattern. Supports standard glob patterns including ** for recursive directory matching. " +
-			"Examples: **/*.js matches all .js files at any depth, src/**/*.ts matches all .ts files under src/, " +
-			"*.{json,yaml} matches .json and .yaml files in the current directory. " +
-			"Results are sorted by modification time (newest first) and limited to the most recent 100 files. " +
-			"If the limit is reached, a truncated flag is set and you can narrow the pattern.",
+			"Find files by name using ripgrep's glob patterns (e.g. ** for recursive matching). The pattern is matched DOWNWARD from the `path` search root (defaults to the current working directory); it must not contain a leading `../` or an absolute path. " +
+			"Supports ** for recursive directory matching. Examples: **/*.js, src/**/*.ts, *.{json,yaml,md}. " +
+			'To search a directory other than the current one — including a parent or any absolute path — set `path` (e.g. path: "..") rather than putting ../ inside the pattern. ' +
+			"Results are sorted by modification time (newest first) and limited to the most recent 100 files; if truncated, narrow the pattern or set a more specific `path`.",
 		inputSchema: globSchema,
 		parameters: {
 			type: "object",
@@ -139,14 +138,14 @@ export function createGlobTool(
 				pattern: {
 					type: "string",
 					description:
-						"Glob pattern to match files against. Use ** for recursive directory matching. " +
-						"Examples: **/*.ts, src/**/*.ts, *.{json,yaml,md}.",
+						"Glob pattern matched against file paths DOWNWARD from `path` (the search root). Use ** for recursive directory matching. " +
+						"Examples: **/*.ts, src/**/*.ts, *.{json,yaml,md}. Do not include a leading ../ or absolute path — set `path` to change the search root instead.",
 				},
 				path: {
 					type: "string",
 					description:
-						"Optional subdirectory to search within, relative to the workspace root. " +
-						"Defaults to the workspace root.",
+						"Directory to search, resolved against the current working directory. Defaults to the current working directory. " +
+						'May be a parent directory (e.g. "..") or an absolute path to search anywhere on the filesystem.',
 				},
 			},
 			required: ["pattern"],
