@@ -58,7 +58,7 @@ assert.match(help.stdout, /Usage:/);
 
 const ask = await runCliCommand({
 	cwd: packageDir,
-	commandArgs: ["ask", "pack smoke"],
+	commandArgs: ["ask", "--approve", "pack smoke"],
 	cliPath,
 	env: childEnv,
 	nodeArgs,

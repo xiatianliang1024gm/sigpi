@@ -1372,14 +1372,19 @@ async function runInitCommand(args: string[]): Promise<void> {
 
 async function runConfigCommand(args: string[]): Promise<void> {
 	const [subcommand, ...rest] = args;
+	const parsed = parseSessionArgs(rest);
 
-	if (subcommand !== "validate" || rest.length > 0) {
+	if (subcommand !== "validate" || parsed.rest.length > 0) {
 		throw new Error(
 			`Unknown config command: ${[subcommand ?? "(missing)", ...rest].join(" ")}`,
 		);
 	}
 
-	const { config, trust } = await resolveConfigAndTrust({ ui: false });
+	const { config, trust } = await resolveConfigAndTrust({
+		ui: false,
+		approve: parsed.approve,
+		noApprove: parsed.noApprove,
+	});
 	const shellRuntime = detectShellRuntime(config.shell);
 	console.log(
 		JSON.stringify(
