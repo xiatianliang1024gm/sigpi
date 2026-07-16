@@ -154,6 +154,94 @@ test("session store persists and restores session state", async () => {
 	});
 });
 
+test("session store round-trips provider usage on assistant message entries", async () => {
+	const cwd = await createTempDir("sigpi-session-usage-");
+	const store = createTestSessionStore({ cwd, homeDir: cwd });
+	const fingerprint = createSystemPromptFingerprint("system prompt");
+	const created = await store.createSession({
+		cwd,
+		systemPromptFingerprint: fingerprint,
+		loadedSkillNames: [],
+		skillsFingerprint: null,
+	});
+
+	await store.markTurnStarted({
+		sessionId: created.sessionId,
+		userInput: "inspect repo",
+	});
+	await store.markTurnCompleted({
+		sessionId: created.sessionId,
+		userInput: "inspect repo",
+		assistantOutput: "done",
+		steps: 1,
+		toolExecutions: [],
+		contextState: {
+			summary: null,
+			recentMessages: [
+				{ role: "user", content: "inspect repo" },
+				{ role: "assistant", content: "done" },
+			],
+			entries: [
+				{
+					id: "user-1",
+					kind: "message",
+					turnId: 1,
+					timestamp: "2024-01-01T00:00:00Z",
+					message: {
+						role: "user",
+						content: "inspect repo",
+						id: "user-1",
+					},
+				},
+				{
+					id: "assistant-1",
+					kind: "message",
+					turnId: 1,
+					timestamp: "2024-01-01T00:00:01Z",
+					message: {
+						role: "assistant",
+						content: "done",
+						id: "assistant-1",
+					},
+					usage: {
+						input: 1_000,
+						output: 50,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 1_050,
+					},
+				},
+			],
+			explorationLedger: {
+				searchedQueries: [],
+				candidateFiles: [],
+				readRanges: [],
+				rejectedPaths: [],
+				keyFindings: [],
+				modifiedFiles: [],
+			},
+		},
+	});
+
+	const loaded = await store.loadSession({
+		sessionId: created.sessionId,
+		cwd,
+		systemPromptFingerprint: fingerprint,
+	});
+
+	const assistantEntry = loaded.session.entries.find(
+		(entry) => entry.kind === "message" && entry.message.role === "assistant",
+	);
+	assert.ok(assistantEntry && assistantEntry.kind === "message");
+	assert.deepEqual(assistantEntry.usage, {
+		input: 1_000,
+		output: 50,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 1_050,
+	});
+});
+
 test("session load marks in-progress turn as interrupted", async () => {
 	const cwd = await createTempDir("sigpi-session-interrupted-");
 	const store = createTestSessionStore({ cwd, homeDir: cwd });
@@ -425,6 +513,38 @@ test("markTurnFailed can persist a failed-turn recovery snapshot", async () => {
 				{ role: "user", content: "investigate timeout" },
 				{ role: "assistant", content: null, toolCalls: [] },
 			],
+			entries: [
+				{
+					id: "user-1",
+					kind: "message",
+					turnId: 1,
+					timestamp: "2024-01-01T00:00:00Z",
+					message: {
+						role: "user",
+						content: "investigate timeout",
+						id: "user-1",
+					},
+				},
+				{
+					id: "assistant-1",
+					kind: "message",
+					turnId: 1,
+					timestamp: "2024-01-01T00:00:01Z",
+					message: {
+						role: "assistant",
+						content: null,
+						toolCalls: [],
+						id: "assistant-1",
+					},
+					usage: {
+						input: 1_000,
+						output: 50,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 1_050,
+					},
+				},
+			],
 		},
 	});
 
@@ -442,6 +562,19 @@ test("markTurnFailed can persist a failed-turn recovery snapshot", async () => {
 			{ role: "assistant", content: null, toolCalls: [] },
 		],
 	);
+
+	// `usage` also round-trips through the failed path.
+	const failedEntry = persisted.entries.find(
+		(entry) => entry.kind === "message" && entry.message.role === "assistant",
+	);
+	assert.ok(failedEntry && failedEntry.kind === "message");
+	assert.deepEqual(failedEntry.usage, {
+		input: 1_000,
+		output: 50,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 1_050,
+	});
 });
 
 test("session list exposes last completed user input in summaries", async () => {

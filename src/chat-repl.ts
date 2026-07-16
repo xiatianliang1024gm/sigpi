@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import type { ModelConfig } from "./config.js";
-import { estimateContextTokens } from "./context-window.js";
+import { getGitBranch } from "./git.js";
 import { setCurrentPlan } from "./plan-tracker.js";
 import { type AgentRuntime, createAgentRuntime } from "./runtime.js";
 import type { SessionStore } from "./session/store.js";
@@ -9,6 +9,7 @@ import {
 	selectSessionInteractive,
 } from "./session-selector.js";
 import type {
+	ModelUsage,
 	ProgressReporter,
 	SessionSummary,
 	ShellRuntime,
@@ -129,19 +130,13 @@ export function getActiveSessionSummary(
 	};
 }
 
-export function formatStatusBar(state: ChatReplState): string {
+export async function formatStatusBar(state: ChatReplState): Promise<string> {
 	const lastUsage = state.runtime.context.getLastUsage();
-	const tokens = estimateContextTokens({
-		systemPrompt: state.runtime.systemPromptSections
-			.map((section) => section.content)
-			.join(" "),
-		summary: state.runtime.context.getSummary(),
-		recentMessages: state.runtime.context.getRecentMessages(),
-		toolSchemas: state.runtime.toolSchemas,
-		lastUsage: lastUsage?.usage ?? null,
-		lastUsageMessageIndex: lastUsage?.messageIndex ?? null,
-	});
-	return formatStatusBarWithUsedTokens(state, tokens.totalTokens);
+	const usage = lastUsage?.usage ?? null;
+	// Use the provider-reported ground-truth token count from the last
+	// response. Before the first response (no usage yet) we show `?` rather
+	// than a drift-prone estimate.
+	return renderStatusBar(state, usage ? usage.totalTokens : null, usage);
 }
 
 export function getCurrentWorkingDirectory(state: ChatReplState): string {
@@ -151,14 +146,16 @@ export function getCurrentWorkingDirectory(state: ChatReplState): string {
 	);
 }
 
-export function formatStatusBarForEvent(
+export async function formatStatusBarForEvent(
 	state: ChatReplState,
 	event: TurnProgressEvent | null,
-): string {
+): Promise<string> {
 	const base =
 		typeof event?.estimatedContextTokens === "number"
-			? formatStatusBarWithUsedTokens(state, event.estimatedContextTokens)
-			: formatStatusBar(state);
+			? // A live, in-flight estimate of the request being built. It has no
+				// completed `usage` payload yet, so no cache-hit segment.
+				renderStatusBar(state, event.estimatedContextTokens, null)
+			: await formatStatusBar(state);
 	const suffix = getStatusEventLabel(event);
 	if (!suffix) {
 		return base;
@@ -166,19 +163,55 @@ export function formatStatusBarForEvent(
 	return `${base} | ${suffix}`;
 }
 
-function formatStatusBarWithUsedTokens(
+async function renderStatusBar(
 	state: ChatReplState,
-	usedTokens: number,
-): string {
+	usedTokens: number | null,
+	usage: ModelUsage | null,
+): Promise<string> {
 	const budget = state.runtime.context.getContextBudget();
 	const limit = Math.max(1, budget.hardContextLimit - budget.reserveTokens);
-	const percentUsed = Math.round((usedTokens / limit) * 100);
+	const cwd = getCurrentWorkingDirectory(state);
+	const branch = await getGitBranch(cwd);
+	const cwdSegment = branch
+		? `${shortenWorkingDirectory(cwd)} (${branch})`
+		: shortenWorkingDirectory(cwd);
 
-	return [
-		`model ${state.modelName}`,
-		`tokens ${formatCompactNumber(usedTokens)}/${formatCompactNumber(limit)} (${percentUsed}%)`,
-		shortenWorkingDirectory(getCurrentWorkingDirectory(state)),
-	].join(" | ");
+	const segments: string[] = [];
+	const limitStr = formatCompactNumber(limit);
+	if (usedTokens === null) {
+		// No provider-reported usage yet (fresh session, after /recover, or a
+		// legacy resume with no `usage`). Honest `?` beats a wrong estimate.
+		segments.push(`tokens ?/${limitStr}`);
+	} else {
+		const usedStr = formatCompactNumber(usedTokens);
+		const percentUsed = Math.round((usedTokens / limit) * 100);
+		const tokenSegment = `tokens ${usedStr}/${limitStr} (${percentUsed}%)`;
+		const cacheHitRate = usage ? computeCacheHitRate(usage) : null;
+		segments.push(
+			cacheHitRate ? `${tokenSegment} Hit(${cacheHitRate}%)` : tokenSegment,
+		);
+	}
+	segments.push(cwdSegment);
+
+	return segments.join(" | ");
+}
+
+/**
+ * Compute the cache hit rate as a percentage of input tokens that came from
+ * the prompt cache. Returns `null` when there is no input to measure against
+ * (so we never render `Hit(NaN%)` or `Hit(0.0%)` for a fresh conversation).
+ * The result is rounded to one decimal place and formatted as a string so
+ * the status bar always renders a consistent `Hit(80.0%)` shape.
+ */
+function computeCacheHitRate(usage: ModelUsage): string | null {
+	const input = usage.input;
+	const cacheRead = usage.cacheRead;
+	const denominator = input + cacheRead;
+	if (denominator <= 0) {
+		return null;
+	}
+	const percent = Math.round((cacheRead / denominator) * 1000) / 10;
+	return percent.toFixed(1);
 }
 
 function getStatusEventLabel(event: TurnProgressEvent | null): string | null {

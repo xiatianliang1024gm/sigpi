@@ -663,6 +663,141 @@ test("hydrated session forgets provider usage until next model response", async 
 	assert.equal(provider.requests.length, 0);
 });
 
+test("appendMessages persists provider usage on the assistant MessageEntry", async () => {
+	const provider = new MockProvider(() => ({
+		assistantText: "ignored",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	const context = new ConversationContext({ summaryEnabled: false });
+
+	await context.appendMessages(
+		[
+			{ role: "user", content: "u1" },
+			{ role: "assistant", content: "a1" },
+		],
+		provider,
+		"You are a test agent.",
+		[],
+		undefined,
+		{
+			usage: {
+				input: 1_000,
+				output: 50,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1_050,
+			},
+		},
+	);
+
+	const exported = context.exportState();
+	const assistantEntry = exported.entries?.find(
+		(entry) => entry.kind === "message" && entry.message.role === "assistant",
+	);
+	assert.ok(assistantEntry && assistantEntry.kind === "message");
+	assert.deepEqual(assistantEntry.usage, {
+		input: 1_000,
+		output: 50,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 1_050,
+	});
+});
+
+test("hydrateState restores lastUsage from the most recent assistant MessageEntry", async () => {
+	const provider = new MockProvider(() => ({
+		assistantText: "ignored",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	const original = new ConversationContext({ summaryEnabled: false });
+
+	await original.appendMessages(
+		[
+			{ role: "user", content: "u1" },
+			{ role: "assistant", content: "a1" },
+		],
+		provider,
+		"You are a test agent.",
+		[],
+		undefined,
+		{
+			usage: {
+				input: 1_000,
+				output: 50,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1_050,
+			},
+		},
+	);
+
+	const restored = new ConversationContext({ summaryEnabled: false });
+	restored.hydrateState(original.exportState());
+
+	const lastUsage = restored.getLastUsage();
+	assert.ok(lastUsage);
+	assert.deepEqual(lastUsage.usage, {
+		input: 1_000,
+		output: 50,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 1_050,
+	});
+});
+
+test("hydrateState leaves lastUsage null when no entry carries usage", async () => {
+	const original = new ConversationContext({ summaryEnabled: false });
+
+	// Legacy snapshot: assistant message present, but no `usage` field.
+	original.hydrateState({
+		summary: null,
+		recentMessages: [
+			{ role: "user", content: "u1" },
+			{ role: "assistant", content: "a1" },
+		],
+	});
+
+	// The ground-truth usage was not recorded, so hydrate must NOT invent
+	// one — the status bar falls back to `?` until the next response.
+	assert.equal(original.getLastUsage(), null);
+});
+
+test("reset clears lastUsage so the status bar returns to ?", async () => {
+	const provider = new MockProvider(() => ({
+		assistantText: "ignored",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	const context = new ConversationContext({ summaryEnabled: false });
+
+	await context.appendMessages(
+		[
+			{ role: "user", content: "u1" },
+			{ role: "assistant", content: "a1" },
+		],
+		provider,
+		"You are a test agent.",
+		[],
+		undefined,
+		{
+			usage: {
+				input: 1_000,
+				output: 50,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1_050,
+			},
+		},
+	);
+	assert.ok(context.getLastUsage());
+
+	// Clearing in-memory state (e.g. /recover) drops the ground truth.
+	context.reset();
+	assert.equal(context.getLastUsage(), null);
+});
+
 test("summary request caps maxTokens at provider.maxTokens when configured", async () => {
 	const provider = new MockProvider(
 		() => ({
