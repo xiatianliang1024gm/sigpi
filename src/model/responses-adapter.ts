@@ -9,7 +9,12 @@ import type {
 	ToolSchema,
 } from "../types.js";
 import { ModelRequestError } from "./transport.js";
-import { isPlainObject, readFiniteNumber, safeParseArguments } from "./util.js";
+import {
+	isPlainObject,
+	readFiniteNumber,
+	safeParseArguments,
+	sanitizeToolArguments,
+} from "./util.js";
 import type { WireFormatAdapter } from "./wire-format.js";
 
 type ResponsesInputItem =
@@ -328,7 +333,7 @@ export class ResponsesAdapter implements WireFormatAdapter {
 					type: "function_call",
 					call_id: toolCall.id,
 					name: toolCall.name,
-					arguments: toolCall.rawArguments,
+					arguments: sanitizeToolArguments(toolCall.rawArguments),
 				});
 			}
 
