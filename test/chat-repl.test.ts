@@ -17,7 +17,7 @@ import { createCliProgressReporter, runChatReplLoop } from "../src/cli.js";
 import { InputHistory } from "../src/input-history.js";
 import { getCurrentPlan, setCurrentPlan } from "../src/plan-tracker.js";
 import { createAgentRuntime } from "../src/runtime.js";
-import { stripAnsi } from "../src/tui/index.js";
+import { type StatusBarComponent, stripAnsi } from "../src/tui/index.js";
 import type { TurnProgressEvent } from "../src/types.js";
 import {
 	createTempDir,
@@ -27,6 +27,14 @@ import {
 	stripMessageIds,
 	writeTestConfig,
 } from "./helpers.js";
+
+/**
+ * Render a status bar component to a single line at a width wide enough to
+ * never truncate, so assertions match the composed ADR 0022 string.
+ */
+function statusLine(component: StatusBarComponent): string {
+	return component.render(240)[0] ?? "";
+}
 
 class FakeInput extends PassThrough {
 	public isTTY = true;
@@ -495,7 +503,7 @@ test("formatStatusBar includes tokens and cwd", async () => {
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 
 		assert.match(status, /^test-model /);
 		// Before the first response there is no provider-reported usage, so
@@ -521,10 +529,12 @@ test("formatStatusBarForEvent appends progress state", async () => {
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const status = await formatStatusBarForEvent(state, {
-			type: "model_request_started",
-			step: 2,
-		});
+		const status = statusLine(
+			await formatStatusBarForEvent(state, {
+				type: "model_request_started",
+				step: 2,
+			}),
+		);
 
 		assert.match(status, /thinking$/);
 	} finally {
@@ -548,10 +558,12 @@ test("formatStatusBarForEvent uses live context token estimate (default unit)", 
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const status = await formatStatusBarForEvent(state, {
-			type: "model_request_finished",
-			estimatedContextTokens: 12_345,
-		});
+		const status = statusLine(
+			await formatStatusBarForEvent(state, {
+				type: "model_request_finished",
+				estimatedContextTokens: 12_345,
+			}),
+		);
 
 		assert.match(status, /12\.3K\//);
 	} finally {
@@ -573,7 +585,7 @@ test("formatStatusBar shows tokens and (contextWindow-reserveTokens) limit", asy
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 		assert.match(status, /\?\/183\.6K/);
 	} finally {
 		restoreHome();
@@ -596,10 +608,12 @@ test("formatStatusBarForEvent uses event token estimate when available", async (
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const status = await formatStatusBarForEvent(state, {
-			type: "model_request_finished",
-			estimatedContextTokens: 12_345,
-		});
+		const status = statusLine(
+			await formatStatusBarForEvent(state, {
+				type: "model_request_finished",
+				estimatedContextTokens: 12_345,
+			}),
+		);
 
 		assert.match(status, /12\.3K\//);
 	} finally {
@@ -623,10 +637,12 @@ test("formatStatusBarForEvent recomputes from state when event has no token esti
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const status = await formatStatusBarForEvent(state, {
-			type: "turn_started",
-			userInput: "hi",
-		});
+		const status = statusLine(
+			await formatStatusBarForEvent(state, {
+				type: "turn_started",
+				userInput: "hi",
+			}),
+		);
 		// Falls back to recomputing from state via ground-truth usage, which is
 		// `?` before the first response.
 		assert.match(status, /^test-model /);
@@ -655,7 +671,7 @@ test("formatStatusBar appends git branch when cwd is a repo", async () => {
 
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 
 		assert.match(status, /\(main\)$/);
 	} finally {
@@ -677,7 +693,7 @@ test("formatStatusBar omits git branch when cwd is not a repo", async () => {
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 
 		assert.doesNotMatch(status, /\([a-z0-9_-]+\)$/);
 	} finally {
@@ -726,7 +742,7 @@ test("formatStatusBar appends cache hit rate when lastUsage is available", async
 			},
 		);
 
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 		// 800 / (200 + 800) = 80.0%
 		assert.match(status, /Hit\(80\.0%\)/);
 	} finally {
@@ -748,7 +764,7 @@ test("formatStatusBar omits cache hit rate when no usage has been recorded", asy
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 
 		assert.doesNotMatch(status, /Hit\(/);
 		assert.match(status, /\?\//);
@@ -797,7 +813,7 @@ test("formatStatusBar shows the provider's totalTokens from the last response", 
 			},
 		);
 
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 		// Ground truth is totalTokens (1_050 -> 1.1K), not a chars/4 estimate.
 		assert.match(status, /1\.1K\//);
 	} finally {
@@ -854,7 +870,7 @@ test("formatStatusBar keeps the last response's count while a follow-up is typed
 			[],
 		);
 
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 		assert.match(status, /1\.1K\//);
 	} finally {
 		restoreHome();
@@ -900,11 +916,11 @@ test("formatStatusBar resets to ? after in-memory state is cleared", async () =>
 				},
 			},
 		);
-		assert.match(await formatStatusBar(state), /1\.1K\//);
+		assert.match(statusLine(await formatStatusBar(state)), /1\.1K\//);
 
 		// Clearing in-memory state (e.g. /recover) drops the ground truth.
 		state.runtime.context.reset();
-		assert.match(await formatStatusBar(state), /\?\//);
+		assert.match(statusLine(await formatStatusBar(state)), /\?\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -953,7 +969,7 @@ test("formatStatusBar hides cache hit rate when there is no cacheable input", as
 			},
 		);
 
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 		assert.doesNotMatch(status, /Hit\(/);
 		assert.match(status, /50\//);
 	} finally {
@@ -1002,7 +1018,7 @@ test("formatStatusBar shows Hit(0.0%) for a cold cache with real input", async (
 			},
 		);
 
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 		assert.match(status, /Hit\(0\.0%\)/);
 	} finally {
 		restoreHome();
@@ -1029,7 +1045,7 @@ test("formatStatusBar shows @shortSha for a detached HEAD", async () => {
 
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 
 		// `@` followed by a short SHA, at the end of the cwd segment.
 		assert.match(status, /\(@[0-9a-f]+\)$/);
@@ -1078,7 +1094,7 @@ test("formatStatusBar includes a model segment at the start", async () => {
 			},
 		);
 
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 		// The model name is anchored at the start (the cwd path can
 		// legitimately contain the substring "model", so we anchor at start).
 		assert.match(status, /^test-model /);
@@ -1135,7 +1151,7 @@ test("formatStatusBar restores token count from a resumed session with usage", a
 		state.runtime.context.reset();
 		state.runtime.context.hydrateState(snapshot);
 
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 		// Real number restored from the persisted entry, not `?`.
 		assert.match(status, /1\.1K\//);
 		assert.match(status, /Hit\(80\.0%\)/);
@@ -1168,7 +1184,7 @@ test("formatStatusBar shows ? for a resumed session without usage", async () => 
 			],
 		});
 
-		const status = await formatStatusBar(state);
+		const status = statusLine(await formatStatusBar(state));
 		assert.match(status, /\?\//);
 	} finally {
 		restoreHome();

@@ -12,6 +12,7 @@ import {
 	moveSelectedIndex,
 	ProcessTerminal,
 	parseKey,
+	type StatusBarComponent,
 	type Terminal,
 	Tui,
 	truncateToWidth,
@@ -25,6 +26,8 @@ export interface ChatInputOptions {
 	commands?: readonly ChatCommandMetadata[];
 	maxSuggestions?: number;
 	statusBarText?: string;
+	/** Pi-tui status bar footer component, used in preference to `statusBarText`. */
+	statusBarComponent?: StatusBarComponent | null;
 	/** Shared, process-scoped recall buffer for `↑`/`↓` history. */
 	inputHistory?: InputHistory;
 }
@@ -109,6 +112,8 @@ export interface RunningTurnInputListenerOptions {
 	input?: ReadStream;
 	output?: WriteStream;
 	statusBarText?: string;
+	/** Pi-tui status bar footer component, used in preference to `statusBarText`. */
+	statusBarComponent?: StatusBarComponent | null;
 	onEscape: () => void;
 	onSubmit: (text: string) => void;
 	/** Shared, process-scoped recall buffer for `↑`/`↓` history. */
@@ -125,7 +130,7 @@ export interface RunningTurnInputListenerOptions {
 
 export interface RunningTurnInputListenerHandle {
 	stop(): void;
-	setStatusBarText(value: string | null): void;
+	setStatusBarComponent(value: StatusBarComponent | null): void;
 	/** Append a streamed reasoning fragment to the live view (spec-0020). */
 	appendReasoning(text: string): void;
 	/** Append a streamed content fragment to the live view (spec-0020). */
@@ -493,7 +498,11 @@ export async function readChatInput(
 			inputHistory: args?.inputHistory,
 		});
 
-		tui.setStatusBar(args?.statusBarText ?? null);
+		if (args?.statusBarComponent) {
+			tui.setStatusBarComponent(args.statusBarComponent);
+		} else {
+			tui.setStatusBar(args?.statusBarText ?? null);
+		}
 		tui.addChild(component);
 		tui.setFocus(component);
 		tui.start();
@@ -534,7 +543,11 @@ export function startRunningTurnInputListener(
 		inputHistory: options.inputHistory,
 	});
 
-	tui.setStatusBar(options.statusBarText ?? null);
+	if (options.statusBarComponent) {
+		tui.setStatusBarComponent(options.statusBarComponent);
+	} else {
+		tui.setStatusBar(options.statusBarText ?? null);
+	}
 	if (options.reasoningStream) {
 		tui.addChild(options.reasoningStream);
 	}
@@ -574,8 +587,8 @@ export function startRunningTurnInputListener(
 
 	return {
 		stop,
-		setStatusBarText: (value) => {
-			tui.setStatusBar(value);
+		setStatusBarComponent: (value) => {
+			tui.setStatusBarComponent(value);
 		},
 		appendReasoning: (text: string) => {
 			if (!options.reasoningStream || stopped) {
