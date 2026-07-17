@@ -10,7 +10,7 @@ export {
 	SelectList,
 	type SelectListItem,
 } from "./select-list.js";
-export { ProcessTerminal, type Terminal } from "./terminal.js";
+export { ProcessTerminal, SigPiTerminal, type Terminal } from "./terminal.js";
 export {
 	type Component,
 	CURSOR_MARKER,
