@@ -1,14 +1,84 @@
 import assert from "node:assert/strict";
-import { PassThrough } from "node:stream";
 import test from "node:test";
+import { type Component, type Terminal, TUI } from "@earendil-works/pi-tui";
 import {
 	createSessionSelectorState,
 	prepareSessionChoices,
 	reduceSessionSelector,
 	renderSessionSelectorWithWidth,
+	SessionSelectorComponent,
 	selectSessionInteractive,
 } from "../src/session-selector.js";
 import type { SessionSummary } from "../src/types.js";
+
+/**
+ * Minimal Pi-tui Terminal that captures every write so a test can verify the
+ * overlay composite through the Terminal seam. Input is dispatched by calling
+ * `inputHandler` directly, mirroring how Pi-tui forwards key sequences.
+ */
+class FakeTerminal implements Terminal {
+	public columns = 100;
+	public rows = 24;
+	public writes: string[] = [];
+	public inputHandler: ((data: string) => void) | null = null;
+	public resizeHandler: (() => void) | null = null;
+
+	start(onInput: (data: string) => void, onResize: () => void): void {
+		this.inputHandler = onInput;
+		this.resizeHandler = onResize;
+	}
+
+	stop(): void {
+		this.inputHandler = null;
+		this.resizeHandler = null;
+	}
+
+	async drainInput(): Promise<void> {}
+
+	write(data: string): void {
+		this.writes.push(data);
+	}
+
+	get kittyProtocolActive(): boolean {
+		return false;
+	}
+
+	moveBy(_lines: number): void {}
+	hideCursor(): void {}
+	showCursor(): void {}
+	clearLine(): void {}
+	clearFromCursor(): void {}
+	clearScreen(): void {}
+	setTitle(_title: string): void {}
+	setProgress(_active: boolean): void {}
+}
+
+/** A trivial base component for exercising overlay compositing. */
+class BaseTextComponent implements Component {
+	constructor(private readonly lines: string[]) {}
+
+	render(): string[] {
+		return this.lines;
+	}
+
+	invalidate(): void {}
+}
+
+/** Strip Pi-tui's reset/escape sequences so we can assert on visible text. */
+function stripTerminalOutput(writes: string[]): string {
+	return writes
+		.join("")
+		.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
+		.replace(/\x1b\][^\x07]*\x07/g, "")
+		.trim();
+}
+
+/** Split captured terminal output into per-line visible text. */
+function renderedLines(writes: string[]): string[] {
+	return stripTerminalOutput(writes)
+		.split("\r\n")
+		.map((line) => line.trimEnd());
+}
 
 function createSessionSummary(
 	overrides?: Partial<SessionSummary> &
@@ -206,121 +276,115 @@ test("selector render truncates long message and shows em dash for missing token
 	assert.match(line, /—/);
 });
 
-test("interactive selector resumes paused input and returns the confirmed session", async () => {
-	class FakeInput extends PassThrough {
-		public isTTY = true;
-		public isRaw = false;
-		public paused = false;
-
-		setRawMode(value: boolean): this {
-			this.isRaw = value;
-			return this;
-		}
-
-		override pause(): this {
-			this.paused = true;
-			return super.pause() as this;
-		}
-
-		override resume(): this {
-			this.paused = false;
-			return super.resume() as this;
-		}
-	}
-
-	class FakeOutput extends PassThrough {
-		public isTTY = true;
-		public columns = 100;
-		public rows = 24;
-	}
-
-	const input = new FakeInput();
-	const output = new FakeOutput();
-	input.pause();
+test("interactive selector returns the confirmed session", async () => {
+	const terminal = new FakeTerminal();
+	const sessionId = "11111111-1111-4111-8111-111111111111";
 
 	const selectionPromise = selectSessionInteractive(
 		[
 			createSessionSummary({
-				sessionId: "11111111-1111-4111-8111-111111111111",
+				sessionId,
 				updatedAt: "2026-05-22T00:00:00.000Z",
 			}),
 		],
-		{
-			input: input as never,
-			output: output as never,
-		},
+		{ terminal },
 	);
 
-	process.nextTick(() => {
-		input.write("\r");
-	});
+	// Pi-tui registers its input handler synchronously on start().
+	terminal.inputHandler?.("\r");
 
-	assert.equal(await selectionPromise, "11111111-1111-4111-8111-111111111111");
-	assert.equal(input.isRaw, false);
-	assert.equal(input.paused, true);
+	assert.equal(await selectionPromise, sessionId);
 });
 
 test("interactive selector handles raw arrow navigation and cancel", async () => {
-	class FakeInput extends PassThrough {
-		public isTTY = true;
-		public isRaw = false;
+	const terminal = new FakeTerminal();
+	const firstId = "11111111-1111-4111-8111-111111111111";
+	const secondId = "22222222-2222-4222-8222-222222222222";
 
-		setRawMode(value: boolean): this {
-			this.isRaw = value;
-			return this;
-		}
-	}
-
-	class FakeOutput extends PassThrough {
-		public isTTY = true;
-		public columns = 100;
-		public rows = 24;
-	}
-
-	const input = new FakeInput();
-	const output = new FakeOutput();
 	const selectionPromise = selectSessionInteractive(
 		[
 			createSessionSummary({
-				sessionId: "11111111-1111-4111-8111-111111111111",
+				sessionId: firstId,
 				updatedAt: "2026-05-22T00:00:00.000Z",
 			}),
 			createSessionSummary({
-				sessionId: "22222222-2222-4222-8222-222222222222",
+				sessionId: secondId,
 				updatedAt: "2026-05-21T00:00:00.000Z",
 			}),
 		],
-		{
-			input: input as never,
-			output: output as never,
-		},
+		{ terminal },
 	);
 
-	process.nextTick(() => {
-		input.write("\x1B[B");
-		input.write("\r");
-	});
+	terminal.inputHandler?.("\x1B[B");
+	terminal.inputHandler?.("\r");
 
-	assert.equal(await selectionPromise, "22222222-2222-4222-8222-222222222222");
+	assert.equal(await selectionPromise, secondId);
 
-	const cancelInput = new FakeInput();
-	const cancelOutput = new FakeOutput();
+	const cancelTerminal = new FakeTerminal();
 	const cancelPromise = selectSessionInteractive(
 		[
 			createSessionSummary({
-				sessionId: "11111111-1111-4111-8111-111111111111",
+				sessionId: firstId,
 				updatedAt: "2026-05-22T00:00:00.000Z",
 			}),
 		],
-		{
-			input: cancelInput as never,
-			output: cancelOutput as never,
-		},
+		{ terminal: cancelTerminal },
 	);
 
-	process.nextTick(() => {
-		cancelInput.write("\x1B");
-	});
+	cancelTerminal.inputHandler?.("\x1B");
 
 	assert.equal(await cancelPromise, null);
+});
+
+test("overlay composite preserves base content under the selector (Terminal seam)", async () => {
+	const terminal = new FakeTerminal();
+	terminal.columns = 60;
+	terminal.rows = 24;
+
+	const tui = new TUI(terminal);
+	tui.addChild(new BaseTextComponent(["BASE_ONE", "BASE_TWO"]));
+	const component = new SessionSelectorComponent(
+		createSessionSelectorState([
+			createSessionSummary({
+				sessionId: "aaaaaaaa-1111-4111-8111-111111111111",
+				title: "find why the parser skips the final token",
+				updatedAt: "2026-05-22T10:00:00.000Z",
+			}),
+		]),
+	);
+	tui.showOverlay(component, {
+		anchor: "center",
+		width: "90%",
+		maxHeight: "90%",
+	});
+	tui.start();
+
+	// Let Pi-tui's debounced first render flush through the Terminal seam.
+	await new Promise((resolve) => setTimeout(resolve, 50));
+
+	const lines = renderedLines(terminal.writes);
+
+	// Both the base content and the selector modal are present in the composite.
+	assert.ok(
+		lines.some((line) => line.includes("BASE_ONE")),
+		"base content is preserved under the overlay",
+	);
+	assert.ok(
+		lines.some((line) =>
+			line.includes("find why the parser skips the final token"),
+		),
+		"session selector is rendered via the overlay",
+	);
+
+	// The base line sits above the centered modal, proving the overlay
+	// composited on top of (not in place of) the base content.
+	const baseIndex = lines.findIndex((line) => line.includes("BASE_ONE"));
+	const selectorIndex = lines.findIndex((line) => line.includes("> "));
+	assert.ok(baseIndex >= 0, "base line found");
+	assert.ok(
+		selectorIndex > baseIndex,
+		"overlay is composited below the base line",
+	);
+
+	tui.stop();
 });

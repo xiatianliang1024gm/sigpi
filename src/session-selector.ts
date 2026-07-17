@@ -1,13 +1,23 @@
 import { stdin as processInput, stdout as processOutput } from "node:process";
-import type { ReadStream, WriteStream } from "node:tty";
-import { compareTimestampDescending, formatRelativeTime } from "./time.js";
 import {
 	type Component,
-	moveSelectedIndex,
 	ProcessTerminal,
-	Tui,
-} from "./tui/index.js";
+	type Terminal,
+	TUI,
+} from "@earendil-works/pi-tui";
+import { compareTimestampDescending, formatRelativeTime } from "./time.js";
+import { moveSelectedIndex } from "./tui/index.js";
 import type { SessionSummary } from "./types.js";
+
+/** Options for {@link selectSessionInteractive}. */
+export interface SelectSessionOptions {
+	/**
+	 * Pi-tui Terminal to drive the picker. Defaults to a real ProcessTerminal
+	 * (process.stdin/stdout) when omitted. Tests inject a fake terminal here so
+	 * the overlay composite can be verified through the Terminal seam.
+	 */
+	terminal?: Terminal;
+}
 
 const DEFAULT_SESSION_SELECTOR_LIMIT = 20;
 
@@ -145,12 +155,12 @@ function formatCompactTokens(tokens: number | null): string {
 	return formatter.format(tokens);
 }
 
-class SessionSelectorComponent implements Component {
+export class SessionSelectorComponent implements Component {
 	public onResolve?: (result: string | null) => void;
 
 	constructor(private state: SessionSelectorState) {}
 
-	render(width: number, _maxHeight?: number): string[] {
+	render(width: number): string[] {
 		return renderSessionSelectorWithWidth(this.state, width).split("\n");
 	}
 
@@ -168,41 +178,47 @@ class SessionSelectorComponent implements Component {
 
 		this.state = next;
 	}
+
+	invalidate(): void {}
 }
 
 export async function selectSessionInteractive(
 	sessions: SessionSummary[],
-	args?: {
-		input?: ReadStream;
-		output?: WriteStream;
-	},
+	options?: SelectSessionOptions,
 ): Promise<string | null> {
 	if (sessions.length === 0) {
 		return null;
 	}
 
-	const input = args?.input ?? processInput;
-	const output = args?.output ?? processOutput;
+	const usingProvidedTerminal = Boolean(options?.terminal);
+	const terminal = options?.terminal ?? new ProcessTerminal();
 
-	if (!input.isTTY || !output.isTTY) {
+	// In a non-interactive (piped) environment there is no TTY to drive an
+	// interactive picker, so fall back to the most recent session.
+	if (!usingProvidedTerminal && (!processInput.isTTY || !processOutput.isTTY)) {
 		return sessions[0]?.sessionId ?? null;
 	}
 
 	return new Promise<string | null>((resolve) => {
-		const terminal = new ProcessTerminal(input, output);
-		const tui = new Tui(terminal);
+		const tui = new TUI(terminal);
 		const component = new SessionSelectorComponent(
 			createSessionSelectorState(sessions),
 		);
 
 		component.onResolve = (result) => {
 			tui.stop();
-			output.write("\x1B[2J\x1B[H");
+			terminal.clearScreen();
 			resolve(result);
 		};
 
-		tui.addChild(component);
-		tui.setFocus(component);
+		// Render the session selector as a full-screen modal overlay. Pi-tui's
+		// differential renderer composites it over whatever base content the TUI
+		// holds, so the underlying screen is preserved around the modal.
+		tui.showOverlay(component, {
+			anchor: "center",
+			width: "90%",
+			maxHeight: "90%",
+		});
 		tui.start();
 	});
 }
