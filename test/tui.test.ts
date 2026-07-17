@@ -467,3 +467,32 @@ test("Pi-tui TUI mounts on FakeTerminal and renders a Text component", async () 
 		"expected the rendered Text to appear in terminal output",
 	);
 });
+
+test("src/tui/index exposes Pi-tui's TUI and supporting symbols (expand phase)", async () => {
+	// Import the Pi-tui surface the way a consumer would, via the fork's barrel.
+	const {
+		TUI: IndexTui,
+		PiTui: PiTuiApi,
+		PiUtils,
+	} = await import("../src/tui/index.js");
+
+	// `TUI` must resolve to Pi-tui's root class, distinct from the fork's `Tui`.
+	assert.equal(IndexTui, PiTui, "TUI should be Pi-tui's class");
+	assert.notEqual(IndexTui, Tui, "TUI must not be the fork's Tui");
+
+	// Supporting Pi-tui symbols are reachable through the `PiTui` namespace.
+	assert.equal(typeof PiTuiApi.Container, "function");
+	assert.equal(typeof PiTuiApi.Editor, "function");
+	assert.equal(typeof PiTuiApi.SelectList, "function");
+	assert.equal(typeof PiTuiApi.ProcessTerminal, "function");
+	assert.equal(typeof PiTuiApi.Markdown, "function");
+	assert.equal(typeof PiTuiApi.CURSOR_MARKER, "string");
+	assert.ok(PiTuiApi.CURSOR_MARKER.startsWith("\x1B_pi:"));
+
+	// `showOverlay` is exposed as the Pi-tui TUI method.
+	assert.equal(typeof IndexTui.prototype.showOverlay, "function");
+
+	// Text utilities live under `PiUtils`.
+	assert.equal(typeof PiUtils.visibleWidth, "function");
+	assert.equal(PiUtils.visibleWidth("ab你好"), 6);
+});
