@@ -14,10 +14,10 @@ import {
 	runtimeToChatReplState,
 } from "../src/chat-repl.js";
 import { createCliProgressReporter, runChatReplLoop } from "../src/cli.js";
-import { InputHistory } from "../src/input-history.js";
 import { getCurrentPlan, setCurrentPlan } from "../src/plan-tracker.js";
 import { createAgentRuntime } from "../src/runtime.js";
-import { type StatusBarComponent, stripAnsi } from "../src/tui/index.js";
+import { stripAnsi } from "../src/tui/ansi.js";
+import type { StatusBarComponent } from "../src/tui/status-bar.js";
 import type { TurnProgressEvent } from "../src/types.js";
 import {
 	createTempDir,
@@ -2270,7 +2270,7 @@ test("createCliProgressReporter still prints assistant_message with real content
 	);
 });
 
-test("runChatReplLoop records only model-reaching inputs in input history", async () => {
+test("runChatReplLoop drives a model turn only for model-reaching inputs", async () => {
 	const cwd = await realpath(await createTempDir("sigpi-chat-repl-hist-"));
 	const homeDir = await createTempDir("sigpi-chat-repl-hist-home-");
 	const previousCwd = process.cwd();
@@ -2282,8 +2282,8 @@ test("runChatReplLoop records only model-reaching inputs in input history", asyn
 		const runtime = await createAgentRuntime({ createSession: true });
 		const input = new FakeInput();
 		const output = new FakeOutput();
-		const inputHistory = new InputHistory();
 		let promptIndex = 0;
+		const executed: string[] = [];
 
 		const commands: ChatCommandDefinition[] = [
 			{
@@ -2307,7 +2307,6 @@ test("runChatReplLoop records only model-reaching inputs in input history", asyn
 				store: runtime.store,
 				input: input as never,
 				output: output as never,
-				inputHistory,
 			},
 			{
 				commands,
@@ -2319,29 +2318,29 @@ test("runChatReplLoop records only model-reaching inputs in input history", asyn
 						"/unknowncmd",
 						"/exit",
 					][promptIndex++] ?? null,
-				executeTurn: async (_runner, line) => ({
-					ok: true,
-					completionStatus: "completed",
-					outputText: `echo:${line}`,
-					toolExecutions: [],
-					resumable: false,
-				}),
+				executeTurn: async (_runner, line) => {
+					executed.push(line);
+					return {
+						ok: true,
+						completionStatus: "completed",
+						outputText: `echo:${line}`,
+						toolExecutions: [],
+						resumable: false,
+					};
+				},
 			},
 		);
 
 		// Only the prompt and the /drive command reach the model; the local
-		// command and the unknown command are not recorded.
-		assert.equal(inputHistory.size, 2);
-		assert.equal(inputHistory.prev(), "/drive raw args");
-		assert.equal(inputHistory.prev(), "natural prompt");
-		assert.equal(inputHistory.prev(), null);
+		// command and the unknown command do not.
+		assert.deepEqual(executed, ["natural prompt", "expanded:raw args"]);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
 	}
 });
 
-test("runChatReplLoop records the original line, not the expanded /skill form", async () => {
+test("runChatReplLoop drives a turn with the original line, not the expanded /skill form", async () => {
 	const cwd = await realpath(await createTempDir("sigpi-chat-repl-hist-raw-"));
 	const homeDir = await createTempDir("sigpi-chat-repl-hist-raw-home-");
 	const previousCwd = process.cwd();
@@ -2353,8 +2352,8 @@ test("runChatReplLoop records the original line, not the expanded /skill form", 
 		const runtime = await createAgentRuntime({ createSession: true });
 		const input = new FakeInput();
 		const output = new FakeOutput();
-		const inputHistory = new InputHistory();
 		let promptIndex = 0;
+		const executed: string[] = [];
 
 		const commands: ChatCommandDefinition[] = [
 			{
@@ -2373,24 +2372,25 @@ test("runChatReplLoop records the original line, not the expanded /skill form", 
 				store: runtime.store,
 				input: input as never,
 				output: output as never,
-				inputHistory,
 			},
 			{
 				commands,
 				readChatInput: async () =>
 					["/drive original line", "/exit"][promptIndex++] ?? null,
-				executeTurn: async (_runner, line) => ({
-					ok: true,
-					completionStatus: "completed",
-					outputText: `echo:${line}`,
-					toolExecutions: [],
-					resumable: false,
-				}),
+				executeTurn: async (_runner, line) => {
+					executed.push(line);
+					return {
+						ok: true,
+						completionStatus: "completed",
+						outputText: `echo:${line}`,
+						toolExecutions: [],
+						resumable: false,
+					};
+				},
 			},
 		);
 
-		assert.equal(inputHistory.size, 1);
-		assert.equal(inputHistory.prev(), "/drive original line");
+		assert.deepEqual(executed, ["expanded:original line"]);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);

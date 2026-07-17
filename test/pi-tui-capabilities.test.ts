@@ -19,14 +19,13 @@ import {
 	type Terminal,
 	Text,
 	TUI,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { stripAnsi } from "../src/tui/ansi.js";
 import {
 	StatusBarComponent,
 	type StatusBarModel,
-	stripAnsi,
-	Tui,
-	visibleWidth,
-} from "../src/tui/index.js";
+} from "../src/tui/status-bar.js";
 
 const require = createRequire(import.meta.url);
 
@@ -122,14 +121,6 @@ function makeStatus(overrides: Partial<StatusBarModel> = {}): StatusBarModel {
 		branch: "main",
 		...overrides,
 	};
-}
-
-class TextComponent implements Component {
-	constructor(private readonly lines: string[]) {}
-	render(): string[] {
-		return this.lines;
-	}
-	invalidate(): void {}
 }
 
 const PNG_B64 =
@@ -257,52 +248,6 @@ test("Pi-tui TUI keeps a SigPi StatusBarComponent in the frame across resize", a
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Resize: status bar footer reserved/correct across resize (production fork Tui)
-// ─────────────────────────────────────────────────────────────────────────────
-test("fork Tui keeps the status bar correct across resize", () => {
-	const term = new FakeTerminal(20, 5);
-	const tui = new Tui(term);
-	tui.addChild(new TextComponent(["content"]));
-	tui.setStatusBarComponent(new StatusBarComponent(makeStatus()));
-
-	// The status line is left of content; locate it by the branch segment,
-	// which survives left-truncation. The model name is dropped when the line
-	// is wider than the terminal (existing ADR 0022 truncation behavior).
-	let frame = tui.renderToFrame();
-	const statusLine = (f: string[]) => f.find((l) => l.includes("main"));
-	assert.ok(statusLine(frame) !== undefined, "status bar present at start");
-	assert.ok(frame[0].includes("content"), "content preserved above the footer");
-	assert.ok(
-		!term.writes.some((w) => w.includes("\x1b[2J")),
-		"inline render emits no full-screen clear",
-	);
-
-	// Grow taller: footer still present and content preserved.
-	term.resize(20, 10);
-	frame = tui.renderToFrame();
-	assert.ok(
-		statusLine(frame) !== undefined,
-		"status bar still present after growing",
-	);
-	assert.ok(frame[0].includes("content"), "content preserved after growing");
-
-	// Narrow: footer left-truncates (… prefix), keeps the trailing branch,
-	// and drops the leading model name.
-	term.resize(12, 10);
-	frame = tui.renderToFrame();
-	const narrow = statusLine(frame);
-	assert.ok(narrow !== undefined, "status bar still present when narrow");
-	assert.ok(narrow.startsWith("…"), "footer left-truncates when narrow");
-	assert.ok(
-		narrow.includes("main"),
-		"footer keeps the trailing branch segment",
-	);
-	assert.ok(
-		!narrow.includes("claude"),
-		"footer drops the leading model name on truncate",
-	);
-});
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Kitty keyboard-protocol negotiation
 //

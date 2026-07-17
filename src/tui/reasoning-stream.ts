@@ -1,5 +1,5 @@
-import type { Component } from "./tui.js";
-import { wrapToWidth } from "./utils.js";
+import type { Component } from "@earendil-works/pi-tui";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const ANSI_DIM = "\x1B[2m";
 const ANSI_RESET = "\x1B[0m";
@@ -50,13 +50,13 @@ export class ReasoningStreamComponent implements Component {
 
 		if (this.hasReasoning) {
 			lines.push(`${ANSI_DIM}▸ reasoning${ANSI_RESET}`);
-			for (const line of wrapToWidth(this.reasoning, width)) {
+			for (const line of wrapTextWithAnsi(this.reasoning, width)) {
 				lines.push(`${ANSI_DIM}  ${line}${ANSI_RESET}`);
 			}
 		}
 
 		if (this.hasContent) {
-			for (const line of wrapToWidth(this.content, width)) {
+			for (const line of wrapTextWithAnsi(this.content, width)) {
 				lines.push(line);
 			}
 		}

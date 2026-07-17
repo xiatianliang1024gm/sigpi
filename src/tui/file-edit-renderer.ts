@@ -1,3 +1,4 @@
+import type { Component } from "@earendil-works/pi-tui";
 import {
 	createEditSummary,
 	createWriteSummary,
@@ -6,7 +7,6 @@ import {
 	isFileEditSummary,
 } from "../tools/edit-summary.js";
 import type { ExecutedToolCall, JsonValue } from "../types.js";
-import type { Component } from "./tui.js";
 
 const RESET = "\x1B[0m";
 const DIM = "\x1B[2m";
