@@ -72,4 +72,6 @@ export class ReasoningStreamComponent implements Component {
 		visible.unshift(`${ANSI_DIM}… (${overflow} more lines)${ANSI_RESET}`);
 		return visible.slice(0, maxHeight);
 	}
+
+	invalidate(): void {}
 }

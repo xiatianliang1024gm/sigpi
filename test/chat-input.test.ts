@@ -346,11 +346,15 @@ test("readChatInput clears the live input and status bar before final echo", asy
 
 	assert.equal(await resultPromise, "你是谁");
 	const rendered = await outputText;
-	assert.ok(rendered.includes("\r\x1B[J\x1B[?2004l\x1B[?25h> 你是谁\n"));
-	assert.equal(
-		rendered.slice(rendered.lastIndexOf("> 你是谁\n")).includes("model test"),
-		false,
+	// The live input + status bar are cleared (clearFromCursor at column 1)
+	// before the final echo is written, so the transcript above stays intact.
+	const echoIndex = rendered.lastIndexOf("> 你是谁\n");
+	assert.ok(echoIndex > 0, "final echo is present");
+	assert.ok(
+		rendered.slice(0, echoIndex).includes("\r\x1B[J"),
+		"input/status area cleared before final echo",
 	);
+	assert.equal(rendered.slice(echoIndex).includes("model test"), false);
 });
 
 test("readChatInput uses arrows and Enter to select a slash suggestion", async () => {
@@ -729,8 +733,10 @@ test("running turn input listener clears its status bar on stop", async () => {
 
 	const rendered = await outputText;
 	assert.ok(rendered.includes("model test | chars"));
-	assert.match(rendered, /\r\x1B\[J\x1B\[\?2004l/);
-	assert.doesNotMatch(rendered, /\r\n\x1B\[J\x1B\[\?2004l/);
+	// The status bar is cleared in place (clearFromCursor at column 1) on stop,
+	// not after a trailing newline that would leave it visible above.
+	assert.match(rendered, /\r\x1B\[J/);
+	assert.doesNotMatch(rendered, /\r\n\x1B\[J/);
 });
 
 test("readChatInput wraps long input and keeps prompt on the first line", async () => {

@@ -13,13 +13,14 @@ Treat these as different rendering modes. Most regressions came from using full-
 
 Do not clear the terminal when rendering chat input.
 
-`readChatInput()` uses an inline terminal adapter and starts `Tui` with:
+`readChatInput()` uses an inline terminal adapter (`InlineTerminal`) and starts Pi-tui's `TUI` with `showHardwareCursor` enabled, disabling shrink-clearing so the transcript above stays intact:
 
 ```ts
-new Tui(terminal, { clearOnStart: false, fillHeight: false });
+const tui = new TUI(terminal, true);
+tui.setClearOnShrink(false);
 ```
 
-This is intentional. A chat prompt is rendered at the current cursor location after previous agent output. Clearing the screen makes the final assistant answer disappear when the next prompt starts.
+This is intentional. A chat prompt is rendered at the current cursor location after previous agent output. Clearing the screen makes the final assistant answer disappear when the next prompt starts. Pi-tui's `TUI` is inherently inline: it never emits a full-screen clear and renders from the current cursor position, so the transcript above is preserved.
 
 Use full-screen defaults only for modal screens where replacing the viewport is expected, such as session selection.
 
@@ -27,7 +28,7 @@ Use full-screen defaults only for modal screens where replacing the viewport is 
 
 Chinese/Japanese/Korean IME candidate windows follow the terminal hardware cursor, not a fake glyph.
 
-The editor emits `CURSOR_MARKER` as a zero-width marker. `Tui` scans rendered lines for that marker, removes it from visible output, and moves the hardware cursor to the marker position after drawing the frame.
+The editor emits `CURSOR_MARKER` as a zero-width marker. Pi-tui's `TUI` scans rendered lines for that marker, removes it from visible output, and moves the hardware cursor to the marker position after drawing the frame. (SigPi's fork `Editor` emits its own marker; the chat-input wrapper converts it to Pi-tui's `CURSOR_MARKER` before handing lines to the `TUI`.)
 
 Do not render a fake cursor such as `▌` for input position. It may look correct visually while the IME candidate window appears somewhere else.
 
@@ -102,7 +103,7 @@ When changing TUI input, verify:
 
 - the terminal hardware cursor is visible while editing
 - `CURSOR_MARKER` is present before the logical insertion point
-- `Tui` moves hardware cursor after writing changed lines
+- Pi-tui's `TUI` moves hardware cursor after writing changed lines
 - marker stripping happens after cursor calculation, before writing visible lines
 - candidate windows appear near the current insertion point for Chinese input
 
