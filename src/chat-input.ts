@@ -746,7 +746,11 @@ export function startRunningTurnInputListener(
 			}
 			const result = operation();
 			if (!stopped && !component.hasSubmittedText()) {
-				tui.requestRender(true);
+				// Repaint the input below the streamed output. Use a plain (non
+				// force) render: `requestRender(true)` sets previousWidth = -1,
+				// which forces Pi-tui into a full-screen clear (\x1B[2J) that
+				// would wipe the entire transcript above the prompt.
+				tui.requestRender();
 			}
 			return result;
 		},

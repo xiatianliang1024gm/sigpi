@@ -722,6 +722,42 @@ test("running turn input listener prints submitted input after suspended output"
 	);
 });
 
+test("running turn input listener streams without clearing the transcript", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const outputText = collectOutput(output);
+
+	// A transcript already sits above the prompt.
+	output.write("PRIOR ANSWER LINE\n");
+
+	const handle = startRunningTurnInputListener({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		onEscape: () => {
+			throw new Error("should not interrupt");
+		},
+		onSubmit: () => {},
+	});
+
+	handle?.withSuspendedRendering(() => {
+		output.write("[agent] token one\n");
+	});
+	handle?.withSuspendedRendering(() => {
+		output.write("[agent] token two\n");
+	});
+	handle?.stop();
+	output.end();
+
+	const rendered = await outputText;
+	// Streaming deltas used to call requestRender(true), which forces Pi-tui
+	// into a full-screen clear (\x1B[2J) and wiped the whole transcript above.
+	assert.doesNotMatch(rendered, /\x1B\[2J/);
+	assert.match(getVisibleOutput(rendered), /PRIOR ANSWER LINE/);
+	assert.match(getVisibleOutput(rendered), /\[agent\] token one/);
+	assert.match(getVisibleOutput(rendered), /\[agent\] token two/);
+});
+
 test("running turn input listener allocates new rows with newline at terminal bottom", async () => {
 	const input = new FakeInput();
 	const output = new FakeOutput();
