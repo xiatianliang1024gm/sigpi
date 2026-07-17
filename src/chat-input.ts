@@ -183,6 +183,30 @@ class InlineTerminal implements Terminal {
 		this.inner.clearFromCursor();
 	}
 
+	async drainInput(maxMs?: number, idleMs?: number): Promise<void> {
+		await this.inner.drainInput(maxMs, idleMs);
+	}
+
+	get kittyProtocolActive(): boolean {
+		return this.inner.kittyProtocolActive;
+	}
+
+	moveBy(lines: number): void {
+		this.inner.moveBy(lines);
+	}
+
+	clearLine(): void {
+		this.inner.clearLine();
+	}
+
+	setTitle(title: string): void {
+		this.inner.setTitle(title);
+	}
+
+	setProgress(active: boolean): void {
+		this.inner.setProgress(active);
+	}
+
 	clearRenderedRows(): void {
 		if (this.renderedRows === 0) {
 			return;

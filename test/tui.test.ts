@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Text as PiText, TUI as PiTui } from "@earendil-works/pi-tui";
 import {
 	type Component,
 	Editor,
@@ -13,6 +14,7 @@ import {
 	Tui,
 	visibleWidth,
 } from "../src/tui/index.js";
+import { SigPiTerminal } from "../src/tui/terminal.js";
 
 class FakeTerminal implements Terminal {
 	public columns = 20;
@@ -31,20 +33,39 @@ class FakeTerminal implements Terminal {
 		this.resizeHandler = null;
 	}
 
+	async drainInput(): Promise<void> {}
+
 	write(data: string): void {
 		this.writes.push(data);
 	}
 
+	get kittyProtocolActive(): boolean {
+		return false;
+	}
+
+	moveBy(lines: number): void {
+		this.write(`<moveBy:${lines}>`);
+	}
+
 	hideCursor(): void {}
 	showCursor(): void {}
+	clearLine(): void {
+		this.write("<clear-line>");
+	}
 	clearScreen(): void {
 		this.write("<clear>");
 	}
 	clearFromCursor(): void {
 		this.write("<clear-rest>");
 	}
+	setTitle(_title: string): void {}
+	setProgress(_active: boolean): void {}
 	moveTo(row: number, column: number): void {
 		this.write(`<${row},${column}>`);
+	}
+
+	clearRenderedRows(rows = 0): void {
+		this.write(`<clear-rows:${rows}>`);
 	}
 }
 
@@ -400,4 +421,49 @@ test("streaming deltas repaint via diff, not a full-screen wipe (spec-0020 flick
 	assert.equal(fullWipe, false);
 	// The status bar row (row 5) is untouched, so it must not be rewritten.
 	assert.ok(!terminal.writes.includes("<5,1>"));
+});
+
+test("SigPiTerminal adapts a Pi-tui Terminal and exposes moveTo/clearRenderedRows", () => {
+	const inner = new FakeTerminal();
+	const terminal = new SigPiTerminal(inner);
+
+	// Delegated Pi-tui surface.
+	terminal.write("hello");
+	assert.equal(inner.writes.at(-1), "hello");
+	assert.equal(terminal.columns, inner.columns);
+	assert.equal(terminal.rows, inner.rows);
+	assert.equal(terminal.kittyProtocolActive, false);
+	terminal.moveBy(2);
+	assert.equal(inner.writes.at(-1), "<moveBy:2>");
+	terminal.clearLine();
+	assert.equal(inner.writes.at(-1), "<clear-line>");
+
+	// SigPi-specific additions emit real escape sequences through the inner
+	// terminal (they are not part of Pi-tui's Terminal interface).
+	terminal.moveTo(3, 4);
+	assert.ok(
+		inner.writes.some((w) => w.includes("\x1B[3;4H")),
+		"moveTo should emit absolute cursor positioning",
+	);
+	terminal.clearRenderedRows(2);
+	assert.ok(
+		inner.writes.some((w) => w.includes("\x1B[2A")),
+		"clearRenderedRows should move the cursor back to the start row",
+	);
+});
+
+test("Pi-tui TUI mounts on FakeTerminal and renders a Text component", async () => {
+	const terminal = new FakeTerminal();
+	const tui = new PiTui(terminal);
+	tui.addChild(new PiText("hello world"));
+	tui.start();
+	// Pi-tui schedules its first render on a timer; let it flush.
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	tui.stop();
+
+	assert.ok(terminal.writes.length > 0, "expected Pi-tui TUI to write output");
+	assert.ok(
+		terminal.writes.some((w) => w.includes("hello world")),
+		"expected the rendered Text to appear in terminal output",
+	);
 });
