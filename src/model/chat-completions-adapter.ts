@@ -7,6 +7,7 @@ import type {
 	ModelUsage,
 	ToolCall,
 } from "../types.js";
+import { stripThinking, ThinkingSplitter } from "./thinking.js";
 import { ModelRequestError } from "./transport.js";
 import { isPlainObject, readFiniteNumber, safeParseArguments } from "./util.js";
 import type { WireFormatAdapter } from "./wire-format.js";
@@ -64,6 +65,10 @@ interface ChatCompletionsChunk {
 /** Wire-format adapter for the OpenAI `chat/completions` API. */
 export class ChatCompletionsAdapter implements WireFormatAdapter {
 	private accumulated: ParsedResponse | null = null;
+	// Extracts thinking wrapped in tags (<mm:think>, <think>, <reasoning>) from
+	// streamed `content` so it is shown as a separate reasoning preview and kept
+	// out of the final answer (some providers do not use `reasoning_content`).
+	private thinking = new ThinkingSplitter();
 
 	constructor(private readonly config: ModelConfig) {}
 
@@ -86,7 +91,7 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 	private convert(parsed: ParsedResponse): ModelResponse {
 		const choice = parsed.choices[0];
 		const message = choice.message;
-		const assistantText = message.content ?? null;
+		const assistantText = stripThinking(message.content ?? null);
 		const toolCalls = this.parseChatCompletionsToolCalls(message.tool_calls);
 
 		return {
@@ -118,6 +123,8 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 		const chunk = frame as ChatCompletionsChunk;
 		if (!this.accumulated) {
 			this.accumulated = { choices: [], usage: undefined };
+			// Fresh stream: clear any stale thinking-tag parsing state.
+			this.thinking = new ThinkingSplitter();
 		}
 		this.foldChunk(this.accumulated, chunk);
 	}
@@ -160,8 +167,14 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 					(delta.reasoningDelta ?? "") + choiceDelta.reasoning_content;
 			}
 			if (typeof choiceDelta.content === "string") {
+				const { reasoning, content } = this.thinking.push(choiceDelta.content);
 				delta = delta ?? {};
-				delta.contentDelta = (delta.contentDelta ?? "") + choiceDelta.content;
+				if (content) {
+					delta.contentDelta = (delta.contentDelta ?? "") + content;
+				}
+				if (reasoning) {
+					delta.reasoningDelta = (delta.reasoningDelta ?? "") + reasoning;
+				}
 			}
 			if (Array.isArray(choiceDelta.tool_calls)) {
 				for (const tc of choiceDelta.tool_calls) {

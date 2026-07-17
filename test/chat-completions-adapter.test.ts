@@ -113,3 +113,41 @@ test("parse throws ModelRequestError on a malformed response", () => {
 			error instanceof ModelRequestError && error.kind === "invalid_response",
 	);
 });
+
+test("onDelta routes tagged <mm:think> content to reasoningDelta and clean contentDelta", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	const deltas: string[] = [];
+	for (const frame of [
+		{ choices: [{ delta: { content: "<mm:think>let me " } }] },
+		{ choices: [{ delta: { content: "think</mm:think>hel" } }] },
+		{ choices: [{ delta: { content: "lo" } }] },
+		{ choices: [{ delta: {}, finish_reason: "stop" }] },
+	]) {
+		const delta = adapter.onDelta(frame);
+		if (delta?.reasoningDelta) deltas.push(`r:${delta.reasoningDelta}`);
+		if (delta?.contentDelta) deltas.push(`c:${delta.contentDelta}`);
+	}
+	assert.deepEqual(deltas, ["r:let me ", "r:think", "c:hel", "c:lo"]);
+});
+
+test("finalize strips tagged thinking from assistantText", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	for (const frame of [
+		{
+			choices: [
+				{ delta: { content: "<mm:think>hidden</mm:think>the answer" } },
+			],
+		},
+		{ choices: [{ delta: {}, finish_reason: "stop" }] },
+	]) {
+		adapter.accumulate(frame);
+	}
+	assert.equal(adapter.finalize().assistantText, "the answer");
+});
+
+test("onDelta leaves plain content untouched", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	const delta = adapter.onDelta({ choices: [{ delta: { content: "plain" } }] });
+	assert.equal(delta?.contentDelta, "plain");
+	assert.equal(delta?.reasoningDelta, undefined);
+});
