@@ -101,6 +101,35 @@ export function normalizeRenderedLine(value: string, width: number): string {
 	return padToWidth(truncateToWidth(value, width), width);
 }
 
+/**
+ * Truncate `value` to `width` visible columns, keeping the *right*-most
+ * content and prefixing an ellipsis. Used for the status bar, where the most
+ * important information (cwd, trailing event label) sits at the end.
+ */
+export function truncateLeftToWidth(value: string, width: number): string {
+	if (width <= 0 || visibleWidth(value) <= width) {
+		return width <= 0 ? "" : value;
+	}
+	if (width === 1) {
+		return truncateToWidth("…", 1);
+	}
+
+	const suffix = Array.from(value);
+	let result = "";
+	let started = false;
+	for (let index = suffix.length - 1; index >= 0; index -= 1) {
+		const next = `${suffix[index]}${result}`;
+		const candidate = started ? `…${next}` : next;
+		if (visibleWidth(candidate) > width) {
+			started = true;
+			continue;
+		}
+		result = next;
+		started = true;
+	}
+	return visibleWidth(result) === visibleWidth(value) ? result : `…${result}`;
+}
+
 function getCodePointDisplayWidth(char: string): number {
 	const codePoint = char.codePointAt(0);
 	if (codePoint === undefined) {

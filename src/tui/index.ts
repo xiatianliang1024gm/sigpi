@@ -26,6 +26,11 @@ export {
 	SelectList,
 	type SelectListItem,
 } from "./select-list.js";
+export {
+	composeStatusBar,
+	StatusBarComponent,
+	type StatusBarModel,
+} from "./status-bar.js";
 export { ProcessTerminal, SigPiTerminal, type Terminal } from "./terminal.js";
 export {
 	type Component,

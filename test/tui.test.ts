@@ -9,6 +9,8 @@ import {
 	parseKey,
 	ReasoningStreamComponent,
 	SelectList,
+	StatusBarComponent,
+	type StatusBarModel,
 	stripAnsi,
 	type Terminal,
 	Tui,
@@ -495,4 +497,210 @@ test("src/tui/index exposes Pi-tui's TUI and supporting symbols (expand phase)",
 	// Text utilities live under `PiUtils`.
 	assert.equal(typeof PiUtils.visibleWidth, "function");
 	assert.equal(PiUtils.visibleWidth("ab你好"), 6);
+});
+
+const STATUS_WIDTH = 240;
+
+function makeModel(overrides: Partial<StatusBarModel> = {}): StatusBarModel {
+	return {
+		modelName: "test-model",
+		limit: 183_600,
+		usedTokens: null,
+		usage: null,
+		cwd: "/home/user/repo",
+		branch: null,
+		...overrides,
+	};
+}
+
+function renderStatus(model: StatusBarModel, width = STATUS_WIDTH): string {
+	return new StatusBarComponent(model).render(width)[0] ?? "";
+}
+
+test("shows ? before the first model response (honest, not an estimate)", () => {
+	const line = renderStatus(makeModel({ usedTokens: null }));
+	assert.match(line, /^test-model /);
+	assert.match(line, /\?\/183\.6K/);
+	assert.doesNotMatch(line, /Hit/);
+});
+
+test("shows the provider's totalTokens after a response, with cache hit rate", () => {
+	const line = renderStatus(
+		makeModel({
+			usedTokens: 1_050,
+			usage: {
+				input: 200,
+				output: 50,
+				cacheRead: 800,
+				cacheWrite: 0,
+				totalTokens: 1_050,
+			},
+		}),
+	);
+	// 1_050 -> 1.1K; 800 / (800 + 200) = 80.0%.
+	assert.match(line, /1\.1K\/183\.6K \(1%\) Hit\(80\.0%\)/);
+});
+
+test("keeps the last response's count and does not re-estimate after a follow-up", () => {
+	const line = renderStatus(
+		makeModel({
+			usedTokens: 1_050,
+			usage: {
+				input: 200,
+				output: 50,
+				cacheRead: 800,
+				cacheWrite: 0,
+				totalTokens: 1_050,
+			},
+		}),
+	);
+	assert.match(line, /1\.1K\/183\.6K/);
+});
+
+test("hides the cache hit rate when there is no cacheable input", () => {
+	const line = renderStatus(
+		makeModel({
+			usedTokens: 50,
+			usage: {
+				input: 0,
+				output: 50,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 50,
+			},
+		}),
+	);
+	assert.doesNotMatch(line, /Hit/);
+	assert.match(line, /50\/183\.6K \(0%\)/);
+});
+
+test("shows Hit(0.0%) for a cold cache with real input", () => {
+	const line = renderStatus(
+		makeModel({
+			usedTokens: 1_050,
+			usage: {
+				input: 1_000,
+				output: 50,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1_050,
+			},
+		}),
+	);
+	assert.match(line, /Hit\(0\.0%\)/);
+});
+
+test("appends the git branch when cwd is a repo", () => {
+	const line = renderStatus(makeModel({ branch: "main" }));
+	assert.match(line, /\/repo \(main\)$/);
+});
+
+test("shows @shortSha for a detached HEAD", () => {
+	const line = renderStatus(makeModel({ branch: "@a1b2c3d" }));
+	assert.match(line, /\/repo \(@a1b2c3d\)$/);
+});
+
+test("silently omits the branch segment when git lookup fails", () => {
+	const line = renderStatus(makeModel({ branch: null }));
+	assert.doesNotMatch(line, /\(/);
+	assert.match(line, /\/home\/user\/repo$/);
+});
+
+test("includes the model name at the start with no `model ` prefix", () => {
+	const line = renderStatus(
+		makeModel({
+			usedTokens: 1_050,
+			usage: {
+				input: 200,
+				output: 50,
+				cacheRead: 800,
+				cacheWrite: 0,
+				totalTokens: 1_050,
+			},
+		}),
+	);
+	assert.match(line, /^test-model /);
+	assert.doesNotMatch(line, /^model /);
+});
+
+test("suffixes a progress label during a turn", () => {
+	const line = renderStatus(
+		makeModel({ usedTokens: 12_345, eventLabel: "thinking" }),
+	);
+	assert.match(line, /12\.3K\/183\.6K/);
+	assert.match(line, /thinking$/);
+});
+
+test("Tui renders a StatusBarComponent as the bottom footer row", () => {
+	const terminal = new FakeTerminal();
+	terminal.columns = 60;
+	const tui = new Tui(terminal);
+	tui.addChild(new TextComponent(["row1", "row2", "row3", "row4", "row5"]));
+	tui.setStatusBarComponent(
+		new StatusBarComponent(makeModel({ branch: "main" })),
+	);
+
+	const frame = tui.renderToFrame();
+
+	assert.equal(frame.length, 5);
+	assert.match(frame[4] ?? "", /repo \(main\)\s*$/);
+	assert.doesNotMatch(frame[4] ?? "", /row5/);
+});
+
+test("Tui truncates a long status component line from the left", () => {
+	const terminal = new FakeTerminal();
+	terminal.columns = 18;
+	const tui = new Tui(terminal);
+	tui.setStatusBarComponent(
+		new StatusBarComponent(
+			makeModel({ cwd: "/home/user/repos/claudeprojects/sigpi" }),
+		),
+	);
+
+	const frame = tui.renderToFrame();
+
+	assert.equal(frame.length, 5);
+	assert.match(frame[4] ?? "", /^…/);
+	assert.match(frame[4] ?? "", /sigpi\s*$/);
+});
+
+test("Tui updates only the footer row when the status component changes", async () => {
+	const terminal = new FakeTerminal();
+	const tui = new Tui(terminal);
+	tui.addChild(new TextComponent(["hello"]));
+	tui.setStatusBarComponent(
+		new StatusBarComponent(
+			makeModel({ modelName: "m", limit: 100, cwd: "/tmp/one" }),
+		),
+	);
+	tui.start();
+	terminal.writes = [];
+
+	tui.setStatusBarComponent(
+		new StatusBarComponent(
+			makeModel({ modelName: "m", limit: 100, cwd: "/tmp/two" }),
+		),
+	);
+	await new Promise((resolve) => setImmediate(resolve));
+
+	assert.deepEqual(terminal.writes, ["<5,1>", "m | ?/100 | /tmp/two"]);
+});
+
+test("Tui overlays stay within the content area above the status component", () => {
+	const terminal = new FakeTerminal();
+	terminal.columns = 40;
+	const tui = new Tui(terminal);
+	tui.addChild(new TextComponent(["base"]));
+	tui.setStatusBarComponent(
+		new StatusBarComponent(makeModel({ cwd: "/tmp/project" })),
+	);
+	tui.showOverlay(new TextComponent(["overlay"]), {
+		width: 7,
+		anchor: "bottom-right",
+	});
+
+	const frame = tui.renderToFrame();
+
+	assert.equal(frame[3]?.trim(), "overlay");
+	assert.match(frame[4] ?? "", /\/tmp\/project\s*$/);
 });

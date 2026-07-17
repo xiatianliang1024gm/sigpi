@@ -458,7 +458,7 @@ export async function runChatReplLoop(
 		event: TurnProgressEvent | null = latestProgressEvent,
 	): Promise<void> => {
 		const text = await formatStatusBarForEvent(state, event);
-		handle?.setStatusBarText(text);
+		handle?.setStatusBarComponent(text);
 	};
 
 	while (true) {
@@ -470,7 +470,7 @@ export async function runChatReplLoop(
 				input: options.input,
 				output: options.output,
 				commands,
-				statusBarText: await formatStatusBar(state),
+				statusBarComponent: await formatStatusBar(state),
 				inputHistory: options.inputHistory,
 			}));
 		if (line === null) {
@@ -522,7 +522,7 @@ export async function runChatReplLoop(
 			prompt: options.prompt ?? "> ",
 			input: options.input,
 			output: options.output,
-			statusBarText: await formatStatusBar(state),
+			statusBarComponent: await formatStatusBar(state),
 			inputHistory: options.inputHistory,
 			reasoningStream,
 			onEscape: () => {

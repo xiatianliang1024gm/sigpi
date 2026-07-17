@@ -1,11 +1,13 @@
+import type { StatusBarComponent } from "./status-bar.js";
 import type { Terminal } from "./terminal.js";
 import {
 	normalizeRenderedLine,
-	truncateToWidth,
+	truncateLeftToWidth,
 	visibleWidth,
 } from "./utils.js";
 
 export { ReasoningStreamComponent } from "./reasoning-stream.js";
+export { StatusBarComponent } from "./status-bar.js";
 
 export interface Component {
 	render(width: number, maxHeight?: number): string[];
@@ -71,6 +73,7 @@ export class Tui {
 	private previousFrame: string[] = [];
 	private renderQueued = false;
 	private statusBar: string | null = null;
+	private statusBarComponent: StatusBarComponent | null = null;
 
 	constructor(
 		terminal: Terminal,
@@ -153,6 +156,15 @@ export class Tui {
 		this.requestRender();
 	}
 
+	/**
+	 * Mount a Pi-tui {@link StatusBarComponent} as the bottom footer. When set,
+	 * it takes precedence over the legacy {@link setStatusBar} string path.
+	 */
+	setStatusBarComponent(component: StatusBarComponent | null): void {
+		this.statusBarComponent = component;
+		this.requestRender();
+	}
+
 	start(): void {
 		if (this.running) {
 			return;
@@ -215,7 +227,8 @@ export class Tui {
 	private renderFrame(): RenderedFrame {
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
-		const footerEnabled = this.statusBar !== null;
+		const footerEnabled =
+			this.statusBarComponent !== null || this.statusBar !== null;
 		const contentHeight = footerEnabled ? Math.max(0, height - 1) : height;
 		// Cap tall children (e.g. the live reasoning preview) at ~70% of the
 		// content area so the focused input component (the prompt line) stays
@@ -244,7 +257,16 @@ export class Tui {
 		}
 
 		if (footerEnabled) {
-			baseFrame.push(normalizeStatusBarLine(this.statusBar ?? "", width));
+			if (this.statusBarComponent) {
+				baseFrame.push(
+					normalizeStatusBarLine(
+						this.statusBarComponent.render(width)[0] ?? "",
+						width,
+					),
+				);
+			} else {
+				baseFrame.push(normalizeStatusBarLine(this.statusBar ?? "", width));
+			}
 		}
 
 		if (this.options.fillHeight !== false) {
@@ -354,30 +376,6 @@ function normalizeLine(line: string, width: number): string {
 
 function normalizeStatusBarLine(line: string, width: number): string {
 	return normalizeRenderedLine(truncateLeftToWidth(line, width), width);
-}
-
-function truncateLeftToWidth(value: string, width: number): string {
-	if (width <= 0 || visibleWidth(value) <= width) {
-		return width <= 0 ? "" : value;
-	}
-	if (width === 1) {
-		return truncateToWidth("…", 1);
-	}
-
-	const suffix = Array.from(value);
-	let result = "";
-	let started = false;
-	for (let index = suffix.length - 1; index >= 0; index -= 1) {
-		const next = `${suffix[index]}${result}`;
-		const candidate = started ? `…${next}` : next;
-		if (visibleWidth(candidate) > width) {
-			started = true;
-			continue;
-		}
-		result = next;
-		started = true;
-	}
-	return visibleWidth(result) === visibleWidth(value) ? result : `…${result}`;
 }
 
 function findCursorPosition(
