@@ -2,6 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Text as PiText, TUI as PiTui } from "@earendil-works/pi-tui";
 import {
+	createEditSummary,
+	createWriteSummary,
+} from "../src/tools/edit-summary.js";
+import {
+	FileEditComponent,
+	formatFileEditResultData,
+	formatFileEditSummaries,
+	formatFileEditSummary,
+} from "../src/tui/file-edit-renderer.js";
+import {
 	type Component,
 	Editor,
 	matchesKey,
@@ -16,6 +26,10 @@ import {
 	Tui,
 	visibleWidth,
 } from "../src/tui/index.js";
+
+const GREEN_BACKGROUND = "\x1B[42m";
+const RED_BACKGROUND = "\x1B[41m";
+
 import { SigPiTerminal } from "../src/tui/terminal.js";
 
 class FakeTerminal implements Terminal {
@@ -400,6 +414,120 @@ test("ReasoningStreamComponent scrolls internally when capped (spec-0020)", () =
 	assert.match(capped[0], /more lines/);
 	// The most recent content is preserved at the tail.
 	assert.match(capped[capped.length - 1], /a/);
+});
+
+test("FileEditComponent output matches formatFileEditSummary exactly", () => {
+	const edit = createEditSummary(
+		"src/foo.ts",
+		"const a = 1;\n",
+		"const a = 1;",
+		"const a = 2;",
+		false,
+	);
+	const write = createWriteSummary("README.md", null, "# Title\nBody\n");
+
+	assert.deepEqual(
+		new FileEditComponent({ color: true }).setSummary(edit).render(80),
+		formatFileEditSummary(edit, { color: true }),
+	);
+	assert.deepEqual(
+		new FileEditComponent({ color: false }).setSummary(write).render(80),
+		formatFileEditSummary(write, { color: false }),
+	);
+});
+
+test("FileEditComponent renders an empty frame when no summary is set", () => {
+	assert.deepEqual(new FileEditComponent().render(80), []);
+	assert.deepEqual(new FileEditComponent().setSummary(null).render(80), []);
+});
+
+test("FileEditComponent renders a write summary (all additions, no deletions)", () => {
+	const summary = createWriteSummary("README.md", null, "# Title\n");
+	const lines = new FileEditComponent({ color: false })
+		.setSummary(summary)
+		.render(80);
+	assert.equal(lines[0], "- Edited README.md (+1 -0)");
+	assert.match(lines.at(-1) ?? "", /1 \+ # Title$/);
+});
+
+test("Tui renders a FileEditComponent diff through its renderer (Terminal seam)", () => {
+	const terminal = new FakeTerminal();
+	terminal.columns = 80;
+	const tui = new Tui(terminal, { clearOnStart: false, fillHeight: false });
+	const summary = createEditSummary(
+		"src/foo.ts",
+		"const a = 1;\n",
+		"const a = 1;",
+		"const a = 2;",
+		false,
+	);
+	const component = new FileEditComponent({ color: false }).setSummary(summary);
+	tui.addChild(component);
+
+	// The TUI pads each line to the viewport width; strip that padding so we
+	// compare the diff *content* (what the Component produced) to today's
+	// helper output. They must match exactly — parity through the renderer.
+	const frame = tui.renderToFrame().map((line) => line.replace(/\s+$/u, ""));
+
+	assert.deepEqual(frame, formatFileEditSummary(summary, { color: false }));
+	// With color disabled the diff carries no ANSI escapes.
+	assert.ok(frame.every((line) => !line.includes("\x1B[")));
+});
+
+test("FileEditComponent keeps color escapes when color is enabled (Terminal seam)", () => {
+	const terminal = new FakeTerminal();
+	terminal.columns = 80;
+	const tui = new Tui(terminal, { clearOnStart: false, fillHeight: false });
+	const summary = createEditSummary(
+		"src/foo.ts",
+		"const a = 1;\n",
+		"const a = 1;",
+		"const a = 2;",
+		true,
+	);
+	tui.addChild(new FileEditComponent({ color: true }).setSummary(summary));
+
+	const frame = tui.renderToFrame();
+	// The added line is wrapped in a green-background escape, matching today's
+	// colored diff rendering.
+	assert.ok(frame.some((line) => line.includes(GREEN_BACKGROUND)));
+	assert.ok(frame.some((line) => line.includes(RED_BACKGROUND)));
+});
+
+test("FileEditComponent mounts under Pi-tui's TUI and renders the diff", async () => {
+	const terminal = new FakeTerminal();
+	const tui = new PiTui(terminal);
+	tui.addChild(
+		new FileEditComponent({ color: false }).setSummary(
+			createWriteSummary("README.md", null, "# Title\n"),
+		),
+	);
+	tui.start();
+	// Pi-tui schedules its first render on a timer; let it flush.
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	tui.stop();
+
+	assert.ok(
+		terminal.writes.some((w) => w.includes("- Edited README.md")),
+		"expected the diff header to be rendered by Pi-tui's TUI",
+	);
+});
+
+test("formatFileEditSummaries/ResultData now render through FileEditComponent", () => {
+	const summary = createEditSummary(
+		"src/foo.ts",
+		"const a = 1;\n",
+		"const a = 1;",
+		"const a = 2;",
+		false,
+	);
+	// The standalone helpers must still produce identical output now that they
+	// delegate to the Pi-tui Component.
+	assert.deepEqual(formatFileEditSummaries([], { color: false }), []);
+	assert.deepEqual(
+		formatFileEditResultData({ editSummary: summary }, { color: false }),
+		new FileEditComponent({ color: false }).setSummary(summary).render(0),
+	);
 });
 
 test("streaming deltas repaint via diff, not a full-screen wipe (spec-0020 flicker fix)", async () => {

@@ -20,6 +20,13 @@ export {
 	getCursorColumn,
 	renderWrappedEditorLines,
 } from "./editor.js";
+export {
+	FileEditComponent,
+	type FileEditRenderOptions,
+	formatFileEditResultData,
+	formatFileEditSummaries,
+	formatFileEditSummary,
+} from "./file-edit-renderer.js";
 export { isPrintableInput, type KeyId, matchesKey, parseKey } from "./keys.js";
 export {
 	moveSelectedIndex,
