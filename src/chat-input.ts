@@ -182,15 +182,33 @@ class InlineTerminal implements Terminal {
 		this.inner.setProgress(active);
 	}
 
-	/** Clear the rendered inline input rows so a fresh prompt can be echoed. */
-	clearRenderedRows(rows?: number): void {
+	/**
+	 * Clear the rendered inline input rows so a fresh prompt can be echoed.
+	 *
+	 * The cursor sits on the IME marker, which can be on any row of the frame
+	 * (for a single-line prompt it is the *top* row, not the bottom). We
+	 * therefore home to the frame's top row — `cursorRowInFrame` rows above the
+	 * marker — and then clear exactly `rows` lines downward with `\x1B[2K`.
+	 * This never moves the cursor up into the transcript above the prompt and
+	 * never emits an erase-to-end-of-screen (`\x1B[J`) that would wipe it.
+	 */
+	clearRenderedRows(rows?: number, cursorRowInFrame = 0): void {
 		const height = rows ?? this.lastHeight;
 		if (height <= 0) {
 			return;
 		}
-		this.moveBy(-(height - 1));
-		this.write("\r");
-		this.clearFromCursor();
+		if (cursorRowInFrame > 0) {
+			this.moveBy(-cursorRowInFrame);
+		}
+		for (let index = 0; index < height; index += 1) {
+			this.write("\r\x1B[2K");
+			if (index < height - 1) {
+				this.write("\r\n");
+			}
+		}
+		if (height > 1) {
+			this.moveBy(-(height - 1));
+		}
 		this.lastHeight = 0;
 	}
 }
@@ -217,6 +235,14 @@ class ChatInputComponent implements PiComponent {
 	private suggestionSelectionActive = false;
 	/** Rows this component contributed to the last frame (input + suggestions). */
 	frameHeight = 0;
+	/**
+	 * Row index (0-based) of the IME cursor marker within the last rendered
+	 * frame. `clearRenderedRows` uses it to home to the frame's top row before
+	 * clearing: the marker can sit on any row of the frame (for a single-line
+	 * prompt it is the *top* row, not the bottom), so clearing from the
+	 * bottom would overshoot up into the transcript above.
+	 */
+	cursorRowInFrame = 0;
 
 	constructor(
 		private readonly args: {
@@ -323,6 +349,10 @@ class ChatInputComponent implements PiComponent {
 		}
 
 		this.frameHeight = lines.length;
+		const markerRow = lines.findIndex((line) =>
+			line.includes(FORK_CURSOR_MARKER),
+		);
+		this.cursorRowInFrame = markerRow >= 0 ? markerRow : 0;
 		// Convert the fork Editor's cursor marker to Pi-tui's so the TUI can
 		// position the real hardware cursor for IME candidate windows.
 		return lines.map((line) =>
@@ -360,6 +390,8 @@ class RunningTurnInputComponent implements PiComponent {
 	private submittedText: string | null = null;
 	/** Rows this component contributed to the last frame (input only). */
 	frameHeight = 0;
+	/** Row index (0-based) of the IME cursor marker within the last frame. See {@link ChatInputComponent.cursorRowInFrame}. */
+	cursorRowInFrame = 0;
 
 	constructor(
 		args: {
@@ -421,6 +453,10 @@ class RunningTurnInputComponent implements PiComponent {
 		}
 		const lines = this.editor.render(width);
 		this.frameHeight = lines.length;
+		const markerRow = lines.findIndex((line) =>
+			line.includes(FORK_CURSOR_MARKER),
+		);
+		this.cursorRowInFrame = markerRow >= 0 ? markerRow : 0;
 		return lines.map((line) =>
 			line.split(FORK_CURSOR_MARKER).join(PI_CURSOR_MARKER),
 		);
@@ -525,6 +561,7 @@ export async function readChatInput(
 			settled = true;
 			terminal.clearRenderedRows(
 				totalFrameHeight(component, statusBar, terminal),
+				component.cursorRowInFrame,
 			);
 			tui.stop();
 			if (value !== null) {
@@ -595,6 +632,7 @@ export function startRunningTurnInputListener(
 			onSubmit: (text) => {
 				terminal.clearRenderedRows(
 					totalFrameHeight(component, statusBar, terminal),
+					component.cursorRowInFrame,
 				);
 				output.write(`${prompt}${text}\n`);
 				options.onSubmit(text);
@@ -650,6 +688,7 @@ export function startRunningTurnInputListener(
 		}
 		terminal.clearRenderedRows(
 			totalFrameHeight(component, currentStatusBar, terminal),
+			component.cursorRowInFrame,
 		);
 		tui.stop();
 	};
@@ -694,10 +733,17 @@ export function startRunningTurnInputListener(
 			if (component.hasSubmittedText()) {
 				return operation();
 			}
-			terminal.clearRenderedRows(
-				totalFrameHeight(component, currentStatusBar, terminal),
-			);
-			tui.invalidate();
+			if (!stopped) {
+				// Repaint first so the cursor is parked on the IME marker and
+				// cursorRowInFrame reflects the current frame, then clear exactly
+				// the input rows (never the transcript above the prompt).
+				renderInlineNow(tui);
+				terminal.clearRenderedRows(
+					totalFrameHeight(component, currentStatusBar, terminal),
+					component.cursorRowInFrame,
+				);
+				tui.invalidate();
+			}
 			const result = operation();
 			if (!stopped && !component.hasSubmittedText()) {
 				tui.requestRender(true);
