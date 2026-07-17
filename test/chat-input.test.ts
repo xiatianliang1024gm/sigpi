@@ -96,6 +96,36 @@ test("readChatInput does not clear existing chat transcript", async () => {
 	assert.match(getVisibleOutput(rendered), /assistant answer stays visible/);
 });
 
+test("readChatInput does not erase the transcript above on single-line submit", async () => {
+	const input = new FakeInput();
+	const output = new FakeOutput();
+	const outputText = collectOutput(output);
+
+	output.write("PREVIOUS TURN 1\n");
+	output.write("PREVIOUS TURN 2\n");
+
+	const resultPromise = readChatInput({
+		prompt: "> ",
+		input: input as never,
+		output: output as never,
+		statusBarText: "model test | chars 10/100 (10%) | /tmp/project",
+	});
+
+	process.nextTick(() => {
+		input.write("hello");
+		input.write("\r");
+		output.end();
+	});
+
+	assert.equal(await resultPromise, "hello");
+	const rendered = await outputText;
+	// No erase-to-end-of-screen (\x1B[J): the clean-return homes to the frame
+	// top and clears downward, so the transcript above the prompt survives.
+	assert.doesNotMatch(rendered, /\x1B\[\??\d*J/);
+	assert.match(getVisibleOutput(rendered), /PREVIOUS TURN 1/);
+	assert.match(getVisibleOutput(rendered), /PREVIOUS TURN 2/);
+});
+
 test("readChatInput buffers bracketed multiline paste until a final Enter", async () => {
 	const input = new FakeInput();
 	const output = new FakeOutput();
@@ -350,11 +380,16 @@ test("readChatInput clears the live input and status bar before final echo", asy
 	// before the final echo is written, so the transcript above stays intact.
 	const echoIndex = rendered.lastIndexOf("> 你是谁\n");
 	assert.ok(echoIndex > 0, "final echo is present");
+	// The status bar is shown while the input is live ...
 	assert.ok(
-		rendered.slice(0, echoIndex).includes("\r\x1B[J"),
-		"input/status area cleared before final echo",
+		rendered.slice(0, echoIndex).includes("model test"),
+		"status bar shown while input is live",
 	);
+	// ... then the input + status area is cleared before the final echo. The
+	// clean-return clears each row with \x1B[2K and never emits
+	// erase-to-end-of-screen (\x1B[J), which would wipe the transcript above.
 	assert.equal(rendered.slice(echoIndex).includes("model test"), false);
+	assert.doesNotMatch(rendered, /\x1B\[\??\d*J/);
 });
 
 test("readChatInput uses arrows and Enter to select a slash suggestion", async () => {
@@ -733,10 +768,10 @@ test("running turn input listener clears its status bar on stop", async () => {
 
 	const rendered = await outputText;
 	assert.ok(rendered.includes("model test | chars"));
-	// The status bar is cleared in place (clearFromCursor at column 1) on stop,
-	// not after a trailing newline that would leave it visible above.
-	assert.match(rendered, /\r\x1B\[J/);
-	assert.doesNotMatch(rendered, /\r\n\x1B\[J/);
+	// The status bar line is cleared in place with \x1B[2K on stop — never an
+	// erase-to-end-of-screen (\x1B[J) that would wipe the transcript above.
+	assert.ok(rendered.includes("\x1B[2K"), "status bar line cleared in place");
+	assert.doesNotMatch(rendered, /\x1B\[\??\d*J/);
 });
 
 test("readChatInput wraps long input and keeps prompt on the first line", async () => {
