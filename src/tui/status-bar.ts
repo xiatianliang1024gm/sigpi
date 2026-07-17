@@ -1,7 +1,6 @@
 import { homedir } from "node:os";
 import type { Component } from "@earendil-works/pi-tui";
 import type { ModelUsage, TurnProgressEvent } from "../types.js";
-import { truncateLeftToWidth } from "./utils.js";
 
 /**
  * Immutable view-model for the status bar (ADR 0022). The footer component
@@ -66,9 +65,9 @@ export function composeStatusBar(model: StatusBarModel): string {
  * Pi-tui footer / overlay component that renders the ADR 0022 status bar.
  *
  * It is a drop-in Pi-tui {@link Component}: `render(width)` returns the single
- * status line (left-truncated to `width`), and `invalidate()` lets a host TUI
- * drop cached state on a full redraw. The fork's `Tui` hosts it as a fixed
- * bottom footer row.
+ * status line, and `invalidate()` lets a host TUI drop cached state on a full
+ * redraw. The status line is rendered in full (no truncation); on a terminal
+ * narrower than the line it will wrap or overflow rather than be clipped.
  */
 export class StatusBarComponent implements Component {
 	private model: StatusBarModel | null = null;
@@ -86,12 +85,12 @@ export class StatusBarComponent implements Component {
 		return this.model;
 	}
 
-	/** Render the composed status line, left-truncated to `width`. */
-	render(width: number): string[] {
+	/** Render the composed status line in full (no truncation). */
+	render(_width: number): string[] {
 		if (!this.model) {
 			return [];
 		}
-		return [truncateLeftToWidth(composeStatusBar(this.model), width)];
+		return [composeStatusBar(this.model)];
 	}
 
 	invalidate(): void {

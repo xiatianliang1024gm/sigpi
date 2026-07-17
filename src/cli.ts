@@ -32,7 +32,6 @@ import {
 	loadAppConfig,
 	readDefaultProjectTrust,
 } from "./config.js";
-import { InputHistory } from "./input-history.js";
 import { TurnInterruptController } from "./interrupt.js";
 import { resolveDatedLogFilePath } from "./logger.js";
 import { configureHttpProxy } from "./model/http-dispatcher.js";
@@ -313,7 +312,6 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 			input,
 			output,
 			tools: runtime.tools,
-			inputHistory: new InputHistory(),
 		},
 		{
 			commands: createChatCommandDefinitions({
@@ -358,8 +356,6 @@ export interface RunChatReplLoopOptions {
 	output?: WriteStream;
 	prompt?: string;
 	tools?: ToolRegistry;
-	/** Shared, process-scoped recall buffer for `↑`/`↓` history. */
-	inputHistory?: InputHistory;
 }
 
 export interface RunChatReplLoopDependencies {
@@ -471,7 +467,6 @@ export async function runChatReplLoop(
 				output: options.output,
 				commands,
 				statusBarComponent: await formatStatusBar(state),
-				inputHistory: options.inputHistory,
 			}));
 		if (line === null) {
 			break;
@@ -513,8 +508,6 @@ export async function runChatReplLoop(
 			continue;
 		}
 
-		options.inputHistory?.push(line);
-
 		const interruptController = new TurnInterruptController();
 		latestProgressEvent = null;
 		const reasoningStream = new ReasoningStreamComponent();
@@ -523,7 +516,6 @@ export async function runChatReplLoop(
 			input: options.input,
 			output: options.output,
 			statusBarComponent: await formatStatusBar(state),
-			inputHistory: options.inputHistory,
 			reasoningStream,
 			onEscape: () => {
 				const interrupt = interruptController.requestInterrupt();

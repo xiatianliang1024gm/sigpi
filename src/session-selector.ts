@@ -6,7 +6,7 @@ import {
 	TUI,
 } from "@earendil-works/pi-tui";
 import { compareTimestampDescending, formatRelativeTime } from "./time.js";
-import { moveSelectedIndex } from "./tui/index.js";
+import { moveSelectedIndex } from "./tui/move-selected-index.js";
 import type { SessionSummary } from "./types.js";
 
 /** Options for {@link selectSessionInteractive}. */

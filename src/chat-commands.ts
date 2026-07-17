@@ -1,5 +1,12 @@
 import { stdin as processInput, stdout as processOutput } from "node:process";
 import type { ReadStream, WriteStream } from "node:tty";
+import {
+	type Component,
+	type SelectItem,
+	SelectList,
+	type SelectListTheme,
+	TUI,
+} from "@earendil-works/pi-tui";
 import { CompactionFailedError } from "./agent/compaction-error.js";
 import {
 	type ChatReplState,
@@ -12,12 +19,7 @@ import { createModelProvider } from "./model/provider.js";
 import type { SessionStore } from "./session/store.js";
 import { setLastModelId } from "./state.js";
 import type { BackgroundTaskManager } from "./tools/background.js";
-import {
-	type Component,
-	ProcessTerminal,
-	SelectList,
-	Tui,
-} from "./tui/index.js";
+import { ProcessTerminal } from "./tui/sigpi-terminal.js";
 import type {
 	ContextUpdateResult,
 	LoadedSkill,
@@ -490,9 +492,17 @@ function buildSkillInjection(skill: LoadedSkill, message?: string): string {
 	return lines.join("\n");
 }
 
+const SELECT_LIST_THEME: SelectListTheme = {
+	selectedPrefix: (str: string) => str,
+	selectedText: (str: string) => str,
+	description: (str: string) => str,
+	scrollInfo: (str: string) => str,
+	noMatch: (str: string) => str,
+};
+
 class ModelSelectorComponent implements Component {
 	public onResolve?: (result: string | null) => void;
-	private readonly list: SelectList<string>;
+	private readonly list: SelectList;
 
 	constructor(state: ChatReplState) {
 		const entries = Object.entries(state.models);
@@ -506,16 +516,20 @@ class ModelSelectorComponent implements Component {
 				label: modelId === state.modelId ? `${modelId} (current)` : modelId,
 				description: model.name,
 				value: modelId,
-			})),
-			{ selectedIndex },
+			})) as SelectItem[],
+			10,
+			SELECT_LIST_THEME,
 		);
-		this.list.onSelect = (item) => this.onResolve?.(item.value);
+		this.list.setSelectedIndex(selectedIndex);
+		this.list.onSelect = (item: SelectItem) => this.onResolve?.(item.value);
 		this.list.onCancel = () => this.onResolve?.(null);
 	}
 
 	handleInput(data: string): void {
 		this.list.handleInput(data);
 	}
+
+	invalidate(): void {}
 
 	render(width: number, _maxHeight?: number): string[] {
 		return [
@@ -544,7 +558,7 @@ export async function selectModelInteractive(
 
 	return new Promise<string | null>((resolve) => {
 		const terminal = new ProcessTerminal(input, output);
-		const tui = new Tui(terminal);
+		const tui = new TUI(terminal);
 		const component = new ModelSelectorComponent(state);
 
 		component.onResolve = (result) => {
