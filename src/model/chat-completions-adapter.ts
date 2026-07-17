@@ -9,7 +9,12 @@ import type {
 } from "../types.js";
 import { stripThinking, ThinkingSplitter } from "./thinking.js";
 import { ModelRequestError } from "./transport.js";
-import { isPlainObject, readFiniteNumber, safeParseArguments } from "./util.js";
+import {
+	isPlainObject,
+	readFiniteNumber,
+	safeParseArguments,
+	sanitizeToolArguments,
+} from "./util.js";
 import type { WireFormatAdapter } from "./wire-format.js";
 
 interface OpenAIMessage {
@@ -242,7 +247,7 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 					type: "function",
 					function: {
 						name: toolCall.name,
-						arguments: toolCall.rawArguments,
+						arguments: sanitizeToolArguments(toolCall.rawArguments),
 					},
 				})),
 			};
