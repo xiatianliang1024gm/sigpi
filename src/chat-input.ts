@@ -1,22 +1,24 @@
 import { stdin as processInput, stdout as processOutput } from "node:process";
 import { createInterface } from "node:readline/promises";
 import type { ReadStream, WriteStream } from "node:tty";
-import { Editor, type EditorTheme, TUI } from "@earendil-works/pi-tui";
+import {
+	type Container,
+	Editor,
+	type EditorTheme,
+	TUI,
+} from "@earendil-works/pi-tui";
 import type { ChatCommandMetadata } from "./chat-commands.js";
-import type { ReasoningStreamComponent } from "./tui/reasoning-stream.js";
 import { ProcessTerminal, SigPiTerminal } from "./tui/sigpi-terminal.js";
 import { SlashAutocompleteProvider } from "./tui/slash-autocomplete.js";
 import { StatusBarComponent } from "./tui/status-bar.js";
 
 export interface ChatInputOptions {
-	prompt?: string;
 	input?: ReadStream;
 	output?: WriteStream;
+	prompt?: string;
 	commands?: readonly ChatCommandMetadata[];
-	maxSuggestions?: number;
-	statusBarText?: string;
-	/** Pi-tui status bar footer component, used in preference to `statusBarText`. */
 	statusBarComponent?: StatusBarComponent | null;
+	statusBarText?: string;
 }
 
 /**
@@ -36,16 +38,81 @@ const EDITOR_THEME: EditorTheme = {
 
 /**
  * Pi-tui's {@link TUI} coalesces renders to the next tick, but the chat prompt
- * must repaint synchronously on every keystroke so the inline transcript shows
- * each intermediate frame (slash suggestions appearing/disappearing, etc.).
- * Pi-tui exposes no public synchronous render, so we call its private diff pass
- * directly. `doRender` early-returns once the TUI is stopped, so it is a safe
- * no-op after submit/cancel.
+ * must be visible synchronously before any keystroke arrives (tests assert on
+ * the initial frame). Force a synchronous paint of the current frame.
  */
 function renderInlineNow(tui: TUI): void {
 	(tui as unknown as { doRender(): void }).doRender();
 }
 
+function makeStatusBar(text?: string): StatusBarComponent | null {
+	if (text === undefined) {
+		return null;
+	}
+	const statusBar = new StatusBarComponent();
+	statusBar.setModel({
+		modelName: "",
+		limit: 0,
+		usedTokens: null,
+		usage: null,
+		cwd: text,
+		branch: null,
+	});
+	return statusBar;
+}
+
+interface EditorSetup {
+	editor: Editor;
+	statusBar: StatusBarComponent | null;
+	ownsStatusBar: boolean;
+}
+
+/**
+ * Build the editor (+ optional status bar) as children of `tui` and focus it.
+ * Shared by the standalone prompter and the persistent-REPL renderer so the
+ * slash-autocomplete and editor behavior stay identical (src/tui/README.md).
+ * A status bar passed in via `statusBarComponent` is owned by the caller and is
+ * NOT added/removed here.
+ */
+export function buildEditor(
+	tui: TUI,
+	opts: {
+		input: ReadStream;
+		output: WriteStream;
+		prompt: string;
+		commands: readonly ChatCommandMetadata[];
+		statusBarComponent?: StatusBarComponent | null;
+		statusBarText?: string;
+		parent?: Container;
+	},
+): EditorSetup {
+	const editor = new Editor(tui, EDITOR_THEME, { paddingX: 0 });
+	editor.setAutocompleteProvider(
+		new SlashAutocompleteProvider(
+			opts.commands.map((command) => ({
+				name: command.name,
+				description: command.description,
+			})),
+			process.cwd(),
+		),
+	);
+	const provided = opts.statusBarComponent ?? null;
+	const statusBar = provided ?? makeStatusBar(opts.statusBarText);
+	const ownsStatusBar = statusBar !== null && provided === null;
+	const mount = opts.parent ?? tui;
+	if (ownsStatusBar && statusBar) {
+		mount.addChild(statusBar);
+	}
+	mount.addChild(editor);
+	tui.setFocus(editor);
+	return { editor, statusBar, ownsStatusBar };
+}
+
+/**
+ * Standalone chat prompt. Creates a transient inline `TUI` (mirroring the old
+ * per-prompt behavior) so it remains usable outside the persistent REPL and in
+ * tests. For the persistent REPL, use {@link attachChatInput} instead.
+ */
 export async function readChatInput(
 	args?: ChatInputOptions,
 ): Promise<string | null> {
@@ -83,16 +150,14 @@ export async function readChatInput(
 			resolve(value);
 		};
 
-		const editor = new Editor(tui, EDITOR_THEME, { paddingX: 0 });
-		editor.setAutocompleteProvider(
-			new SlashAutocompleteProvider(
-				commands.map((command) => ({
-					name: command.name,
-					description: command.description,
-				})),
-				process.cwd(),
-			),
-		);
+		const { editor } = buildEditor(tui, {
+			input,
+			output,
+			prompt,
+			commands,
+			statusBarComponent: args?.statusBarComponent,
+			statusBarText: args?.statusBarText,
+		});
 		editor.onSubmit = (text) => {
 			if (!text.trim()) {
 				return;
@@ -101,25 +166,6 @@ export async function readChatInput(
 			finish(text);
 		};
 
-		let statusBar: StatusBarComponent | null = null;
-		if (args?.statusBarComponent) {
-			statusBar = args.statusBarComponent;
-		} else if (args?.statusBarText) {
-			statusBar = new StatusBarComponent();
-			statusBar.setModel({
-				modelName: "",
-				limit: 0,
-				usedTokens: null,
-				usage: null,
-				cwd: args.statusBarText ?? "",
-				branch: null,
-			});
-		}
-		tui.addChild(editor);
-		if (statusBar) {
-			tui.addChild(statusBar);
-		}
-		tui.setFocus(editor);
 		tui.start();
 		// Esc / Ctrl+C cancels the prompt and resolves with `null`.
 		tui.addInputListener((data) => {
@@ -128,196 +174,106 @@ export async function readChatInput(
 			}
 			return undefined;
 		});
-		// Paint the initial frame synchronously (Pi-tui schedules the first
-		// render on the next tick; tests expect the prompt to be visible before
-		// any input).
 		renderInlineNow(tui);
 	});
 }
 
-export interface EscInterruptListenerOptions {
-	input?: ReadStream;
-	output?: WriteStream;
-	onEscape: () => void;
-}
-
-export interface RunningTurnInputListenerOptions {
+export interface AttachChatInputOptions {
 	prompt?: string;
 	input?: ReadStream;
 	output?: WriteStream;
-	statusBarText?: string;
-	/** Pi-tui status bar footer component, used in preference to `statusBarText`. */
+	commands?: readonly ChatCommandMetadata[];
+	/** Shared status bar owned by the caller (e.g. the persistent renderer). */
 	statusBarComponent?: StatusBarComponent | null;
-	onEscape: () => void;
-	onSubmit: (text: string) => void;
-	/**
-	 * Optional live reasoning/content stream. When provided, the listener
-	 * renders it above the input line so streamed model output is visible
-	 * in-place (spec-0020). The caller feeds it via
-	 * {@link RunningTurnInputListenerHandle.appendReasoning} /
-	 * {@link RunningTurnInputListenerHandle.appendContent}.
-	 */
-	reasoningStream?: ReasoningStreamComponent;
+	statusBarText?: string;
+	onSubmit?: (text: string) => void;
+	onEscape?: () => void;
 }
 
-export interface RunningTurnInputListenerHandle {
-	stop(): void;
-	setStatusBarComponent(value: StatusBarComponent | null): void;
-	/** Append a streamed reasoning fragment to the live view (spec-0020). */
-	appendReasoning(text: string): void;
-	/** Append a streamed content fragment to the live view (spec-0020). */
-	appendContent(text: string): void;
-	/** Clear the live reasoning/content preview (spec-0020). */
-	clearReasoningStream(): void;
-	withSuspendedRendering<T>(operation: () => T): T;
+export interface ChatInputHandle {
+	/** Resolves with the submitted line, or `null` if cancelled (Esc/Ctrl+C). */
+	read: () => Promise<string | null>;
+	/** Remove the editor from the TUI (does not stop a shared/persistent TUI). */
+	stop: () => void;
 }
 
-export function startEscInterruptListener(
-	options: EscInterruptListenerOptions,
-): (() => void) | null {
-	const handle = startRunningTurnInputListener({
-		...options,
-		onSubmit: () => {},
-	});
-	return handle ? () => handle.stop() : null;
-}
-
-export function startRunningTurnInputListener(
-	options: RunningTurnInputListenerOptions,
-): RunningTurnInputListenerHandle | null {
+/**
+ * Attach the chat editor to an already-running `TUI` (the persistent REPL,
+ * ADR 0025 A1). Unlike {@link readChatInput} this does not create or stop a
+ * `TUI` — the transcript and status bar persist; only the editor child is added
+ * for the duration of one prompt and removed on {@link ChatInputHandle.stop}.
+ */
+export function attachChatInput(
+	tui: TUI,
+	options: AttachChatInputOptions,
+): ChatInputHandle {
+	const prompt = options.prompt ?? "> ";
 	const input = options.input ?? processInput;
 	const output = options.output ?? processOutput;
-	const prompt = options.prompt ?? "> ";
+	const commands = options.commands ?? [];
 
 	if (!input.isTTY || !output.isTTY) {
-		return null;
+		return {
+			read: async () => {
+				const rl = createInterface({ input, output });
+				try {
+					return await rl.question(prompt);
+				} finally {
+					rl.close();
+				}
+			},
+			stop: () => {},
+		};
 	}
 
-	const terminal = new SigPiTerminal(new ProcessTerminal(input, output));
-	// Pi-tui renders inline from the current cursor and never clears the
-	// screen; disable shrink-clearing so the transcript above is preserved.
-	const tui = new TUI(terminal, true);
-	tui.setClearOnShrink(false);
-	let statusBar: StatusBarComponent | null = null;
+	let settled = false;
+	let resolveRead: (value: string | null) => void = () => {};
+	const { editor, statusBar, ownsStatusBar } = buildEditor(tui, {
+		input,
+		output,
+		prompt,
+		commands,
+		statusBarComponent: options.statusBarComponent,
+		statusBarText: options.statusBarText,
+	});
 
-	const editor = new Editor(tui, EDITOR_THEME, { paddingX: 0 });
 	editor.onSubmit = (text) => {
-		if (!text.trim()) {
+		if (settled || !text.trim()) {
 			return;
 		}
+		settled = true;
 		editor.addToHistory(text);
 		output.write(`${prompt}${text}\n`);
-		options.onSubmit(text);
+		options.onSubmit?.(text);
+		resolveRead(text);
 	};
 
-	if (options.statusBarComponent) {
-		statusBar = options.statusBarComponent;
-	} else if (options.statusBarText) {
-		statusBar = new StatusBarComponent();
-		statusBar.setModel({
-			modelName: "",
-			limit: 0,
-			usedTokens: null,
-			usage: null,
-			cwd: options.statusBarText ?? "",
-			branch: null,
-		});
-	}
-	if (options.reasoningStream) {
-		tui.addChild(options.reasoningStream);
-	}
-	tui.addChild(editor);
-	if (statusBar) {
-		tui.addChild(statusBar);
-	}
-	tui.setFocus(editor);
-	tui.start();
-	// Esc / Ctrl+C requests an interrupt (the caller decides whether to stop).
-	tui.addInputListener((data) => {
+	renderInlineNow(tui);
+	const unsubscribe = tui.addInputListener((data) => {
 		if (data === "\x1B" || data === "\u0003") {
-			options.onEscape();
+			if (settled) {
+				return;
+			}
+			settled = true;
+			options.onEscape?.();
+			resolveRead(null);
 		}
 		return undefined;
 	});
-	// Paint the initial frame synchronously (see readChatInput for rationale).
-	renderInlineNow(tui);
-
-	let stopped = false;
-	let currentStatusBar = statusBar;
-	// Coalesce rapid streaming deltas into periodic diff-repaints. Each delta
-	// appends to the component and schedules at most one repaint per frame
-	// budget, so a burst of frames repaints once instead of flickering on every
-	// token (spec-0020 follow-up).
-	let renderTimer: ReturnType<typeof setTimeout> | null = null;
-	const scheduleRender = () => {
-		if (stopped || renderTimer !== null) {
-			return;
-		}
-		renderTimer = setTimeout(() => {
-			renderTimer = null;
-			if (!stopped) {
-				tui.requestRender();
-			}
-		}, 33);
-	};
-	const stop = () => {
-		if (stopped) {
-			return;
-		}
-		stopped = true;
-		if (renderTimer !== null) {
-			clearTimeout(renderTimer);
-			renderTimer = null;
-		}
-		tui.stop();
-	};
 
 	return {
-		stop,
-		setStatusBarComponent: (value) => {
-			if (currentStatusBar && currentStatusBar !== value) {
-				tui.removeChild(currentStatusBar);
-			}
-			currentStatusBar = value;
-			if (value) {
-				tui.addChild(value);
+		read: () =>
+			new Promise<string | null>((resolve) => {
+				resolveRead = resolve;
+			}),
+		stop: () => {
+			settled = true;
+			unsubscribe();
+			tui.removeChild(editor);
+			if (ownsStatusBar && statusBar) {
+				tui.removeChild(statusBar);
 			}
 			tui.requestRender();
-		},
-		appendReasoning: (text: string) => {
-			if (!options.reasoningStream || stopped) {
-				return;
-			}
-			options.reasoningStream.appendReasoning(text);
-			// Diff-based, coalesced repaint (not forceRender): forceRender wipes
-			// the previous frame, which would repaint the whole screen on every
-			// delta and cause visible flicker (spec-0020 follow-up).
-			scheduleRender();
-		},
-		appendContent: (text: string) => {
-			if (!options.reasoningStream || stopped) {
-				return;
-			}
-			options.reasoningStream.appendContent(text);
-			scheduleRender();
-		},
-		clearReasoningStream: () => {
-			if (!options.reasoningStream || stopped) {
-				return;
-			}
-			options.reasoningStream.clear();
-			tui.requestRender();
-		},
-		withSuspendedRendering: (operation) => {
-			const result = operation();
-			if (!stopped) {
-				// Repaint the input below the streamed output. Use a plain (non
-				// force) render: `requestRender(true)` sets previousWidth = -1,
-				// which forces Pi-tui into a full-screen clear (\x1B[2J) that
-				// would wipe the entire transcript above the prompt.
-				tui.requestRender();
-			}
-			return result;
 		},
 	};
 }

@@ -1,28 +1,36 @@
 # TUI Development Notes
 
-This project has two TUI use cases:
-
-- full-screen transient UI, such as the session selector
-- inline chat input, which must coexist with the visible chat transcript
-
-Treat these as different rendering modes. Most regressions came from using full-screen rendering for inline chat input.
-
+- This project has one persistent TUI for the chat REPL, plus modal overlays
+- (session selector) shown on top of it.
+-
+- - **Chat REPL** — a single Pi-tui `TUI` lives for the whole session (ADR 0025, A1
+-   model, mirroring Pi's `InteractiveMode`). The transcript is a **component tree**
+-   (`chatContainer` of per-message components: user / assistant / tool-result /
+-   compaction), rendered by Pi-tui and scrolled by Pi-tui's viewport. The input
+-   `Editor`, status footer, and a `pending` area are persistent children.
+- - **Session selector** — a modal overlay shown on startup / `/session`; replaces
+-   the viewport while active, then returns to the chat `TUI`.
+-
 ## Core Rules
-
-### Preserve Transcript Output
-
-Do not clear the terminal when rendering chat input.
-
-`readChatInput()` uses an inline terminal adapter (`InlineTerminal`) and starts Pi-tui's `TUI` with `showHardwareCursor` enabled, disabling shrink-clearing so the transcript above stays intact:
-
-```ts
-const tui = new TUI(terminal, true);
-tui.setClearOnShrink(false);
-```
-
-This is intentional. A chat prompt is rendered at the current cursor location after previous agent output. Clearing the screen makes the final assistant answer disappear when the next prompt starts. Pi-tui's `TUI` is inherently inline: it never emits a full-screen clear and renders from the current cursor position, so the transcript above is preserved.
-
-Use full-screen defaults only for modal screens where replacing the viewport is expected, such as session selection.
+-
+### Transcript is a component tree, not terminal scrollback
+-
+- Under ADR 0025 the live transcript is owned by the `TUI` as components — **not** by
+- the OS terminal scrollback. Previous turns are not in `stdout`; they live in the
+- component tree and are scrolled by Pi-tui's viewport. Consequences:
+-
+- - Do **not** print turn output with raw `console.log` while the `TUI` is alive — it
+-   desyncs Pi-tui's internal viewport and re-draws the frame displaced (the bug ADR
+-   0025 fixes). All live output is a component; only non-TTY / one-shot modes use
+-   `console.log`.
+- - The `TUI` renders from the current cursor on first paint and scrolls its own
+-   viewport as the transcript grows; it does **not** rely on the terminal scrollback
+-   to preserve history.
+- - The chat input is a component *inside* the persistent `TUI`, not a separate
+-   inline `TUI`. The old `InlineTerminal` / per-phase `TUI` reconstruction is gone.
+-
+- Use full-screen clears only for modal screens (session selector) where replacing
+- the viewport is expected.
 
 ### Keep Hardware Cursor Real
 

@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ModelUsage, TurnProgressEvent } from "../types.js";
 
 /**
@@ -85,12 +86,11 @@ export class StatusBarComponent implements Component {
 		return this.model;
 	}
 
-	/** Render the composed status line in full (no truncation). */
-	render(_width: number): string[] {
+	render(width: number): string[] {
 		if (!this.model) {
 			return [];
 		}
-		return [composeStatusBar(this.model)];
+		return [truncateToWidth(composeStatusBar(this.model), width)];
 	}
 
 	invalidate(): void {

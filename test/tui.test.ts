@@ -18,8 +18,13 @@ import {
 	formatFileEditSummaries,
 	formatFileEditSummary,
 } from "../src/tui/file-edit-renderer.js";
+import {
+	AssistantMessageComponent,
+	SystemMessageComponent,
+	ToolResultMessageComponent,
+	UserMessageComponent,
+} from "../src/tui/messages.js";
 import { moveSelectedIndex } from "../src/tui/move-selected-index.js";
-import { ReasoningStreamComponent } from "../src/tui/reasoning-stream.js";
 import { SigPiTerminal } from "../src/tui/sigpi-terminal.js";
 import {
 	composeStatusBar as renderStatus,
@@ -101,9 +106,10 @@ test("moveSelectedIndex preserves empty lists and wraps bounded lists", () => {
 	assert.equal(moveSelectedIndex(2, 3, 1), 0);
 });
 
-test("ReasoningStreamComponent renders streamed reasoning then content (spec-0020)", () => {
-	const component = new ReasoningStreamComponent();
-	assert.deepEqual(component.render(40), []);
+test("AssistantMessageComponent renders streamed reasoning then content (ADR 0025 A1)", () => {
+	const component = new AssistantMessageComponent();
+	// Empty message shows a placeholder until content arrives.
+	assert.deepEqual(component.render(40).map(cleanRenderedLine), ["…"]);
 
 	component.appendReasoning("let me think");
 	component.appendContent("hello");
@@ -112,12 +118,15 @@ test("ReasoningStreamComponent renders streamed reasoning then content (spec-002
 	assert.equal(lines[1], "  let me think");
 	assert.equal(lines[2], "hello");
 
-	component.clear();
-	assert.deepEqual(component.render(40), []);
+	// Unlike the retired ReasoningStreamComponent, the assistant message is a
+	// permanent transcript entry — it is never cleared, only finalized.
+	component.finalize();
+	const after = component.render(40).map(cleanRenderedLine);
+	assert.deepEqual(after, lines);
 });
 
-test("ReasoningStreamComponent scrolls internally when capped (spec-0020)", () => {
-	const component = new ReasoningStreamComponent();
+test("AssistantMessageComponent scrolls internally when capped (ADR 0025 A1)", () => {
+	const component = new AssistantMessageComponent();
 	// Each fragment is wide enough to occupy its own wrapped line; together they
 	// far exceed the cap so the component must scroll internally.
 	for (let i = 0; i < 10; i += 1) {
@@ -384,4 +393,57 @@ test("StatusBarComponent renders the composed status line in full (no truncation
 	assert.equal(lines.length, 1);
 	assert.match(lines[0], /test-model/);
 	assert.match(lines[0], /\/repo \(main\)$/);
+});
+test("message components never emit a line wider than the terminal (ADR 0025 render safety)", () => {
+	const width = 40;
+	const longToken = "x".repeat(200);
+
+	// System message — the writeLine/writeError -> appendSystem path that
+	// previously crashed the renderer with "Rendered line exceeds terminal
+	// width" on long tool output / errors.
+	const sys = new SystemMessageComponent(longToken, "error");
+	for (const line of sys.render(width)) {
+		assert.ok(
+			visibleWidth(line) <= width,
+			`system line exceeds width: ${visibleWidth(line)} > ${width}`,
+		);
+	}
+
+	// Status bar with an over-long model/cwd/branch.
+	const model: StatusBarModel = {
+		modelName: "x".repeat(200),
+		limit: 100000,
+		usedTokens: 12345,
+		usage: null,
+		cwd: `/very/long/path/${"y".repeat(200)}`,
+		branch: `feature/${"z".repeat(200)}`,
+		eventLabel: "working on something long",
+	};
+	const status = new StatusBarComponent(model);
+	const statusLines = status.render(width);
+	assert.equal(statusLines.length, 1, "status bar stays a single line");
+	for (const line of statusLines) {
+		assert.ok(
+			visibleWidth(line) <= width,
+			`status line exceeds width: ${visibleWidth(line)} > ${width}`,
+		);
+	}
+
+	// The already-wrapping components must also stay within width on a single
+	// unbreakable token.
+	for (const component of [
+		new UserMessageComponent(longToken),
+		new ToolResultMessageComponent(longToken),
+		new AssistantMessageComponent(),
+	]) {
+		if (component instanceof AssistantMessageComponent) {
+			component.appendContent(longToken);
+		}
+		for (const line of component.render(width)) {
+			assert.ok(
+				visibleWidth(line) <= width,
+				`line exceeds width: ${visibleWidth(line)} > ${width}`,
+			);
+		}
+	}
 });

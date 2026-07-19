@@ -9,18 +9,14 @@ import { fileURLToPath } from "node:url";
 import type { TurnResult } from "./agent/turn.js";
 import {
 	type ChatCommandDefinition,
+	type ChatCommandMetadata,
 	createChatCommandDefinitions,
 	executeChatCommand,
 	formatDocumentedChatCommands,
 } from "./chat-commands.js";
-import {
-	type RunningTurnInputListenerHandle,
-	readChatInput,
-	startRunningTurnInputListener,
-} from "./chat-input.js";
+import { readChatInput } from "./chat-input.js";
 import {
 	type ChatReplState,
-	formatStatusBar,
 	formatStatusBarForEvent,
 	runtimeToChatReplState,
 } from "./chat-repl.js";
@@ -55,10 +51,14 @@ import type { SessionStore } from "./session/store.js";
 import { detectShellRuntime } from "./shell.js";
 import type { ToolRegistry } from "./tools/registry.js";
 import {
+	type AssistantMessageView,
+	ChatRenderer,
+	type ReplView,
+} from "./tui/chat-renderer.js";
+import {
 	formatFileEditResultData,
 	formatFileEditSummaries,
 } from "./tui/file-edit-renderer.js";
-import { ReasoningStreamComponent } from "./tui/reasoning-stream.js";
 import type {
 	ExecutedToolCall,
 	JsonValue,
@@ -372,7 +372,6 @@ export interface RunChatReplLoopDependencies {
 	tools?: ToolRegistry;
 }
 
-let activeRunningInput: RunningTurnInputListenerHandle | null = null;
 const compactState: CompactProgressRenderState = {
 	hasPrintedTurn: false,
 	groupActive: false,
@@ -401,73 +400,105 @@ interface CompactProgressRenderState {
 	groupActive: boolean;
 }
 
-async function withActiveRunningInput<T>(
-	handle: RunningTurnInputListenerHandle | null,
-	operation: () => Promise<T>,
-): Promise<T> {
-	const previous = activeRunningInput;
-	activeRunningInput = handle;
-	try {
-		return await operation();
-	} finally {
-		activeRunningInput = previous;
-	}
-}
-
-function writeWithActiveRunningInput(operation: () => void): void {
-	if (activeRunningInput) {
-		activeRunningInput.withSuspendedRendering(operation);
-		return;
-	}
-
-	operation();
-}
-
 export async function runChatReplLoop(
 	options: RunChatReplLoopOptions,
 	dependencies: RunChatReplLoopDependencies = {},
 ): Promise<ChatReplState> {
 	let state = options.state;
-	const readInput = dependencies.readChatInput ?? readChatInput;
+	const replInput = options.input ?? input;
+	const replOutput = options.output ?? output;
+	const useTui = replInput.isTTY && replOutput.isTTY;
+
 	const executeTurn =
 		dependencies.executeTurn ??
-		((state, input, logger, interruptController) =>
-			state.runtime.turn.runTurn(input, logger, interruptController));
-	const writeLine =
-		dependencies.writeLine ??
-		((line: string) => writeWithActiveRunningInput(() => console.log(line)));
-	const writeError =
-		dependencies.writeError ??
-		((line: string) => writeWithActiveRunningInput(() => console.error(line)));
+		((s, inp, logger, interruptController) =>
+			s.runtime.turn.runTurn(inp, logger, interruptController));
 	const commands =
 		dependencies.commands ??
 		createChatCommandDefinitions({
 			loadedSkills: options.state.runtime.loadedSkills,
 		});
+
+	// Output surface: one persistent Pi-tui `TUI` (TTY, ADR 0025 A1) or a console
+	// fallback (non-TTY / one-shot). The progress reporter renders to the view
+	// instead of `console.log` while the `TUI` is alive, avoiding viewport desync.
+	let view: ReplView;
+	if (useTui) {
+		const renderer = new ChatRenderer({
+			input: replInput,
+			output: replOutput,
+			prompt: options.prompt,
+			commands,
+		});
+		renderer.start();
+		view = renderer;
+	} else {
+		view = new ConsoleReplView({
+			input: replInput,
+			output: replOutput,
+			prompt: options.prompt,
+			commands,
+			readChatInput: dependencies.readChatInput,
+			writeLine: dependencies.writeLine,
+			writeError: dependencies.writeError,
+		});
+	}
+
+	const readInput = (prompt?: string): Promise<string | null> =>
+		view.readInput(prompt ?? options.prompt ?? "> ");
+	const writeLine = (line: string) => view.writeLine(line);
+	const writeError = (line: string) => view.writeError(line);
+
 	const queuedLines: string[] = [];
 	let latestProgressEvent: TurnProgressEvent | null = null;
 	const processOutputMode = options.processOutputMode ?? "detailed";
 	let turnNumber = 0;
+	let currentAssistant: AssistantMessageView | null = null;
 
 	const refreshStatusBar = async (
-		handle: RunningTurnInputListenerHandle | null,
 		event: TurnProgressEvent | null = latestProgressEvent,
 	): Promise<void> => {
-		const text = await formatStatusBarForEvent(state, event);
-		handle?.setStatusBarComponent(text);
+		view.setStatus(await formatStatusBarForEvent(state, event));
 	};
+
+	// Drives the persistent-TUI view from turn progress events. Set as the bridge
+	// the console progress reporter forwards to, so the reporter's own
+	// `console.log` is skipped while the `TUI` owns rendering (ADR 0025).
+	const viewProgressListener = (event: TurnProgressEvent) => {
+		latestProgressEvent = event;
+		void refreshStatusBar(event);
+		if (event.type === "model_delta") {
+			if (event.reasoningDelta) {
+				currentAssistant?.appendReasoning(event.reasoningDelta);
+			}
+			if (event.contentDelta) {
+				currentAssistant?.appendContent(event.contentDelta);
+			}
+			return;
+		}
+		if (event.type === "tool_execution_finished" && event.toolName) {
+			const ok = event.toolOk === true;
+			const body = event.toolResult ?? event.message ?? "";
+			view.addToolResult(
+				`${ok ? "•" : "✗"} ${event.toolName}${body ? `: ${body}` : ""}`,
+			);
+			return;
+		}
+		if (
+			event.type === "model_request_finished" ||
+			event.type === "assistant_message" ||
+			event.type === "turn_interrupted" ||
+			event.type === "turn_failed" ||
+			event.type === "turn_max_steps_reached"
+		) {
+			currentAssistant?.finalize();
+		}
+	};
+	activeStatusBarProgressListener = useTui ? viewProgressListener : null;
 
 	while (true) {
 		const queuedLine = queuedLines.shift();
-		const line =
-			queuedLine ??
-			(await readInput({
-				prompt: options.prompt ?? "> ",
-				input: options.input,
-				output: options.output,
-				commands,
-				statusBarComponent: await formatStatusBar(state),
-			}));
+		const line = queuedLine ?? (await readInput());
 		if (line === null) {
 			break;
 		}
@@ -476,6 +507,7 @@ export async function runChatReplLoop(
 		if (!trimmedLine) {
 			continue;
 		}
+		view.addUserMessage(line);
 
 		const commandResult = await executeChatCommand(line, commands, {
 			getState: () => state,
@@ -484,7 +516,9 @@ export async function runChatReplLoop(
 				latestProgressEvent = null;
 			},
 			store: options.store,
-			progressReporter: options.progressReporter,
+			progressReporter: useTui
+				? viewProgressListener
+				: options.progressReporter,
 			writeLine,
 		});
 
@@ -510,80 +544,41 @@ export async function runChatReplLoop(
 
 		const interruptController = new TurnInterruptController();
 		latestProgressEvent = null;
-		const reasoningStream = new ReasoningStreamComponent();
-		const runningInput = startRunningTurnInputListener({
-			prompt: options.prompt ?? "> ",
-			input: options.input,
-			output: options.output,
-			statusBarComponent: await formatStatusBar(state),
-			reasoningStream,
-			onEscape: () => {
-				const interrupt = interruptController.requestInterrupt();
-				if (!interrupt.accepted || interrupt.alreadyRequested) {
-					return;
-				}
-				if (options.progressReporter) {
-					const event = {
-						type: "interrupt_requested",
-						message:
-							interrupt.stage === "model"
-								? "Cancelling current model request"
-								: "Interrupt requested; waiting for current tool to finish",
-						interruptStage: interrupt.stage ?? undefined,
-						interruptSource: "user_escape",
-					} satisfies TurnProgressEvent;
-					latestProgressEvent = event;
-					void refreshStatusBar(runningInput, event);
-					options.progressReporter(event);
-					return;
-				}
-
-				writeLine(
-					interrupt.stage === "model"
-						? "[agent] cancelling current model request"
-						: "[agent] interrupt requested; waiting for current tool to finish",
-				);
-			},
-			onSubmit: (text) => {
-				queuedLines.push(text);
-			},
-		});
-		const statusBarProgressListener = (event: TurnProgressEvent) => {
-			latestProgressEvent = event;
-			void refreshStatusBar(runningInput, event);
-			if (event.type === "model_delta") {
-				if (event.reasoningDelta) {
-					runningInput?.appendReasoning(event.reasoningDelta);
-				}
-				if (event.contentDelta) {
-					runningInput?.appendContent(event.contentDelta);
-				}
+		currentAssistant = view.beginAssistantMessage();
+		view.beginTurn(() => {
+			const interrupt = interruptController.requestInterrupt();
+			if (!interrupt.accepted || interrupt.alreadyRequested) {
 				return;
 			}
-			// The live preview is a temporary, in-flight view. Once the turn
-			// reaches a terminal phase event the final whole-text display is owned
-			// by `assistant_message` (or the failure diagnostic), so clear the
-			// preview to avoid double-printing and lingering residue (spec-0020).
-			if (
-				event.type === "model_request_finished" ||
-				event.type === "assistant_message" ||
-				event.type === "turn_interrupted" ||
-				event.type === "turn_failed" ||
-				event.type === "turn_max_steps_reached"
-			) {
-				runningInput?.clearReasoningStream();
+			const message =
+				interrupt.stage === "model"
+					? "Cancelling current model request"
+					: "Interrupt requested; waiting for current tool to finish";
+			if (options.progressReporter) {
+				const event = {
+					type: "interrupt_requested",
+					message,
+					interruptStage: interrupt.stage ?? undefined,
+					interruptSource: "user_escape",
+				} satisfies TurnProgressEvent;
+				latestProgressEvent = event;
+				void refreshStatusBar(event);
+				options.progressReporter(event);
+				return;
 			}
-		};
-		activeStatusBarProgressListener = options.progressReporter
-			? statusBarProgressListener
-			: null;
-		const turn = await withActiveRunningInput(runningInput, () =>
-			executeTurn(state, turnInput, state.runtime.logger, interruptController),
-		).finally(() => {
-			activeStatusBarProgressListener = null;
-			runningInput?.stop();
+			writeLine(`[agent] ${message}`);
 		});
-		writeLine("");
+
+		const turn = await executeTurn(
+			state,
+			turnInput,
+			state.runtime.logger,
+			interruptController,
+		);
+		view.endTurn();
+		currentAssistant?.finalize();
+		currentAssistant = null;
+		queuedLines.push(...view.takeQueuedLines());
 
 		if (!turn.ok) {
 			latestProgressEvent = null;
@@ -596,24 +591,111 @@ export async function runChatReplLoop(
 			continue;
 		}
 
-		if (processOutputMode === "compact") {
+		if (useTui) {
+			// The assistant message component already renders the streamed answer;
+			// emit file-edit summaries as components instead of reprinting it.
+			for (const summaryLine of formatFileEditSummaries(turn.toolExecutions)) {
+				view.addToolResult(summaryLine);
+			}
+		} else {
+			// Preserve the pre-A1 stdout transcript shape: a blank separator
+			// before each turn's output.
 			writeLine("");
-		}
-		printResult(
-			turn.outputText ?? "",
-			turn.toolExecutions,
-			Boolean(options.progressReporter) && processOutputMode !== "compact",
-			writeLine,
-		);
-		if (options.progressReporter && processOutputMode !== "compact") {
-			turnNumber += 1;
-			writeLine(renderTurnDivider(turnNumber));
+			if (processOutputMode === "compact") {
+				writeLine("");
+			}
+			printResult(
+				turn.outputText ?? "",
+				turn.toolExecutions,
+				Boolean(options.progressReporter) && processOutputMode !== "compact",
+				writeLine,
+			);
+			if (options.progressReporter && processOutputMode !== "compact") {
+				turnNumber += 1;
+				writeLine(renderTurnDivider(turnNumber));
+			}
 		}
 	}
 
+	view.stop();
 	return state;
 }
 
+/**
+ * Console fallback output surface for the REPL (non-TTY / one-shot modes).
+ * Mirrors the old pre-A1 behavior: `readChatInput` (readline when not a TTY)
+ * and `console.log`/`console.error` for all output. The streaming assistant
+ * deltas are dropped here (spec-0020: non-TTY modes drop `model_delta`); the
+ * final answer is printed once via `printResult`.
+ */
+class ConsoleReplView implements ReplView {
+	private readonly input: ReadStream;
+	private readonly output: WriteStream;
+	private readonly prompt: string;
+	private readonly commands: readonly ChatCommandMetadata[];
+	private readonly readChatInputOverride?: typeof readChatInput;
+	private readonly writeLineImpl: (line: string) => void;
+	private readonly writeErrorImpl: (line: string) => void;
+
+	constructor(opts: {
+		input?: ReadStream;
+		output?: WriteStream;
+		prompt?: string;
+		commands?: readonly ChatCommandMetadata[];
+		readChatInput?: typeof readChatInput;
+		writeLine?: (line: string) => void;
+		writeError?: (line: string) => void;
+	}) {
+		this.input = opts.input ?? input;
+		this.output = opts.output ?? output;
+		this.prompt = opts.prompt ?? "> ";
+		this.commands = opts.commands ?? [];
+		this.readChatInputOverride = opts.readChatInput;
+		this.writeLineImpl = opts.writeLine ?? console.log;
+		this.writeErrorImpl = opts.writeError ?? console.error;
+	}
+
+	start(): void {}
+	stop(): void {}
+
+	readInput(prompt = this.prompt): Promise<string | null> {
+		const reader = this.readChatInputOverride ?? readChatInput;
+		return reader({
+			prompt,
+			input: this.input,
+			output: this.output,
+			commands: this.commands,
+		});
+	}
+
+	takeQueuedLines(): string[] {
+		return [];
+	}
+
+	addUserMessage(): void {}
+	beginAssistantMessage(): AssistantMessageView {
+		return { appendReasoning() {}, appendContent() {}, finalize() {} };
+	}
+	beginTurn(): void {}
+	endTurn(): void {}
+	addToolResult(rendered: string): void {
+		this.writeLineImpl(rendered);
+	}
+	appendSystem(text: string, tone: "error" | "info" = "info"): void {
+		if (tone === "error") {
+			this.writeErrorImpl(text);
+		} else {
+			this.writeLineImpl(text);
+		}
+	}
+	setStatus(): void {}
+	writeLine(line: string): void {
+		this.writeLineImpl(line);
+	}
+	writeError(line: string): void {
+		this.writeErrorImpl(line);
+	}
+}
 export function createCliProgressReporter(
 	mode: ProcessOutputMode = "detailed",
 ): (event: TurnProgressEvent) => void {
@@ -627,12 +709,19 @@ export function createCliProgressReporter(
 	};
 
 	return (event) => {
-		activeStatusBarProgressListener?.(event);
+		// `update_plan` updates shared plan state regardless of render surface.
 		if (
 			event.type === "tool_execution_started" &&
 			event.toolName === "update_plan"
 		) {
 			setCurrentPlan(parsePlanArgs(event.toolArguments));
+		}
+		// When a persistent-TUI view is driving rendering (ADR 0025 A1), forward
+		// to it and skip the console output — `console.log` while the `TUI` is
+		// alive desyncs Pi-tui's viewport.
+		if (activeStatusBarProgressListener) {
+			activeStatusBarProgressListener(event);
+			return;
 		}
 		if (mode === "compact") {
 			renderCompactProgressEvent(event, compactState);
@@ -716,105 +805,83 @@ function renderCompactProgressEvent(
 		event.elapsedMs !== undefined
 			? ` (${formatQuietElapsed(event.elapsedMs)})`
 			: "";
+	// A non-tool event ends an open parallel-tool-call group.
+	if (
+		event.type !== "tool_execution_started" &&
+		event.type !== "tool_execution_finished"
+	) {
+		state.groupActive = false;
+	}
 
-	writeWithActiveRunningInput(() => {
-		// A non-tool event ends an open parallel-tool-call group.
-		if (
-			event.type !== "tool_execution_started" &&
-			event.type !== "tool_execution_finished"
-		) {
-			state.groupActive = false;
+	switch (event.type) {
+		case "turn_started": {
+			if (state.hasPrintedTurn) {
+				console.log("");
+			}
+			state.hasPrintedTurn = true;
+			if (event.userInput) {
+				printPrefixedBlock(qBlue(`${QUIET_GLYPH_USER} `), event.userInput);
+			}
+			const plan = getCurrentPlan();
+			if (plan?.items.every((item) => item.status === "completed")) {
+				setCurrentPlan(null);
+			} else if (plan) {
+				console.log(
+					qBlue(`${QUIET_GLYPH_CALL} Plan: ${formatPlanProgressSummary(plan)}`),
+				);
+			}
+			return;
 		}
-
-		switch (event.type) {
-			case "turn_started": {
-				if (state.hasPrintedTurn) {
-					console.log("");
-				}
-				state.hasPrintedTurn = true;
-				if (event.userInput && !activeRunningInput) {
-					printPrefixedBlock(qBlue(`${QUIET_GLYPH_USER} `), event.userInput);
-				}
-				const plan = getCurrentPlan();
-				if (plan?.items.every((item) => item.status === "completed")) {
-					setCurrentPlan(null);
-				} else if (plan) {
-					console.log(
-						qBlue(
-							`${QUIET_GLYPH_CALL} Plan: ${formatPlanProgressSummary(plan)}`,
-						),
-					);
-				}
-				return;
-			}
-			case "step_started":
-				return;
-			case "interrupt_requested":
+		case "step_started":
+			return;
+		case "interrupt_requested":
+			console.log(
+				qYellow(
+					`${QUIET_GLYPH_CALL} ${
+						event.interruptStage === "model"
+							? "Cancelling current model request"
+							: "Interrupt requested; waiting for current tool to finish"
+					}`,
+				),
+			);
+			return;
+		case "model_request_started":
+			return;
+		case "model_request_finished":
+			return;
+		case "assistant_message": {
+			const trimmed = event.assistantText?.trim();
+			if (trimmed && !isAssistantTextNoise(trimmed)) {
 				console.log(
-					qYellow(
-						`${QUIET_GLYPH_CALL} ${
-							event.interruptStage === "model"
-								? "Cancelling current model request"
-								: "Interrupt requested; waiting for current tool to finish"
-						}`,
-					),
+					`${qBlue(QUIET_GLYPH_CALL)} Assistant: ${quietStripInlineCode(trimmed)}`,
 				);
-				return;
-			case "model_request_started":
-				return;
-			case "model_request_finished":
-				return;
-			case "assistant_message": {
-				const trimmed = event.assistantText?.trim();
-				if (trimmed && !isAssistantTextNoise(trimmed)) {
-					console.log(
-						`${qBlue(QUIET_GLYPH_CALL)} Assistant: ${quietStripInlineCode(trimmed)}`,
-					);
-				}
-				return;
 			}
-			case "context_checkpoint":
-				console.log(
-					qBlue(
-						`${QUIET_GLYPH_CALL} Checkpoint${event.message ? `: ${event.message}` : ""}`,
-					),
-				);
-				return;
-			case "tool_calls_received":
-				if ((event.toolCallCount ?? 0) > 1) {
-					state.groupActive = true;
-				}
-				return;
-			case "tool_execution_started": {
-				const label = quietCapitalize(
-					quietStripInlineCode(event.message ?? `tool ${event.toolName}`),
-				);
-				const indent = state.groupActive ? "  " : "";
-				console.log(`${indent}${qCyan(`${QUIET_GLYPH_CALL} ${label}`)}`);
-				return;
+			return;
+		}
+		case "context_checkpoint":
+			console.log(
+				qBlue(
+					`${QUIET_GLYPH_CALL} Checkpoint${event.message ? `: ${event.message}` : ""}`,
+				),
+			);
+			return;
+		case "tool_calls_received":
+			if ((event.toolCallCount ?? 0) > 1) {
+				state.groupActive = true;
 			}
-			case "tool_execution_finished": {
-				const ok = event.toolOk === true;
-				if (event.toolName === "update_plan") {
-					const body = formatUpdatePlanBody(getCurrentPlan(), ok);
-					const indent = state.groupActive ? "    " : "  ";
-					console.log(
-						`${indent}${
-							ok ? qDim(QUIET_GLYPH_RESULT) : qRed(QUIET_GLYPH_RESULT)
-						} ${ok ? qDim(body) : qRed(body)}${suffix}`,
-					);
-					return;
-				}
-				const max =
-					typeof process.stdout.columns === "number" &&
-					process.stdout.columns > 20
-						? process.stdout.columns - 4
-						: 200;
-				const raw = quietResultSummary(event.toolResult ?? "", ok);
-				const body = quietTruncate(
-					raw.length > 0 ? raw : ok ? "done" : "error",
-					max,
-				);
+			return;
+		case "tool_execution_started": {
+			const label = quietCapitalize(
+				quietStripInlineCode(event.message ?? `tool ${event.toolName}`),
+			);
+			const indent = state.groupActive ? "  " : "";
+			console.log(`${indent}${qCyan(`${QUIET_GLYPH_CALL} ${label}`)}`);
+			return;
+		}
+		case "tool_execution_finished": {
+			const ok = event.toolOk === true;
+			if (event.toolName === "update_plan") {
+				const body = formatUpdatePlanBody(getCurrentPlan(), ok);
 				const indent = state.groupActive ? "    " : "  ";
 				console.log(
 					`${indent}${
@@ -823,28 +890,43 @@ function renderCompactProgressEvent(
 				);
 				return;
 			}
-			case "turn_finished":
-				console.log(qGreen(`${QUIET_GLYPH_DONE} Done${suffix}`));
-				return;
-			case "turn_interrupted":
-				console.log(
-					qYellow(
-						`${QUIET_GLYPH_CALL} Interrupted${
-							event.interruptStage ? ` during ${event.interruptStage}` : ""
-						}${suffix}`,
-					),
-				);
-				return;
-			case "turn_max_steps_reached":
-				console.log(
-					qYellow(`${QUIET_GLYPH_CALL} Stopped at max steps${suffix}`),
-				);
-				return;
-			case "turn_failed":
-				console.log(qRed(`${QUIET_GLYPH_CALL} Failed`));
-				return;
+			const max =
+				typeof process.stdout.columns === "number" &&
+				process.stdout.columns > 20
+					? process.stdout.columns - 4
+					: 200;
+			const raw = quietResultSummary(event.toolResult ?? "", ok);
+			const body = quietTruncate(
+				raw.length > 0 ? raw : ok ? "done" : "error",
+				max,
+			);
+			const indent = state.groupActive ? "    " : "  ";
+			console.log(
+				`${indent}${
+					ok ? qDim(QUIET_GLYPH_RESULT) : qRed(QUIET_GLYPH_RESULT)
+				} ${ok ? qDim(body) : qRed(body)}${suffix}`,
+			);
+			return;
 		}
-	});
+		case "turn_finished":
+			console.log(qGreen(`${QUIET_GLYPH_DONE} Done${suffix}`));
+			return;
+		case "turn_interrupted":
+			console.log(
+				qYellow(
+					`${QUIET_GLYPH_CALL} Interrupted${
+						event.interruptStage ? ` during ${event.interruptStage}` : ""
+					}${suffix}`,
+				),
+			);
+			return;
+		case "turn_max_steps_reached":
+			console.log(qYellow(`${QUIET_GLYPH_CALL} Stopped at max steps${suffix}`));
+			return;
+		case "turn_failed":
+			console.log(qRed(`${QUIET_GLYPH_CALL} Failed`));
+			return;
+	}
 }
 
 function renderClearProgressEvent(
@@ -852,108 +934,103 @@ function renderClearProgressEvent(
 	state: ClearProgressRenderState,
 ): void {
 	const suffix = event.elapsedMs !== undefined ? ` (${event.elapsedMs}ms)` : "";
-
-	writeWithActiveRunningInput(() => {
-		switch (event.type) {
-			case "turn_started":
-				state.hasPrintedToolInTurn = false;
-				state.modelRequestCountInTurn = 0;
-				if (event.userInput && !activeRunningInput) {
-					printPrefixedBlock("> ", event.userInput);
-				}
-				{
-					const plan = getCurrentPlan();
-					if (plan?.items.every((item) => item.status === "completed")) {
-						setCurrentPlan(null);
-					} else if (plan) {
-						console.log(`${blue("•")} ${bold("Plan")}`);
-						printIndentedBlock(renderPlanFull(plan));
-					}
-				}
-				return;
-			case "step_started":
-				return;
-			case "interrupt_requested":
-				console.log(
-					event.interruptStage === "model"
-						? `${yellow("•")} ${yellow("Cancelling current model request")}`
-						: `${yellow("•")} ${yellow("Interrupt requested; waiting for current tool to finish")}`,
-				);
-				return;
-			case "model_request_started":
-				state.modelRequestCountInTurn += 1;
-				if (state.modelRequestCountInTurn > 1) {
-					console.log(renderModelRunDivider(state.modelRequestCountInTurn));
-				}
-				return;
-			case "model_request_finished":
-				return;
-			case "assistant_message": {
-				const trimmed = event.assistantText?.trim();
-				if (trimmed && !isAssistantTextNoise(trimmed)) {
-					printPrefixedBlock(`${magenta("•")} ${bold("Assistant:")} `, trimmed);
-				}
-				return;
+	switch (event.type) {
+		case "turn_started":
+			state.hasPrintedToolInTurn = false;
+			state.modelRequestCountInTurn = 0;
+			if (event.userInput) {
+				printPrefixedBlock("> ", event.userInput);
 			}
-			case "context_checkpoint":
-				console.log(
-					`${blue("•")} ${bold("Checkpoint")}${event.message ? `: ${event.message}` : ""}`,
-				);
-				if (event.detail) {
-					printIndentedBlock(event.detail);
+			{
+				const plan = getCurrentPlan();
+				if (plan?.items.every((item) => item.status === "completed")) {
+					setCurrentPlan(null);
+				} else if (plan) {
+					console.log(`${blue("•")} ${bold("Plan")}`);
+					printIndentedBlock(renderPlanFull(plan));
 				}
-				return;
-			case "tool_calls_received":
-				return;
-			case "tool_execution_started":
-				if (state.hasPrintedToolInTurn) {
-					console.log("");
-				}
-				state.hasPrintedToolInTurn = true;
-				console.log(
-					`${green("•")} ${bold("Ran")} ${cyan(event.message ?? `tool ${event.toolName}`)}`,
-				);
-				if (event.detail) {
-					printIndentedBlock(event.detail);
-				}
-				return;
-			case "tool_execution_finished":
-				if (!event.toolOk) {
-					console.log(
-						`${red("•")} ${red(`Failed ${event.toolName ?? "tool"}${suffix}`)}`,
-					);
-				}
-				if (event.toolResult) {
-					printIndentedBlock(
-						truncateToolResult(
-							summarizeClearToolResult(
-								event.toolName,
-								event.toolResult,
-								event.toolOk,
-								event.toolResultData,
-							),
-						),
-					);
-				}
-				return;
-			case "turn_finished":
-				console.log(`${green("•")} ${green(`Done${suffix}`)}`);
-				return;
-			case "turn_interrupted":
-				console.log(
-					`${yellow("•")} ${yellow(`Interrupted${event.interruptStage ? ` during ${event.interruptStage}` : ""}${suffix}`)}`,
-				);
-				return;
-			case "turn_max_steps_reached":
-				console.log(
-					`${yellow("•")} ${yellow(`Stopped at max steps${suffix}`)}`,
-				);
-				return;
-			case "turn_failed":
-				console.log(`${red("•")} ${red("Failed")}`);
-				return;
+			}
+			return;
+		case "step_started":
+			return;
+		case "interrupt_requested":
+			console.log(
+				event.interruptStage === "model"
+					? `${yellow("•")} ${yellow("Cancelling current model request")}`
+					: `${yellow("•")} ${yellow("Interrupt requested; waiting for current tool to finish")}`,
+			);
+			return;
+		case "model_request_started":
+			state.modelRequestCountInTurn += 1;
+			if (state.modelRequestCountInTurn > 1) {
+				console.log(renderModelRunDivider(state.modelRequestCountInTurn));
+			}
+			return;
+		case "model_request_finished":
+			return;
+		case "assistant_message": {
+			const trimmed = event.assistantText?.trim();
+			if (trimmed && !isAssistantTextNoise(trimmed)) {
+				printPrefixedBlock(`${magenta("•")} ${bold("Assistant:")} `, trimmed);
+			}
+			return;
 		}
-	});
+		case "context_checkpoint":
+			console.log(
+				`${blue("•")} ${bold("Checkpoint")}${event.message ? `: ${event.message}` : ""}`,
+			);
+			if (event.detail) {
+				printIndentedBlock(event.detail);
+			}
+			return;
+		case "tool_calls_received":
+			return;
+		case "tool_execution_started":
+			if (state.hasPrintedToolInTurn) {
+				console.log("");
+			}
+			state.hasPrintedToolInTurn = true;
+			console.log(
+				`${green("•")} ${bold("Ran")} ${cyan(event.message ?? `tool ${event.toolName}`)}`,
+			);
+			if (event.detail) {
+				printIndentedBlock(event.detail);
+			}
+			return;
+		case "tool_execution_finished":
+			if (!event.toolOk) {
+				console.log(
+					`${red("•")} ${red(`Failed ${event.toolName ?? "tool"}${suffix}`)}`,
+				);
+			}
+			if (event.toolResult) {
+				printIndentedBlock(
+					truncateToolResult(
+						summarizeClearToolResult(
+							event.toolName,
+							event.toolResult,
+							event.toolOk,
+							event.toolResultData,
+						),
+					),
+				);
+			}
+			return;
+		case "turn_finished":
+			console.log(`${green("•")} ${green(`Done${suffix}`)}`);
+			return;
+		case "turn_interrupted":
+			console.log(
+				`${yellow("•")} ${yellow(`Interrupted${event.interruptStage ? ` during ${event.interruptStage}` : ""}${suffix}`)}`,
+			);
+			return;
+		case "turn_max_steps_reached":
+			console.log(`${yellow("•")} ${yellow(`Stopped at max steps${suffix}`)}`);
+			return;
+		case "turn_failed":
+			console.log(`${red("•")} ${red("Failed")}`);
+			return;
+	}
 }
 
 function printPrefixedBlock(firstLinePrefix: string, value: string): void {
