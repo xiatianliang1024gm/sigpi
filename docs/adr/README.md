@@ -103,3 +103,16 @@ Came from a `/grilling` session (grill-with-docs) triggered by "LLM stops respon
 | # | Title | Commit | One-liner |
 |---|-------|--------|-----------|
 | [0024](./0024-model-transport-adopts-openai-sdk.md) | Model transport adopts OpenAI SDK; total + idle timeouts; max_tokens clamp | `—` | SDK owns fetch/SSE/retry/timeout; SigPi keeps total+idle timeout semantics + error classification; max_tokens clamped to context; supersedes ADR 0005 + 0020 |
+## Render layer rewrite pass (2026-07-19)
+
+Came from a `/grilling` session (grill-with-docs) triggered by a rendering bug: the
+running turn mixed a Pi-tui `TUI` frame with raw `console.log` transcript, so the
+previous input box / status bar were left on screen and re-rendered below the
+answer (Pi-tui's `TUI.stop()` does not clear its frame, and its internal viewport
+desyncs on external writes). Decided to retire the SigPi/Pi-tui hybrid and make the
+render layer fully Pi-tui component-based, retiring the dead `SigPiTerminal`
+frame-diff seam.
+
+| # | Title | Commit | One-liner |
+|---|-------|--------|-----------|
+| [0025](./0025-render-layer-fully-pi-tui.md) | Render layer becomes fully Pi-tui component-based | `—` | Retire the console.log+TUI hybrid and the dead `SigPiTerminal` frame-diff seam; turn output rendered as Pi-tui components, committed to stdout at turn end; non-TTY keeps console.log |

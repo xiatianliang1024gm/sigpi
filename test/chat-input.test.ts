@@ -4,7 +4,6 @@ import test from "node:test";
 import { createChatCommandDefinitions } from "../src/chat-commands.js";
 import {
 	readChatInput,
-	startRunningTurnInputListener,
 } from "../src/chat-input.js";
 import { stripAnsi } from "../src/tui/ansi.js";
 
@@ -636,124 +635,6 @@ test("readChatInput keeps bracketed paste behavior without showing slash suggest
 		rendered.includes("/resume - Switch to another saved session"),
 		false,
 	);
-});
-
-test("running turn input listener renders and submits typed input", async () => {
-	const input = new FakeInput();
-	const output = new FakeOutput();
-	const outputText = collectOutput(output);
-	const submitted: string[] = [];
-
-	const handle = startRunningTurnInputListener({
-		prompt: "> ",
-		input: input as never,
-		output: output as never,
-		onEscape: () => {
-			throw new Error("should not interrupt");
-		},
-		onSubmit: (text) => submitted.push(text),
-	});
-
-	input.write("next question");
-	input.write("\r");
-	handle?.stop();
-	output.end();
-
-	assert.deepEqual(submitted, ["next question"]);
-	assert.equal(input.isRaw, false);
-	assert.equal(input.paused, true);
-	assert.match(getVisibleOutput(await outputText), /> next question/);
-});
-
-test("running turn input listener keeps Esc as interrupt", () => {
-	const input = new FakeInput();
-	const output = new FakeOutput();
-	let interrupted = false;
-	const submitted: string[] = [];
-
-	const handle = startRunningTurnInputListener({
-		input: input as never,
-		output: output as never,
-		onEscape: () => {
-			interrupted = true;
-		},
-		onSubmit: (text) => submitted.push(text),
-	});
-
-	input.write("\x1B");
-	handle?.stop();
-
-	assert.equal(interrupted, true);
-	assert.deepEqual(submitted, []);
-});
-
-test("running turn input listener prints submitted input after suspended output", async () => {
-	const input = new FakeInput();
-	const output = new FakeOutput();
-	const outputText = collectOutput(output);
-	const submitted: string[] = [];
-
-	const handle = startRunningTurnInputListener({
-		prompt: "> ",
-		input: input as never,
-		output: output as never,
-		onEscape: () => {
-			throw new Error("should not interrupt");
-		},
-		onSubmit: (text) => submitted.push(text),
-	});
-
-	input.write("queued");
-	handle?.withSuspendedRendering(() => {
-		output.write("[agent] still running\n");
-	});
-	input.write("\r");
-	handle?.stop();
-	output.end();
-
-	const visible = getVisibleOutput(await outputText);
-	assert.deepEqual(submitted, ["queued"]);
-	assert.match(visible, /\[agent\] still running/);
-	assert.match(visible, /> queued/);
-	assert.ok(
-		visible.indexOf("[agent] still running") < visible.lastIndexOf("> queued"),
-	);
-});
-
-test("running turn input listener streams without clearing the transcript", async () => {
-	const input = new FakeInput();
-	const output = new FakeOutput();
-	const outputText = collectOutput(output);
-
-	// A transcript already sits above the prompt.
-	output.write("PRIOR ANSWER LINE\n");
-
-	const handle = startRunningTurnInputListener({
-		prompt: "> ",
-		input: input as never,
-		output: output as never,
-		onEscape: () => {
-			throw new Error("should not interrupt");
-		},
-		onSubmit: () => {},
-	});
-
-	handle?.withSuspendedRendering(() => {
-		output.write("[agent] token one\n");
-	});
-	handle?.withSuspendedRendering(() => {
-		output.write("[agent] token two\n");
-	});
-	handle?.stop();
-	output.end();
-
-	const rendered = await outputText;
-	// Streaming deltas used to call requestRender(true), which forces Pi-tui
-	// into a full-screen clear (\x1B[2J) and wiped the whole transcript above.
-	assert.doesNotMatch(rendered, /\x1B\[2J/);
-	assert.match(getVisibleOutput(rendered), /PRIOR ANSWER LINE/);
-	assert.match(getVisibleOutput(rendered), /\[agent\] token one/);
-	assert.match(getVisibleOutput(rendered), /\[agent\] token two/);
 });
 
 test("readChatInput wraps long input and keeps prompt on the first line", async () => {

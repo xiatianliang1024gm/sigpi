@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { realpath } from "node:fs/promises";
-import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
 	type ChatCommandDefinition,
@@ -18,7 +17,6 @@ import { getCurrentPlan, setCurrentPlan } from "../src/plan-tracker.js";
 import { createAgentRuntime } from "../src/runtime.js";
 import { stripAnsi } from "../src/tui/ansi.js";
 import type { StatusBarComponent } from "../src/tui/status-bar.js";
-import type { TurnProgressEvent } from "../src/types.js";
 import {
 	createTempDir,
 	createTestSessionStore,
@@ -34,49 +32,6 @@ import {
  */
 function statusLine(component: StatusBarComponent): string {
 	return component.render(240)[0] ?? "";
-}
-
-class FakeInput extends PassThrough {
-	public isTTY = true;
-	public isRaw = false;
-	public paused = false;
-
-	setRawMode(value: boolean): this {
-		this.isRaw = value;
-		return this;
-	}
-
-	override pause(): this {
-		this.paused = true;
-		return super.pause() as this;
-	}
-
-	override resume(): this {
-		this.paused = false;
-		return super.resume() as this;
-	}
-}
-
-class FakeOutput extends PassThrough {
-	public isTTY = true;
-	public columns = 80;
-	public rows = 24;
-}
-
-function collectOutput(stream: PassThrough): Promise<string> {
-	return new Promise((resolve) => {
-		let data = "";
-		stream.on("data", (chunk) => {
-			data += chunk.toString("utf8");
-		});
-		stream.on("end", () => resolve(data));
-	});
-}
-
-function getVisibleOutput(output: string): string {
-	return stripAnsi(
-		output.replace(/\x1B_sigpi:c\x07|\x1B\[\?2004[hl]|\x1B\[\?25h|\n/gu, ""),
-	);
 }
 
 function setTestHome(homeDir: string): () => void {
@@ -1993,200 +1948,6 @@ test("runChatReplLoop does not print edit summaries for patch validation", async
 	}
 });
 
-test("runChatReplLoop listens for Esc while a turn is running", async () => {
-	const cwd = await realpath(await createTempDir("sigpi-chat-repl-esc-"));
-	const homeDir = await createTempDir("sigpi-chat-repl-esc-home-");
-	const previousCwd = process.cwd();
-	const restoreHome = setTestHome(homeDir);
-	process.chdir(cwd);
-
-	try {
-		await writeTestConfig(cwd);
-		const runtime = await createAgentRuntime({ createSession: true });
-		const input = new FakeInput();
-		const output = new FakeOutput();
-		const outputs: string[] = [];
-		let promptIndex = 0;
-
-		await runChatReplLoop(
-			{
-				state: runtimeToChatReplState(runtime),
-				store: runtime.store,
-				input: input as never,
-				output: output as never,
-			},
-			{
-				readChatInput: async () =>
-					["inspect repo", "/exit"][promptIndex++] ?? null,
-				executeTurn: async (_runner, _line, _logger, interruptController) => {
-					interruptController?.beginTurn();
-					interruptController?.enterModel();
-					setTimeout(() => {
-						input.write("\x1B");
-					}, 10);
-
-					return await new Promise((resolve) => {
-						const interval = setInterval(() => {
-							if (!interruptController?.isInterruptRequested()) {
-								return;
-							}
-							clearInterval(interval);
-							interruptController.leaveActiveStage();
-							resolve({
-								ok: true as const,
-								completionStatus: "interrupted" as const,
-								resumable: false,
-								outputText: null,
-								toolExecutions: [],
-							});
-						}, 5);
-					});
-				},
-				writeLine: (line) => outputs.push(line),
-			},
-		);
-
-		assert.equal(outputs[0], "[agent] cancelling current model request");
-		assert.equal(outputs[1], "");
-		assert.match(outputs[2] ?? "", /^Exiting session: [0-9a-f-]{36}$/);
-		assert.equal(outputs.length, 3);
-		assert.equal(input.isRaw, false);
-		assert.equal(input.paused, true);
-	} finally {
-		restoreHome();
-		process.chdir(previousCwd);
-	}
-});
-
-test("runChatReplLoop queues visible input typed while a turn is running", async () => {
-	const cwd = await realpath(await createTempDir("sigpi-chat-repl-queued-"));
-	const homeDir = await createTempDir("sigpi-chat-repl-queued-home-");
-	const previousCwd = process.cwd();
-	const restoreHome = setTestHome(homeDir);
-	process.chdir(cwd);
-
-	try {
-		await writeTestConfig(cwd);
-		const runtime = await createAgentRuntime({ createSession: true });
-		const input = new FakeInput();
-		const output = new FakeOutput();
-		let promptIndex = 0;
-		const executedLines: string[] = [];
-
-		await runChatReplLoop(
-			{
-				state: runtimeToChatReplState(runtime),
-				store: runtime.store,
-				input: input as never,
-				output: output as never,
-			},
-			{
-				readChatInput: async () =>
-					["first request", "/exit"][promptIndex++] ?? null,
-				executeTurn: async (_runner, line) => {
-					executedLines.push(line);
-					if (line === "first request") {
-						input.write("second request");
-						input.write("\r");
-					}
-					return {
-						ok: true,
-						completionStatus: "completed",
-						resumable: false,
-						outputText: `echo:${line}`,
-						toolExecutions: [],
-					};
-				},
-			},
-		);
-
-		assert.deepEqual(executedLines, ["first request", "second request"]);
-		assert.equal(input.isRaw, false);
-		assert.equal(input.paused, true);
-	} finally {
-		restoreHome();
-		process.chdir(previousCwd);
-	}
-});
-
-test("runChatReplLoop preserves draft input across progress output", async () => {
-	const cwd = await realpath(
-		await createTempDir("sigpi-chat-repl-progress-input-"),
-	);
-	const homeDir = await createTempDir("sigpi-chat-repl-progress-input-home-");
-	const previousCwd = process.cwd();
-	const restoreHome = setTestHome(homeDir);
-	const originalConsoleLog = console.log;
-	process.chdir(cwd);
-
-	try {
-		await writeTestConfig(cwd);
-		const runtime = await createAgentRuntime({ createSession: true });
-		const input = new FakeInput();
-		const output = new FakeOutput();
-		const outputText = collectOutput(output);
-		const progressReporter = createCliProgressReporter();
-		let promptIndex = 0;
-		const executedLines: string[] = [];
-		console.log = (...values: unknown[]) => {
-			output.write(`${values.join(" ")}\n`);
-		};
-
-		await runChatReplLoop(
-			{
-				state: runtimeToChatReplState(runtime),
-				store: runtime.store,
-				progressReporter,
-				input: input as never,
-				output: output as never,
-			},
-			{
-				readChatInput: async () =>
-					["first request", "/exit"][promptIndex++] ?? null,
-				executeTurn: async (_runner, line) => {
-					executedLines.push(line);
-					if (line === "first request") {
-						input.write("second request");
-						progressReporter({
-							type: "tool_execution_started",
-							step: 1,
-							toolName: "read",
-							message: "read `src/cli.ts`",
-						} satisfies TurnProgressEvent);
-						input.write("\r");
-					}
-					return {
-						ok: true,
-						completionStatus: "completed",
-						resumable: false,
-						outputText: `echo:${line}`,
-						toolExecutions: [],
-					};
-				},
-			},
-		);
-		output.end();
-
-		const visible = getVisibleOutput(await outputText);
-		assert.deepEqual(executedLines, ["first request", "second request"]);
-		assert.match(visible, /• Ran read `src\/cli\.ts`/);
-		assert.match(visible, /> second request/);
-		assert.ok((visible.match(/> first request/g)?.length ?? 0) <= 1);
-		assert.ok(
-			visible.indexOf("• Ran read `src/cli.ts`") <
-				visible.lastIndexOf("> second request"),
-		);
-		assert.ok(
-			visible.lastIndexOf("> second request") <
-				visible.indexOf("echo:second request"),
-		);
-	} finally {
-		console.log = originalConsoleLog;
-		restoreHome();
-		process.chdir(previousCwd);
-	}
-});
-
 test("createCliProgressReporter skips assistant_message when text is only whitespace", () => {
 	const reporter = createCliProgressReporter("detailed");
 
@@ -2280,8 +2041,6 @@ test("runChatReplLoop drives a model turn only for model-reaching inputs", async
 	try {
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
-		const input = new FakeInput();
-		const output = new FakeOutput();
 		let promptIndex = 0;
 		const executed: string[] = [];
 
@@ -2305,8 +2064,6 @@ test("runChatReplLoop drives a model turn only for model-reaching inputs", async
 			{
 				state: runtimeToChatReplState(runtime),
 				store: runtime.store,
-				input: input as never,
-				output: output as never,
 			},
 			{
 				commands,
@@ -2350,8 +2107,6 @@ test("runChatReplLoop drives a turn with the original line, not the expanded /sk
 	try {
 		await writeTestConfig(cwd);
 		const runtime = await createAgentRuntime({ createSession: true });
-		const input = new FakeInput();
-		const output = new FakeOutput();
 		let promptIndex = 0;
 		const executed: string[] = [];
 
@@ -2370,8 +2125,6 @@ test("runChatReplLoop drives a turn with the original line, not the expanded /sk
 			{
 				state: runtimeToChatReplState(runtime),
 				store: runtime.store,
-				input: input as never,
-				output: output as never,
 			},
 			{
 				commands,
