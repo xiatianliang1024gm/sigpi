@@ -2,9 +2,7 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { createChatCommandDefinitions } from "../src/chat-commands.js";
-import {
-	readChatInput,
-} from "../src/chat-input.js";
+import { readChatInput } from "../src/chat-input.js";
 import { stripAnsi } from "../src/tui/ansi.js";
 
 class FakeInput extends PassThrough {

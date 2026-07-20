@@ -23,8 +23,14 @@ import { StatusBarComponent } from "./status-bar.js";
 
 const ENTER_ALT_SCREEN = "\x1b[?1049h";
 const LEAVE_ALT_SCREEN = "\x1b[?1049l";
-const ENABLE_MOUSE_TRACKING = "\x1b[?1006h";
-const DISABLE_MOUSE_TRACKING = "\x1b[?1006l";
+// Enable SGR (decimal) mouse *encoding* (1006) AND a tracking mode (1000:
+// button press/release + wheel up/down). 1006 alone only changes the encoding
+// format and emits no events, so the wheel used to fall through as plain arrow
+// keys (\x1b[A / \x1b[B) that the focused editor read as history navigation.
+// 1000 reports the wheel as SGR button 64 (up) / 65 (down), which the wheel
+// handler below consumes to scroll the transcript (ADR 0025).
+const ENABLE_MOUSE_TRACKING = "\x1b[?1000h\x1b[?1006h";
+const DISABLE_MOUSE_TRACKING = "\x1b[?1000l\x1b[?1006l";
 
 export interface AssistantMessageView {
 	appendReasoning(text: string): void;
@@ -109,7 +115,7 @@ export class TranscriptViewport implements Component {
 			}
 		}
 		const rows = Math.max(1, this.getRows());
-		const footerHeight = Math.max(0, this.getFooterHeight());
+		const footerHeight = Math.max(0, this.getFooterHeight() + 1);
 		const available = Math.max(1, rows - footerHeight);
 		this.cachedAvailable = available;
 		this.cachedTotal = lines.length;
@@ -202,7 +208,6 @@ export class ChatRenderer implements ReplView {
 	start(): void {
 		const bottomBar = new Container();
 		this.enterAltScreen();
-		this.output.write(ENABLE_MOUSE_TRACKING);
 		process.once("exit", () => this.leaveAltScreen());
 		bottomBar.addChild(this.statusBar);
 		const { editor } = buildEditor(this.tui, {
@@ -230,24 +235,34 @@ export class ChatRenderer implements ReplView {
 				this.tui.requestRender();
 				return { consume: true };
 			}
-			// Mouse wheel (SGR 1006): 64 = wheel up (reveal older), 65 = wheel down.
-			const wheel = /^\x1b\[<(\d+);\d+;\d+[Mm]$/.exec(data);
-			if (wheel) {
-				const button = Number(wheel[1]);
-				if (button === 64) {
-					this.chatContainer.scrollUp();
-				} else if (button === 65) {
-					this.chatContainer.scrollDown();
-				} else {
-					return undefined;
+			// Any SGR mouse report (wheel, click, drag) is intercepted here and
+			// never forwarded to the focused editor — otherwise a wheel could be
+			// read by the editor as an Up/Down arrow and switch input history.
+			// Wheel events set bit 6 (0x40); bit 0 gives direction (0 = up,
+			// 1 = down). Modifier bits (shift 0x04 / meta 0x08 / control 0x10)
+			// and the motion bit (0x20) are OR'd in by some terminals and are
+			// ignored when deciding direction.
+			const mouse = /^\x1b\[<(\d+);\d+;\d+[Mm]/.exec(data);
+			if (mouse) {
+				const button = Number(mouse[1]);
+				if (button & 0x40) {
+					if (button & 0x01) {
+						this.chatContainer.scrollDown();
+					} else {
+						this.chatContainer.scrollUp();
+					}
+					this.tui.requestRender();
 				}
-				this.tui.requestRender();
 				return { consume: true };
 			}
 			return undefined;
 		});
 		this.tui.addChild(bottomBar);
 		this.tui.start();
+		// Enable SGR mouse tracking only after the TUI has taken over the
+		// terminal (raw mode + alternate screen) so a terminal startup sequence
+		// cannot reset it. Paired with DISABLE_MOUSE_TRACKING on leave.
+		this.output.write(ENABLE_MOUSE_TRACKING);
 		renderInlineNow(this.tui);
 	}
 
