@@ -222,7 +222,11 @@ test("Mouse wheel (SGR 1006) scrolls the transcript up to older content and back
 	try {
 		assert.ok(
 			output.buf.includes("\x1b[?1006h"),
-			"enables SGR mouse tracking on start",
+			"enables SGR mouse encoding on start",
+		);
+		assert.ok(
+			output.buf.includes("\x1b[?1000h"),
+			"enables a mouse tracking mode (1000) so the wheel emits SGR button events instead of arrow keys",
 		);
 		output.buf = "";
 
@@ -265,11 +269,34 @@ test("Mouse wheel (SGR 1006) scrolls the transcript up to older content and back
 			afterDown[0] > afterUp[0],
 			"wheel down moved the view toward newer messages",
 		);
+
+		// A wheel event carrying modifier bits must still scroll: some
+		// terminals OR shift/meta/control into the SGR button code (e.g. 69 =
+		// wheel down + shift, 68 = wheel up + shift), which the bare 64/65
+		// check used to drop. Bit 6 (0x40) marks a wheel, bit 0 the direction.
+		input.emit("data", "\x1b[<68;1;1M"); // wheel up + shift
+		render();
+		const afterShiftUp = visible(output.buf);
+		assert.ok(
+			afterShiftUp[0] < afterDown[0],
+			"wheel up with modifier bits scrolls toward older content",
+		);
+		input.emit("data", "\x1b[<69;1;1M"); // wheel down + shift
+		render();
+		const afterShiftDown = visible(output.buf);
+		assert.ok(
+			afterShiftDown[0] > afterShiftUp[0],
+			"wheel down with modifier bits scrolls toward newer content",
+		);
 	} finally {
 		renderer.stop();
 	}
 	assert.ok(
 		output.buf.includes("\x1b[?1006l"),
-		"disables SGR mouse tracking on stop",
+		"disables SGR mouse encoding on stop",
+	);
+	assert.ok(
+		output.buf.includes("\x1b[?1000l"),
+		"disables the mouse tracking mode on stop",
 	);
 });

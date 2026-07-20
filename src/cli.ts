@@ -400,6 +400,62 @@ interface CompactProgressRenderState {
 	groupActive: boolean;
 }
 
+/**
+ * Apply one turn-progress event to the persistent REPL view. Returns the
+ * current in-flight assistant-message view so the caller can thread it across
+ * events within a turn.
+ *
+ * Each model response (one per agent step) gets its OWN assistant component,
+ * created lazily on the first content/reasoning delta and finalized at the
+ * step boundary (`model_request_finished` / `assistant_message` / terminal
+ * events). This keeps every step's answer in a component appended in
+ * chronological order — so the final conclusion lands AFTER the step's tool
+ * results — and, crucially, never leaves a finalized component receiving a
+ * later step's deltas. `AssistantMessageComponent.finalize()` locks the
+ * component so further `appendContent`/`appendReasoning` calls are silently
+ * dropped; an earlier design created a single component at turn start and
+ * finalized it after the first step, so every later step's text (including
+ * the final answer) was dropped and never rendered.
+ */
+export function applyTurnProgress(
+	view: ReplView,
+	event: TurnProgressEvent,
+	currentAssistant: AssistantMessageView | null,
+): AssistantMessageView | null {
+	if (event.type === "model_delta") {
+		const assistant = currentAssistant ?? view.beginAssistantMessage();
+		if (event.reasoningDelta) {
+			assistant.appendReasoning(event.reasoningDelta);
+		}
+		if (event.contentDelta) {
+			assistant.appendContent(event.contentDelta);
+		}
+		return assistant;
+	}
+
+	if (event.type === "tool_execution_finished" && event.toolName) {
+		const ok = event.toolOk === true;
+		const body = event.toolResult ?? event.message ?? "";
+		view.addToolResult(
+			`${ok ? "•" : "✗"} ${event.toolName}${body ? `: ${body}` : ""}`,
+		);
+		return currentAssistant;
+	}
+
+	if (
+		event.type === "model_request_finished" ||
+		event.type === "assistant_message" ||
+		event.type === "turn_interrupted" ||
+		event.type === "turn_failed" ||
+		event.type === "turn_max_steps_reached"
+	) {
+		currentAssistant?.finalize();
+		return null;
+	}
+
+	return currentAssistant;
+}
+
 export async function runChatReplLoop(
 	options: RunChatReplLoopOptions,
 	dependencies: RunChatReplLoopDependencies = {},
@@ -467,32 +523,7 @@ export async function runChatReplLoop(
 	const viewProgressListener = (event: TurnProgressEvent) => {
 		latestProgressEvent = event;
 		void refreshStatusBar(event);
-		if (event.type === "model_delta") {
-			if (event.reasoningDelta) {
-				currentAssistant?.appendReasoning(event.reasoningDelta);
-			}
-			if (event.contentDelta) {
-				currentAssistant?.appendContent(event.contentDelta);
-			}
-			return;
-		}
-		if (event.type === "tool_execution_finished" && event.toolName) {
-			const ok = event.toolOk === true;
-			const body = event.toolResult ?? event.message ?? "";
-			view.addToolResult(
-				`${ok ? "•" : "✗"} ${event.toolName}${body ? `: ${body}` : ""}`,
-			);
-			return;
-		}
-		if (
-			event.type === "model_request_finished" ||
-			event.type === "assistant_message" ||
-			event.type === "turn_interrupted" ||
-			event.type === "turn_failed" ||
-			event.type === "turn_max_steps_reached"
-		) {
-			currentAssistant?.finalize();
-		}
+		currentAssistant = applyTurnProgress(view, event, currentAssistant);
 	};
 	activeStatusBarProgressListener = useTui ? viewProgressListener : null;
 
@@ -544,7 +575,6 @@ export async function runChatReplLoop(
 
 		const interruptController = new TurnInterruptController();
 		latestProgressEvent = null;
-		currentAssistant = view.beginAssistantMessage();
 		view.beginTurn(() => {
 			const interrupt = interruptController.requestInterrupt();
 			if (!interrupt.accepted || interrupt.alreadyRequested) {
@@ -576,7 +606,6 @@ export async function runChatReplLoop(
 			interruptController,
 		);
 		view.endTurn();
-		currentAssistant?.finalize();
 		currentAssistant = null;
 		queuedLines.push(...view.takeQueuedLines());
 
