@@ -115,7 +115,7 @@ export class TranscriptViewport implements Component {
 			}
 		}
 		const rows = Math.max(1, this.getRows());
-		const footerHeight = Math.max(0, this.getFooterHeight() + 1);
+		const footerHeight = Math.max(0, this.getFooterHeight());
 		const available = Math.max(1, rows - footerHeight);
 		this.cachedAvailable = available;
 		this.cachedTotal = lines.length;
