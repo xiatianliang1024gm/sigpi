@@ -16,19 +16,19 @@ import type { TurnProgressEvent } from "../src/types.js";
 class FakeAssistantView implements AssistantMessageView {
 	reasoning = "";
 	content = "";
-	private hasReasoning = false;
-	private hasContent = false;
+	// private hasReasoning = false;
+	// private hasContent = false;
 	private finalized = false;
 
 	appendReasoning(text: string): void {
 		if (this.finalized || !text) return;
 		this.reasoning += text;
-		this.hasReasoning = true;
+		// this.hasReasoning = true;
 	}
 	appendContent(text: string): void {
 		if (this.finalized || !text) return;
 		this.content += text;
-		this.hasContent = true;
+		// this.hasContent = true;
 	}
 	finalize(): void {
 		this.finalized = true;
@@ -186,7 +186,7 @@ test("the final conclusion is not dropped by an earlier finalize", () => {
 	assert.ok(finalAnswer, "a component exists for the final answer");
 	// This is the whole point: the bug left the last step's text appended to a
 	// component finalized after step 1, where finalize() silently dropped it.
-	assert.match(finalAnswer!.content, /CONCLUSION/);
+	assert.match(finalAnswer?.content, /CONCLUSION/);
 });
 
 test("a step with no text does not emit an empty assistant bubble", () => {
@@ -225,5 +225,5 @@ test("a step with no text does not emit an empty assistant bubble", () => {
 	}
 	// Only the final answer creates a component; the tool-only step adds none.
 	assert.deepEqual(view.ops, ["tool:• bash: pwd", "answer"]);
-	assert.match(view.assistants.at(-1)!.content, /Done\./);
+	assert.match(view.assistants.at(-1)?.content ?? "", /Done\./);
 });
