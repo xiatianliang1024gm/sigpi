@@ -378,21 +378,7 @@ export function createBashTool(
 						? true
 						: result.stderr.length > DATA_TRUNCATION_CAP,
 				},
-				renderBashResult({
-					command,
-					description,
-					shell: shellRuntime.shell,
-					platform: shellRuntime.platform,
-					ok: result.ok,
-					exitCode: result.exitCode,
-					signal: result.signal,
-					timedOut: result.timedOut,
-					cwd: workingDir.current,
-					cwdReset,
-					overflowPath,
-					stdout: renderedStdout,
-					stderr: renderedStderr,
-				}),
+				joinRenderedSections([renderedStdout, renderedStderr]),
 			);
 		},
 		describeProgress(args) {
@@ -441,7 +427,7 @@ function truncateHeadTail(value: string, maxChars: number): string {
 	return `${value.slice(0, headChars)}${marker}${value.slice(value.length - tailChars)}`;
 }
 
-function renderBashResult(result: {
+function _renderBashResult(result: {
 	command: string;
 	description?: string;
 	shell: string;

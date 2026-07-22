@@ -34,9 +34,6 @@ test("createToolMessage formats read content as raw text", () => {
 	assert.equal(
 		message.content,
 		[
-			"TOOL: read",
-			"STATUS: ok",
-			"RESULT:",
 			"[Read tmp/demo.txt lines 1-3 of 3 (77 chars)]",
 			"=== CONTENT START ===",
 			'const payload = "{\\"path\\":\\"C:\\\\temp\\\\file.json\\"}";',
@@ -72,9 +69,6 @@ test("createToolMessage formats read metadata and raw content", () => {
 	assert.equal(
 		message.content,
 		[
-			"TOOL: read",
-			"STATUS: ok",
-			"RESULT:",
 			"[Read src/example.ts lines 4-5 of 20 (10 chars)]",
 			"=== CONTENT START ===",
 			"4 │ alpha",

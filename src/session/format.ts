@@ -45,7 +45,7 @@ export function deriveContextStateFromEntries(entries: SessionEntry[]): {
 	let firstKeptSeen = lastCompaction.firstKeptEntryId === null;
 	for (let i = lastCompactionIndex + 1; i < entries.length; i += 1) {
 		const entry = entries[i];
-		if (!entry || entry.kind !== "message") {
+		if (entry?.kind !== "message") {
 			continue;
 		}
 		if (!firstKeptSeen) {

@@ -16,11 +16,7 @@ import {
 	isRgUnavailable,
 } from "../local-search.js";
 import { resolveWorkspacePath } from "../path-utils.js";
-import {
-	formatRawBlock,
-	joinRenderedSections,
-	withRendered,
-} from "../render.js";
+import { joinRenderedSections, withRendered } from "../render.js";
 
 const execFileAsync = promisify(execFile);
 type ExecFileAsync = typeof execFileAsync;
@@ -542,14 +538,8 @@ function renderGrepResult(result: {
 	stderr: string;
 	usedFallback: boolean;
 }): string {
-	return joinRenderedSections([
-		`Result count: ${result.returnedMatchCount}`,
-		`Total match count: ${result.totalMatchCount}`,
-		`Truncated: ${result.truncated ? "yes" : "no"}`,
-		result.outputText
-			? formatRawBlock("Matches", result.outputText)
-			: "Matches: (empty)",
-		result.stderr ? `Note: ${result.stderr}` : null,
-		result.usedFallback ? "Engine: Node.js fallback" : null,
-	]);
+	const marker = result.truncated
+		? `[...truncated, ${result.returnedMatchCount} of ${result.totalMatchCount} results shown]`
+		: null;
+	return joinRenderedSections([result.outputText || "(empty)", marker]);
 }

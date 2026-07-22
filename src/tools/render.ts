@@ -17,16 +17,14 @@ export function formatToolExecutionResult(
 	name: string,
 	result: ToolExecutionResult,
 ): string {
-	const lines = [`TOOL: ${name}`, `STATUS: ${result.ok ? "ok" : "error"}`];
-
 	if (result.ok) {
 		if (result.data !== undefined) {
-			lines.push("RESULT:");
-			lines.push(formatToolValue(result.data));
+			return formatToolValue(result.data);
 		}
-		return lines.join("\n");
+		return "";
 	}
 
+	const lines = [`TOOL: ${name}`, `STATUS: error`];
 	lines.push(`ERROR: ${result.error ?? "Unknown tool error"}`);
 	if (result.details !== undefined) {
 		lines.push("DETAILS:");

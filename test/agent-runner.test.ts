@@ -59,10 +59,6 @@ test("executes a tool call and feeds the result back to the model", async () => 
 
 		const toolMessage = request.messages.at(-1);
 		assert.equal(toolMessage?.role, "tool");
-		assert.match(toolMessage.content, /TOOL: glob/);
-		assert.match(toolMessage.content, /STATUS: ok/);
-		assert.match(toolMessage.content, /RESULT:/);
-		assert.match(toolMessage.content, /Files:/);
 		assert.match(toolMessage.content, /src\/demo\.ts/);
 
 		return {
@@ -118,8 +114,8 @@ test("truncated file reads expose continuation metadata for the next tool call",
 		if (index === 1) {
 			const toolMessage = request.messages.at(-1);
 			assert.equal(toolMessage?.role, "tool");
-			assert.match(toolMessage.content, /PARTIAL view/);
-			assert.match(toolMessage.content, /read\(\{"file_path":"notes.txt"/);
+			assert.match(toolMessage.content, /\[...truncated, continue from line/);
+			assert.match(toolMessage.content, /Line 1/);
 
 			return {
 				assistantText: null,
@@ -800,8 +796,6 @@ test("runner emits progress events during multi-step execution", async () => {
 	const toolFinishedEvent = progressEvents.find(
 		(event) => event.type === "tool_execution_finished",
 	);
-	assert.match(toolFinishedEvent?.toolResult ?? "", /TOOL: glob/);
-	assert.match(toolFinishedEvent?.toolResult ?? "", /STATUS: ok/);
 	assert.match(toolFinishedEvent?.toolResult ?? "", /src\/demo\.ts/);
 });
 
@@ -855,7 +849,7 @@ test("runner progress includes structured file edit results", async () => {
 		(event) => event.type === "tool_execution_finished",
 	);
 	assert.equal(toolFinishedEvent?.toolName, "write");
-	assert.match(toolFinishedEvent?.toolResult ?? "", /TOOL: write/);
+	assert.equal(toolFinishedEvent?.toolResult ?? "", "ok");
 	assert.match(
 		JSON.stringify(toolFinishedEvent?.toolResultData),
 		/"editSummary"/,
