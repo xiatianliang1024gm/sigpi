@@ -206,11 +206,7 @@ export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 						replace_all,
 					),
 				},
-				joinRenderedSections([
-					`Path: ${relative}`,
-					`Replacements: ${replacements}`,
-					`Replace all: ${replace_all}`,
-				]),
+				"ok",
 			);
 		},
 		describeProgress(args) {

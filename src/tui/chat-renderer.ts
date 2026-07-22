@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ChatCommandMetadata } from "../chat-commands.js";
 import { buildEditor } from "../chat-input.js";
+import type { JsonValue } from "../types.js";
 import {
 	AssistantMessageComponent,
 	SystemMessageComponent,
@@ -53,7 +54,11 @@ export interface ReplView {
 	beginAssistantMessage(): AssistantMessageView;
 	beginTurn(onInterrupt: () => void): void;
 	endTurn(): void;
-	addToolResult(rendered: string): void;
+	addToolResult(
+		rendered: string,
+		toolName?: string,
+		toolResultData?: JsonValue,
+	): void;
 	appendSystem(text: string, tone?: "error" | "info"): void;
 	setStatus(model: StatusBarComponent): void;
 	writeLine(line: string): void;
@@ -311,8 +316,14 @@ export class ChatRenderer implements ReplView {
 		this.interruptHandler = null;
 	}
 
-	addToolResult(rendered: string): void {
-		this.chatContainer.addChild(new ToolResultMessageComponent(rendered));
+	addToolResult(
+		rendered: string,
+		toolName?: string,
+		toolResultData?: JsonValue,
+	): void {
+		this.chatContainer.addChild(
+			new ToolResultMessageComponent(rendered, toolName, toolResultData),
+		);
 		this.tui.requestRender();
 	}
 

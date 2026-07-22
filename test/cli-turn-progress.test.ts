@@ -169,11 +169,11 @@ test("each agent step renders its own assistant component in order", () => {
 	// Chronological order: every answer is appended after the prior tools.
 	assert.deepEqual(view.ops, [
 		"answer", // step 1 text
-		"tool:• bash: pwd",
+		"tool:pwd",
 		"answer", // step 2 text
-		"tool:• read: README",
+		"tool:README",
 		"answer", // step 3 text
-		"tool:• glob: docs/adr/**/*.md",
+		"tool:docs/adr/**/*.md",
 		"answer", // step 4 final conclusion
 	]);
 });
@@ -224,6 +224,6 @@ test("a step with no text does not emit an empty assistant bubble", () => {
 		current = applyTurnProgress(view, event, current);
 	}
 	// Only the final answer creates a component; the tool-only step adds none.
-	assert.deepEqual(view.ops, ["tool:• bash: pwd", "answer"]);
+	assert.deepEqual(view.ops, ["tool:pwd", "answer"]);
 	assert.match(view.assistants.at(-1)?.content ?? "", /Done\./);
 });

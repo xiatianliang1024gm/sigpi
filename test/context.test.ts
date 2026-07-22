@@ -1294,30 +1294,22 @@ test("buildMessages micro-compacts older tool results into placeholders", () => 
 	const kept = ["t4", "t5", "t6"].map(byId);
 	for (const t of cleared) {
 		assert.ok(t, "tool message must be present");
-		assert.match((t as { content: string }).content, /tool result omitted/);
+		assert.equal((t as { content: string }).content, "");
 	}
 	for (const t of kept) {
 		assert.ok(t, "tool message must be present");
-		assert.doesNotMatch(
-			(t as { content: string }).content,
-			/tool result omitted/,
-		);
+		assert.notEqual((t as { content: string }).content, "");
 	}
-	// Exactly three most-recent tool results are retained (budget + floor of 3).
+	// Exactly three most-recent tool results are cleared to empty.
 	assert.equal(
-		tools.filter((m) =>
-			/tool result omitted/.test((m as { content: string }).content),
-		).length,
+		tools.filter((m) => (m as { content: string }).content === "").length,
 		3,
 	);
 	// name + toolCallId are preserved on every tool message.
 	assert.equal((byId("t4") as { name?: string }).name, "read");
 	assert.equal((byId("t4") as { toolCallId?: string }).toolCallId, "t4");
-	// A cleared failed tool surfaces its error in the placeholder.
-	assert.match(
-		(byId("t2") as { content: string }).content,
-		/failed: boom detail message/,
-	);
+	// A cleared failed tool gets empty content (not error detail).
+	assert.equal((byId("t2") as { content: string }).content, "");
 	// A kept failed tool still shows its original error content.
 	assert.match(
 		(byId("t4") as { content: string }).content,

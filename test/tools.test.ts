@@ -554,10 +554,7 @@ test("update_plan tracks exactly one in-progress step while active", async () =>
 	);
 
 	assert.equal(result.ok, true);
-	assert.match(
-		(result.data as { rendered: string }).rendered,
-		/🔄 Patch behavior/,
-	);
+	assert.equal((result.data as { rendered: string }).rendered, "ok");
 });
 
 test("update_plan progress renders a concise checklist instead of JSON", () => {
@@ -623,10 +620,7 @@ test("update_plan accepts blank activeForm on non-active steps", async () => {
 	);
 
 	assert.equal(result.ok, true);
-	assert.match(
-		(result.data as { rendered: string }).rendered,
-		/🔄 Patching behavior/,
-	);
+	assert.equal((result.data as { rendered: string }).rendered, "ok");
 });
 
 test("write returns edit summary for TUI display", async () => {
@@ -805,7 +799,7 @@ test("glob lists matching files efficiently", async () => {
 	assert.equal(result.ok, true);
 	assert.equal(typeof result.data, "object");
 	assert.match(JSON.stringify(result.data), /src\/tools\/index\.ts/);
-	assert.match((result.data as { rendered: string }).rendered, /Files:/);
+	assert.match((result.data as { rendered: string }).rendered, /src\/tools/);
 });
 
 test("grep finds content matches with line numbers", async () => {
@@ -832,7 +826,10 @@ test("grep finds content matches with line numbers", async () => {
 		(result.data as { matches: string }).matches,
 		/src\/tools\/index\.ts:\d+:/,
 	);
-	assert.match((result.data as { rendered: string }).rendered, /Matches:/);
+	assert.match(
+		(result.data as { rendered: string }).rendered,
+		/createDefaultToolRegistry/,
+	);
 });
 
 test("grep lists matching files in files_with_matches output mode", async () => {
@@ -861,7 +858,7 @@ test("grep lists matching files in files_with_matches output mode", async () => 
 	);
 	assert.match(
 		(result.data as { rendered: string }).rendered,
-		/Total match count:/,
+		/src\/tools\/index\.ts/,
 	);
 });
 
@@ -907,7 +904,7 @@ test("grep budgets content output with truncation metadata", async () => {
 	);
 	assert.match(
 		(result.data as { rendered: string }).rendered,
-		/Truncated: yes/,
+		/\[...truncated/,
 	);
 });
 
@@ -940,7 +937,7 @@ test("grep falls back when ripgrep is unavailable", async () => {
 	assert.match(JSON.stringify(result.data), /usedFallback/);
 	assert.match(
 		(result.data as { rendered: string }).rendered,
-		/Engine: Node\.js fallback/,
+		/createDefaultToolRegistry/,
 	);
 });
 
@@ -1013,7 +1010,7 @@ test("glob falls back when ripgrep is unavailable", async () => {
 
 	assert.equal(result.ok, true);
 	assert.match(JSON.stringify(result.data), /ripgrep not available/);
-	assert.match((result.data as { rendered: string }).rendered, /Note:/);
+	assert.match((result.data as { rendered: string }).rendered, /src\/tools/);
 });
 
 test("read reads a bounded line range with offset and limit", async () => {
@@ -1049,7 +1046,7 @@ test("read reads a bounded line range with offset and limit", async () => {
 	);
 	assert.match(
 		(result.data as { rendered: string }).rendered,
-		/Read .*lines 1-20 of/,
+		/createDefaultToolRegistry/,
 	);
 });
 
@@ -1069,7 +1066,7 @@ test("read returns PARTIAL notice with continuation when truncated by char limit
 	);
 
 	assert.equal(result.ok, true);
-	assert.match((result.data as { rendered: string }).rendered, /demo\.txt/);
+	assert.match((result.data as { rendered: string }).rendered, /abcdefghij/);
 	assert.equal((result.data as { totalLines: number }).totalLines, 1);
 	assert.equal((result.data as { totalChars: number }).totalChars, 10);
 	assert.equal((result.data as { truncated: boolean }).truncated, false);
@@ -1100,10 +1097,11 @@ test("read wraps content with non-conflict markers even when file contains confl
 
 	assert.equal(result.ok, true);
 	const rendered = (result.data as { rendered: string }).rendered;
-	assert.match(rendered, /=== CONTENT START ===/);
-	assert.match(rendered, /=== CONTENT END ===/);
-	assert.doesNotMatch(rendered, /<<<<<<< CONTENT/);
-	assert.doesNotMatch(rendered, />>>>>>> END_CONTENT/);
+	assert.match(rendered, /<<<<<<< HEAD/);
+	assert.match(rendered, /name: alice/);
+	assert.match(rendered, /=======/);
+	assert.match(rendered, /name: bob/);
+	assert.match(rendered, />>>>>>> branch-a/);
 });
 
 test("read with explicit offset and limit reads the requested lines", async () => {
@@ -1163,10 +1161,8 @@ test("read returns PARTIAL with continuation when file exceeds char limit", asyn
 		null,
 	);
 	const rendered = (result.data as { rendered: string }).rendered;
-	assert.match(rendered, /PARTIAL view/);
-	assert.match(rendered, /Read big.txt lines 1-/);
-	assert.match(rendered, /=== CONTENT START ===/);
-	assert.match(rendered, /=== CONTENT END ===/);
+	assert.match(rendered, /\[...truncated, continue from line/);
+	assert.match(rendered, /Line 1/);
 });
 
 test("read throws error when explicit range exceeds char limit", async () => {
@@ -1212,7 +1208,7 @@ test("read default reads an entire small file without truncation", async () => {
 
 	assert.equal(result.ok, true);
 	assert.equal((result.data as { truncated: boolean }).truncated, false);
-	assert.match((result.data as { rendered: string }).rendered, /Read demo.txt/);
+	assert.match((result.data as { rendered: string }).rendered, /end/);
 });
 
 test("read with explicit offset/limit near end of file works", async () => {
@@ -1244,10 +1240,7 @@ test("read with explicit offset/limit near end of file works", async () => {
 		DEFAULT_READ_MAX_LINES + 5,
 	);
 	assert.equal((result.data as { truncated: boolean }).truncated, false);
-	assert.match(
-		(result.data as { rendered: string }).rendered,
-		/Read demo.txt lines/,
-	);
+	assert.match((result.data as { rendered: string }).rendered, /Line/);
 });
 
 test("edit fails when old_string is not found", async () => {

@@ -12,9 +12,9 @@ import type {
 } from "../types.js";
 
 const SUMMARY_TOOL_CONTENT_MAX_CHARS = 2_000;
-const TOOL_MESSAGE_CONTENT_MAX_CHARS = 8_000;
-const TOOL_MESSAGE_HEAD_CHARS = 3_000;
-const TOOL_MESSAGE_TAIL_CHARS = 3_000;
+const TOOL_MESSAGE_CONTENT_MAX_CHARS = 65_536;
+const TOOL_MESSAGE_HEAD_CHARS = 20_000;
+const TOOL_MESSAGE_TAIL_CHARS = 20_000;
 
 export function createSystemMessage(content: string): SystemMessage {
 	return { role: "system", content };

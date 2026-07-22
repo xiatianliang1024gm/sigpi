@@ -63,23 +63,9 @@ function captureConsoleLog(operation: () => void): string[] {
 }
 
 test("createCliProgressReporter clear mode prints readable process output", () => {
-	const longResult = [
-		"TOOL: bash",
-		"STATUS: ok",
-		"RESULT:",
-		"Command: pwd",
-		"Mode: workspace_write",
-		"Shell: zsh on linux",
-		"Command succeeded: yes",
-		"Exit code: 0",
-		"Signal: (none)",
-		"Timed out: no",
-		"STDOUT:",
-		"=== CONTENT START ===",
-		"x".repeat(2400),
-		"=== CONTENT END ===",
-		"STDERR: (empty)",
-	].join("\n");
+	// toolResult is now just the rendered text (e.g. bash stdout), not the
+	// TOOL:/STATUS:/RESULT: envelope.
+	const longResult = "x".repeat(2400);
 	const reporter = createCliProgressReporter("detailed");
 
 	const lines = captureConsoleLog(() => {
@@ -112,8 +98,6 @@ test("createCliProgressReporter clear mode prints readable process output", () =
 	assert.equal(visibleLines[0], "> inspect the repo");
 	assert.equal(visibleLines[1], "• Assistant: I will inspect the files first.");
 	assert.equal(visibleLines[2], "• Ran shell pwd");
-	assert.equal(visibleLines.includes("  TOOL: bash"), false);
-	assert.equal(visibleLines.includes("  Command: pwd"), false);
 	assert.equal(
 		lines.some((line) => line.includes("\x1B[")),
 		true,
@@ -142,7 +126,7 @@ test("createCliProgressReporter quiet mode preserves minimal agent output", () =
 			type: "tool_execution_finished",
 			toolName: "bash",
 			toolOk: true,
-			toolResult: "TOOL: bash\nSTATUS: ok\nRESULT:\nhello",
+			toolResult: "hello",
 		});
 		reporter({
 			type: "turn_finished",
@@ -150,10 +134,10 @@ test("createCliProgressReporter quiet mode preserves minimal agent output", () =
 		});
 	});
 
+	// Compact mode shows no body on tool success.
 	assert.deepEqual(lines, [
 		"> inspect the repo",
 		"\u23FA\uFE0E Shell pwd",
-		"  \u23BF\uFE0E hello",
 		"\u2714\uFE0E Done (1.2s)",
 	]);
 });
@@ -221,11 +205,7 @@ test("createCliProgressReporter compact mode groups parallel tool calls from one
 		!shellLine?.startsWith("    "),
 		"grouped tool start is not indented four spaces",
 	);
-	const hello1 = visibleLines.find((line) => line.includes("hello1"));
-	assert.ok(
-		hello1?.startsWith("    "),
-		"grouped tool result is indented four spaces",
-	);
+	// Compact mode shows no body on tool success, so hello1 is not visible.
 	const doneLine = visibleLines.at(-1);
 	assert.ok(doneLine?.includes("Done"), "turn still ends with Done");
 });

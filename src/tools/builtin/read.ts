@@ -9,11 +9,7 @@ import {
 import type { ToolDefinition } from "../../types.js";
 import { resolveWorkspacePath } from "../path-utils.js";
 import { ReadTracker } from "../read-tracker.js";
-import {
-	formatRawBlock,
-	joinRenderedSections,
-	withRendered,
-} from "../render.js";
+import { joinRenderedSections, withRendered } from "../render.js";
 
 export const DEFAULT_READ_MAX_LINES = 2_000;
 export const DEFAULT_READ_MAX_CHARS = 50 * 1_024;
@@ -220,29 +216,11 @@ export function createReadTool(tracker: ReadTracker): ToolDefinition<ReadArgs> {
 				};
 			}
 
-			// Build summary
-			const size =
-				totalChars < 1024
-					? `${totalChars} chars`
-					: `${totalChars} chars (~${(totalChars / 1024).toFixed(1)}KB)`;
-
-			const summaryLine =
-				returnedLineStart !== null && returnedLineEnd !== null
-					? `[Read ${relative} lines ${returnedLineStart}-${returnedLineEnd} of ${totalLines} (${size})]`
-					: `[Read ${relative} (${size}, ${totalLines} lines)]`;
-
-			const partialNotice =
-				truncated && !hasExplicitRange && continuation
-					? `[PARTIAL view – received lines ${returnedLineStart}-${returnedLineEnd} of ${totalLines} (${renderedChars} of ${DEFAULT_READ_MAX_CHARS} chars used). ` +
-						`Use read({"file_path":"${relative}","offset":${continuation.nextOffset},"limit":${continuation.suggestedLimit}}) to continue reading from line ${continuation.nextOffset + 1}.]`
-					: null;
-
 			const rendered = joinRenderedSections([
-				summaryLine,
-				partialNotice,
-				formatRawBlock("Content", renderedContent || "(empty)", {
-					omitLabel: true,
-				}),
+				renderedContent || "(empty)",
+				truncated && !hasExplicitRange && continuation
+					? `[...truncated, continue from line ${continuation.nextOffset + 1}]`
+					: null,
 			]);
 
 			return withRendered(

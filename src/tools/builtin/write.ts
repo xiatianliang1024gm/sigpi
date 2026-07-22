@@ -7,7 +7,7 @@ import { createWriteSummary } from "../edit-summary.js";
 import { resolveWorkspacePath } from "../path-utils.js";
 import type { ReadTracker } from "../read-tracker.js";
 import { ToolExecutionError } from "../registry.js";
-import { joinRenderedSections, withRendered } from "../render.js";
+import { withRendered } from "../render.js";
 
 const writeSchema = z.object({
 	file_path: z.string().min(1),
@@ -71,11 +71,7 @@ export function createWriteTool(
 					created: previousContent === null,
 					editSummary: createWriteSummary(relative, previousContent, content),
 				},
-				joinRenderedSections([
-					`Path: ${relative}`,
-					`Bytes written: ${Buffer.byteLength(content, "utf8")}`,
-					`Created: ${previousContent === null ? "yes" : "no"}`,
-				]),
+				"ok",
 			);
 		},
 		describeProgress(args) {

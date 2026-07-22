@@ -349,7 +349,7 @@ export class ConversationContext {
 		this.lastUsage = null;
 		for (let i = this.recentMessages.length - 1; i >= 0; i -= 1) {
 			const message = this.recentMessages[i];
-			if (!message || message.role !== "assistant") {
+			if (message?.role !== "assistant") {
 				continue;
 			}
 			const entry = this.entries.find(
@@ -793,17 +793,7 @@ export function microCompactMessages(
 }
 
 function makeOmittedToolMessage(message: ToolMessage): ToolMessage {
-	const failed = /STATUS:\s*error|ERROR:/i.test(message.content);
-	const placeholder = failed
-		? `[tool result omitted: ${message.name} failed: ${firstErrorLine(message.content)}]`
-		: `[tool result omitted: ${message.name} ok, ${message.content.length} chars]`;
-	return { ...message, content: placeholder };
-}
-
-function firstErrorLine(content: string): string {
-	const match = content.match(/ERROR:\s*(.+)/);
-	const line = match?.[1]?.trim() ?? "unknown error";
-	return line.length > 120 ? `${line.slice(0, 117)}...` : line;
+	return { ...message, content: "" };
 }
 
 /**

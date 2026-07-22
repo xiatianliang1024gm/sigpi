@@ -324,13 +324,11 @@ function renderResult(result: {
 	files: string[];
 	stderr: string;
 }): string {
+	const marker = result.truncated
+		? `[...truncated, ${result.returned} of ${result.totalFound} results shown]`
+		: null;
 	return joinRenderedSections([
-		`Pattern: ${result.pattern}`,
-		`Path: ${result.path ?? "(root)"}`,
-		`Matches: ${result.returned} returned${result.truncated ? ` of ${result.totalFound}` : ""}`,
-		result.files.length > 0
-			? ["Files:", ...result.files.map((file) => `- ${file}`)].join("\n")
-			: "Files:\n- (none)",
-		result.stderr ? `Note: ${result.stderr}` : null,
+		result.files.length > 0 ? result.files.join("\n") : "(none)",
+		marker,
 	]);
 }

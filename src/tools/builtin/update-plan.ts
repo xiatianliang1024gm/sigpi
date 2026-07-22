@@ -79,7 +79,7 @@ export function createUpdatePlanTool(
 					updatedAt: state.updatedAt,
 					plan: state.items,
 				},
-				renderPlan(state),
+				"ok",
 			);
 		},
 		describeProgress(args) {
@@ -133,7 +133,7 @@ function renderPlanProgress(
 	return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
-function renderPlan(state: PlanState): string {
+function _renderPlan(state: PlanState): string {
 	return joinRenderedSections([
 		state.explanation ? `Note: ${state.explanation}` : null,
 		"Plan:",

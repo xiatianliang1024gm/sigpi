@@ -434,11 +434,8 @@ export function applyTurnProgress(
 	}
 
 	if (event.type === "tool_execution_finished" && event.toolName) {
-		const ok = event.toolOk === true;
 		const body = event.toolResult ?? event.message ?? "";
-		view.addToolResult(
-			`${ok ? "•" : "✗"} ${event.toolName}${body ? `: ${body}` : ""}`,
-		);
+		view.addToolResult(body, event.toolName, event.toolResultData);
 		return currentAssistant;
 	}
 
@@ -707,7 +704,11 @@ class ConsoleReplView implements ReplView {
 	}
 	beginTurn(): void {}
 	endTurn(): void {}
-	addToolResult(rendered: string): void {
+	addToolResult(
+		rendered: string,
+		_toolName?: string,
+		_toolResultData?: JsonValue,
+	): void {
 		this.writeLineImpl(rendered);
 	}
 	appendSystem(text: string, tone: "error" | "info" = "info"): void {
@@ -795,25 +796,6 @@ function quietStripInlineCode(value: string): string {
 function quietTruncate(value: string, max: number): string {
 	if (value.length <= max) return value;
 	return `${value.slice(0, Math.max(0, max - 1)).trimEnd()}\u2026`;
-}
-
-function quietResultSummary(result: string, ok: boolean): string {
-	let inlineError = "";
-	let firstContent = "";
-	for (const raw of result.split("\n")) {
-		const line = raw.trim();
-		if (line === "") continue;
-		if (line.startsWith("TOOL:")) continue;
-		if (line.startsWith("STATUS:")) continue;
-		if (line.startsWith("RESULT:")) continue;
-		if (line.startsWith("DETAILS:")) continue;
-		if (line.startsWith("ERROR:")) {
-			inlineError = line.slice("ERROR:".length).trim();
-			continue;
-		}
-		if (!firstContent) firstContent = line;
-	}
-	return ok ? firstContent : inlineError || firstContent;
 }
 
 function formatQuietElapsed(ms: number): string {
@@ -919,21 +901,19 @@ function renderCompactProgressEvent(
 				);
 				return;
 			}
+			// On success, no extra output. On failure, show error summary.
+			if (ok) return;
+
 			const max =
 				typeof process.stdout.columns === "number" &&
 				process.stdout.columns > 20
 					? process.stdout.columns - 4
 					: 200;
-			const raw = quietResultSummary(event.toolResult ?? "", ok);
-			const body = quietTruncate(
-				raw.length > 0 ? raw : ok ? "done" : "error",
-				max,
-			);
+			const raw = event.toolResult ?? "";
+			const body = quietTruncate(raw.length > 0 ? raw : "error", max);
 			const indent = state.groupActive ? "    " : "  ";
 			console.log(
-				`${indent}${
-					ok ? qDim(QUIET_GLYPH_RESULT) : qRed(QUIET_GLYPH_RESULT)
-				} ${ok ? qDim(body) : qRed(body)}${suffix}`,
+				`${indent}${qRed(QUIET_GLYPH_RESULT)} ${qRed(body)}${suffix}`,
 			);
 			return;
 		}
@@ -1035,7 +1015,7 @@ function renderClearProgressEvent(
 			if (event.toolResult) {
 				printIndentedBlock(
 					truncateToolResult(
-						summarizeClearToolResult(
+						summarizeToolResultForDisplay(
 							event.toolName,
 							event.toolResult,
 							event.toolOk,
@@ -1084,7 +1064,7 @@ function printIndentedBlock(value: string): void {
 	}
 }
 
-function summarizeClearToolResult(
+function summarizeToolResultForDisplay(
 	toolName: string | undefined,
 	value: string,
 	ok: boolean | undefined,
@@ -1097,104 +1077,22 @@ function summarizeClearToolResult(
 		}
 	}
 
-	if (toolName === "bash") {
-		return summarizeRunShellResult(value, ok);
-	}
-
 	if (toolName === "update_plan") {
 		// Plan content is already rendered in tool_execution_started's detail;
 		// avoid duplicating it here.
 		return "";
 	}
 
-	return stripToolResultEnvelope(value);
+	if (toolName === "bash") {
+		return value || (ok ? "ok" : "Command failed.");
+	}
+
+	// read, grep, glob, and everything else: show the pure result directly
+	return value || (ok ? "" : "error");
 }
 
 function isFileEditTool(toolName: string | undefined): boolean {
 	return toolName === "write" || toolName === "edit";
-}
-
-function stripToolResultEnvelope(value: string): string {
-	const lines = value.split("\n");
-	const resultIndex = lines.indexOf("RESULT:");
-	const detailsIndex = lines.indexOf("DETAILS:");
-	const errorLine = lines.find((line) => line.startsWith("ERROR:"));
-
-	if (resultIndex >= 0) {
-		return (
-			lines
-				.slice(resultIndex + 1)
-				.join("\n")
-				.trim() || "(empty result)"
-		);
-	}
-
-	if (detailsIndex >= 0) {
-		const detail = lines
-			.slice(detailsIndex + 1)
-			.join("\n")
-			.trim();
-		return [errorLine, detail].filter(Boolean).join("\n");
-	}
-
-	return value;
-}
-
-function summarizeRunShellResult(
-	value: string,
-	ok: boolean | undefined,
-): string {
-	const stdout = extractRawBlock(value, "STDOUT");
-	const stderr = extractRawBlock(value, "STDERR");
-	const errorLine = value.split("\n").find((line) => line.startsWith("ERROR:"));
-	const sections: string[] = [];
-
-	if (ok === false && errorLine) {
-		sections.push(errorLine);
-	}
-	if (stdout && stdout !== "(empty)") {
-		sections.push(stdout);
-	}
-	if (stderr && stderr !== "(empty)") {
-		sections.push(`STDERR:\n${stderr}`);
-	}
-
-	return (
-		sections.join("\n").trim() || (ok === false ? "Command failed." : "ok")
-	);
-}
-
-function extractRawBlock(
-	value: string,
-	label: "STDOUT" | "STDERR",
-): string | null {
-	const lines = value.split("\n");
-	const labelIndex = lines.findIndex(
-		(line) => line === `${label}:` || line.startsWith(`${label} (`),
-	);
-
-	if (labelIndex < 0) {
-		const emptyLine = lines.find((line) => line === `${label}: (empty)`);
-		return emptyLine ? "(empty)" : null;
-	}
-
-	if (lines[labelIndex]?.endsWith("(empty)")) {
-		return "(empty)";
-	}
-
-	const contentStartIndex =
-		lines[labelIndex + 1] === "=== CONTENT START ==="
-			? labelIndex + 2
-			: labelIndex + 1;
-	let contentEndIndex = lines.findIndex(
-		(line, index) =>
-			index > contentStartIndex && line.startsWith("=== CONTENT END ==="),
-	);
-	if (contentEndIndex < 0) {
-		contentEndIndex = lines.length;
-	}
-
-	return lines.slice(contentStartIndex, contentEndIndex).join("\n").trim();
 }
 
 function truncateToolResult(value: string): string {

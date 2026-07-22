@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -15,7 +16,13 @@ export function resolveWorkspacePath(
 	cwd: string,
 	relativePath: string,
 ): { resolved: string; relative: string } {
-	const resolved = path.resolve(cwd, relativePath);
+	let resolved = path.resolve(cwd, relativePath);
 	const relative = path.relative(cwd, resolved);
+	try {
+		resolved = realpathSync(resolved);
+	} catch {
+		// Path doesn't exist yet (e.g., write tool creating a new file).
+		// Keep the lexically-resolved path.
+	}
 	return { resolved, relative };
 }

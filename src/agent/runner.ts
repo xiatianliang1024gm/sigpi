@@ -120,7 +120,7 @@ function findRecentDuplicateToolCall(
 
 	for (let index = currentAssistantIndex - 1; index >= 0; index -= 1) {
 		const message = turnMessages[index];
-		if (!message || message.role !== "assistant") {
+		if (message?.role !== "assistant") {
 			continue;
 		}
 		assistantCount += 1;
@@ -153,26 +153,13 @@ function findLastAssistantMessageIndex(
 	return null;
 }
 
-function buildDuplicateToolCallResult(args: {
+function buildDuplicateToolCallResult(_args: {
 	toolName: string;
 	stepsBack: number;
 }): ToolExecutionResult {
-	const summary = `You already called ${args.toolName} with equivalent arguments ${args.stepsBack} assistant turn(s) ago in this turn. Reuse the previous tool result from your conversation history, or change the arguments (different query, glob, range, or path) to read new content.`;
 	return {
 		ok: true,
-		data: {
-			repeated: true,
-			deduplicated: true,
-			toolName: args.toolName,
-			stepsBack: args.stepsBack,
-		},
-		details: {
-			repeated: true,
-			deduplicated: true,
-			toolName: args.toolName,
-			stepsBack: args.stepsBack,
-			rendered: summary,
-		},
+		data: "[repeated, see previous result]",
 	};
 }
 

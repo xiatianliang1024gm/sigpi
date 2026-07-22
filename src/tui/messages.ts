@@ -1,5 +1,7 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { JsonValue } from "../types.js";
+import { formatFileEditResultData } from "./file-edit-renderer.js";
 
 const ANSI_DIM = "\x1B[2m";
 const ANSI_RESET = "\x1B[0m";
@@ -99,14 +101,23 @@ export class AssistantMessageComponent implements Component {
 /** Rendered tool result (already formatted by `formatToolExecutionResult`). */
 export class ToolResultMessageComponent implements Component {
 	private readonly rendered: string;
+	private readonly toolName?: string;
+	private readonly toolResultData?: JsonValue;
 
-	constructor(rendered: string) {
+	constructor(rendered: string, toolName?: string, toolResultData?: JsonValue) {
 		this.rendered = rendered;
+		this.toolName = toolName;
+		this.toolResultData = toolResultData;
 	}
 
 	render(width: number, maxHeight?: number): string[] {
+		const displayText = formatTuiToolResult(
+			this.rendered,
+			this.toolName,
+			this.toolResultData,
+		);
 		const lines: string[] = [];
-		for (const raw of this.rendered.split("\n")) {
+		for (const raw of displayText.split("\n")) {
 			for (const line of wrapTextWithAnsi(raw, width)) {
 				lines.push(line);
 			}
@@ -115,6 +126,32 @@ export class ToolResultMessageComponent implements Component {
 	}
 
 	invalidate(): void {}
+}
+
+function formatTuiToolResult(
+	rendered: string,
+	toolName?: string,
+	toolResultData?: JsonValue,
+): string {
+	if (!toolName || !rendered) {
+		return rendered;
+	}
+
+	// update_plan content is already rendered in tool_execution_started
+	if (toolName === "update_plan") {
+		return "";
+	}
+
+	// edit/write: render a line-numbered diff from editSummary in data
+	if (toolName === "edit" || toolName === "write") {
+		const editLines = formatFileEditResultData(toolResultData);
+		if (editLines.length > 0) {
+			return editLines.join("\n");
+		}
+	}
+
+	// read, grep, glob, bash, and everything else: show the pure result
+	return rendered;
 }
 
 /** System line: errors, compaction notices, interruptions. */
