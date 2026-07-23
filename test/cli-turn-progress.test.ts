@@ -68,7 +68,7 @@ class RecordingReplView implements ReplView {
 	beginTurn(): void {}
 	endTurn(): void {}
 	appendSystem(): void {}
-	setStatus(): void {}
+	setStatusBarModel(): void {}
 	writeLine(): void {}
 	writeError(): void {}
 }

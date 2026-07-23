@@ -25,12 +25,12 @@ import {
 	UserMessageComponent,
 } from "../src/tui/messages.js";
 import { moveSelectedIndex } from "../src/tui/move-selected-index.js";
-import { SigPiTerminal } from "../src/tui/sigpi-terminal.js";
 import {
 	composeStatusBar as renderStatus,
 	StatusBarComponent,
 	type StatusBarModel,
 } from "../src/tui/status-bar.js";
+import {VirtualTerminal} from "../src/tui/virtual-terminal.js";
 
 class FakeTerminal {
 	public columns = 20;
@@ -214,34 +214,6 @@ test("formatFileEditSummaries/ResultData now render through FileEditComponent", 
 	);
 });
 
-test("SigPiTerminal adapts a Pi-tui Terminal and exposes moveTo/clearRenderedRows", () => {
-	const inner = new FakeTerminal();
-	const terminal = new SigPiTerminal(inner);
-
-	// Delegated Pi-tui surface.
-	terminal.write("hello");
-	assert.equal(inner.writes.at(-1), "hello");
-	assert.equal(terminal.columns, inner.columns);
-	assert.equal(terminal.rows, inner.rows);
-	assert.equal(terminal.kittyProtocolActive, false);
-	terminal.moveBy(2);
-	assert.equal(inner.writes.at(-1), "<moveBy:2>");
-	terminal.clearLine();
-	assert.equal(inner.writes.at(-1), "<clear-line>");
-
-	// SigPi-specific additions emit real escape sequences through the inner
-	// terminal (they are not part of Pi-tui's Terminal interface).
-	terminal.moveTo(3, 4);
-	assert.ok(
-		inner.writes.some((w) => w.includes("\x1B[3;4H")),
-		"moveTo should emit a cursor-positioning escape sequence",
-	);
-	terminal.clearRenderedRows(2);
-	assert.ok(
-		inner.writes.some((w) => w.includes("\x1B[2A")),
-		"clearRenderedRows should move the cursor back to the start row",
-	);
-});
 
 test("Pi-tui TUI mounts on FakeTerminal and renders a Text component", async () => {
 	const terminal = new FakeTerminal();
