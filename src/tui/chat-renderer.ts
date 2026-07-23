@@ -7,7 +7,7 @@ import {
 	type Component,
 	Container,
 	type Editor,
-	matchesKey,
+	matchesKey, ProcessTerminal,
 	TUI,
 } from "@earendil-works/pi-tui";
 import type { ChatCommandMetadata } from "../chat-commands.js";
@@ -19,8 +19,8 @@ import {
 	ToolResultMessageComponent,
 	UserMessageComponent,
 } from "./messages.js";
-import { ProcessTerminal, SigPiTerminal } from "./sigpi-terminal.js";
-import { StatusBarComponent } from "./status-bar.js";
+import {StatusBarComponent, StatusBarModel} from "./status-bar.js";
+import {buildStatusBarModel} from "../chat-repl.js";
 
 const ENTER_ALT_SCREEN = "\x1b[?1049h";
 const LEAVE_ALT_SCREEN = "\x1b[?1049l";
@@ -60,7 +60,7 @@ export interface ReplView {
 		toolResultData?: JsonValue,
 	): void;
 	appendSystem(text: string, tone?: "error" | "info"): void;
-	setStatus(model: StatusBarComponent): void;
+	setStatusBarModel(model: StatusBarModel): void;
 	writeLine(line: string): void;
 	writeError(line: string): void;
 	getTuiInstance(): TUI;
@@ -68,107 +68,12 @@ export interface ReplView {
 
 type Phase = "idle" | "turn";
 
-/**
- * Persistent REPL renderer (ADR 0025 A1). Owns a single Pi-tui `TUI` for the
- * whole session; the transcript is a `chatContainer` of per-message components
- * (user / assistant / tool-result / system) scrolled by Pi-tui's viewport. The
- * status bar is a persistent footer; the editor is a single persistent child
- * re-focused each idle phase. All live output is a component — never
- * `console.log` while the `TUI` is alive (that desyncs Pi-tui's viewport).
- */
-export class TranscriptViewport implements Component {
-	private readonly children: Component[] = [];
-	private topIndex = 0;
-	private following = true;
-	private cachedAvailable = 1;
-	private cachedTotal = 0;
-
-	constructor(
-		private readonly getRows: () => number,
-		private readonly getFooterHeight: () => number,
-	) {}
-
-	addChild(component: Component): void {
-		this.children.push(component);
-	}
-
-	/** Scroll up one page; anchors the view to historical content. */
-	scrollUp(): void {
-		this.following = false;
-		const step = Math.max(1, this.cachedAvailable - 1);
-		this.topIndex = Math.max(0, this.topIndex - step);
-	}
-
-	/** Scroll down one page; resumes following the latest at the bottom. */
-	scrollDown(): void {
-		const step = Math.max(1, this.cachedAvailable - 1);
-		const maxTop = Math.max(0, this.cachedTotal - this.cachedAvailable);
-		this.topIndex = Math.min(this.topIndex + step, maxTop);
-		if (this.topIndex >= maxTop) this.following = true;
-	}
-
-	/** Jump back to the live tail (used when the user submits input). */
-	scrollToBottom(): void {
-		this.following = true;
-		this.topIndex = 0;
-	}
-
-	render(width: number): string[] {
-		const lines: string[] = [];
-		for (const child of this.children) {
-			for (const line of child.render(width)) {
-				lines.push(line);
-			}
-		}
-		const rows = Math.max(1, this.getRows());
-		const footerHeight = Math.max(0, this.getFooterHeight());
-		const available = Math.max(1, rows - footerHeight);
-		this.cachedAvailable = available;
-		this.cachedTotal = lines.length;
-
-		// Bottom-anchor the transcript just above the fixed footer and return a
-		// constant height so the footer's neighbour (the live answer) sits at a
-		// stable line — that keeps Pi-tui's differential redraw painting the
-		// streamed answer and footer (the earlier "answer not rendered" bug).
-		//
-		// When scrolled up, the view is anchored to absolute content indices,
-		// which stay stable because the transcript only ever appends. Older
-		// messages therefore remain reviewable instead of being dropped.
-		if (lines.length <= available) {
-			this.following = true;
-			this.topIndex = 0;
-			return [...new Array(available - lines.length).fill(""), ...lines];
-		}
-		const maxTop = lines.length - available;
-		if (this.following) {
-			this.topIndex = maxTop;
-			return lines.slice(this.topIndex, this.topIndex + available);
-		}
-		this.topIndex = Math.min(this.topIndex, maxTop);
-		// Reserve the top line for a scroll hint so the viewport height stays
-		// constant (footer never shifts) even while reviewing history.
-		const atTop = this.topIndex === 0;
-		const hint = atTop
-			? "↑ 已到顶部 · 滚轮下/PgDn 回到底部"
-			: "↑/滚轮上 上翻历史 · 滚轮下/PgDn 回到底部";
-		const content = lines.slice(this.topIndex, this.topIndex + (available - 1));
-		return [hint, ...content];
-	}
-
-	invalidate(): void {}
-}
-
 export class ChatRenderer implements ReplView {
 	private readonly tui: TUI;
 	private readonly input: ReadStream;
 	private readonly output: WriteStream;
-	private readonly chatContainer = new TranscriptViewport(
-		() => this.output.rows ?? 24,
-		() => this.footerHeight,
-	);
-	private readonly statusBar = new StatusBarComponent();
-	private footerHeight = 2;
-	private readonly promptText: string;
+	private readonly statusBar : StatusBarComponent;
+	private readonly chatContainer = new Container();
 	private readonly commands: readonly ChatCommandMetadata[];
 	private editor: Editor | null = null;
 	private editorUnsub: (() => void) | null = null;
@@ -181,18 +86,16 @@ export class ChatRenderer implements ReplView {
 		input?: ReadStream;
 		output?: WriteStream;
 		prompt?: string;
+		statusBarModel?: StatusBarModel;
 		commands?: readonly ChatCommandMetadata[];
 	}) {
 		this.input = options.input ?? processInput;
 		this.output = options.output ?? processOutput;
-		this.promptText = options.prompt ?? "> ";
+		this.statusBar = new StatusBarComponent(options.statusBarModel);
 		this.commands = options.commands ?? [];
-		const terminal = new SigPiTerminal(
-			new ProcessTerminal(this.input, this.output),
-		);
+		const terminal = new ProcessTerminal();
 		this.tui = new TUI(terminal, true);
 		this.tui.setClearOnShrink(false);
-		this.tui.addChild(this.chatContainer);
 	}
 
 	getTuiInstance(): TUI {
@@ -212,65 +115,34 @@ export class ChatRenderer implements ReplView {
 	}
 
 	start(): void {
-		const bottomBar = new Container();
 		this.enterAltScreen();
 		process.once("exit", () => this.leaveAltScreen());
-		bottomBar.addChild(this.statusBar);
-		const { editor } = buildEditor(this.tui, {
-			input: this.input,
-			output: this.output,
-			prompt: this.promptText,
+		const editor = buildEditor(this.tui, {
 			commands: this.commands,
-			statusBarComponent: this.statusBar,
-			parent: bottomBar,
 		});
+		this.tui.addChild(this.chatContainer);
 		this.editor = editor;
-		this.footerHeight = bottomBar.render(this.output.columns ?? 80).length;
+		this.tui.addChild(editor);
+		this.tui.setFocus(editor);
+		this.tui.addChild(this.statusBar);
+
 		editor.onSubmit = (text) => this.handleSubmit(text);
+		editor.onChange = this.onEditorChange;
+
 		this.editorUnsub = this.tui.addInputListener((data) =>
 			this.handleInterruptKey(data),
 		);
-		this.tui.addInputListener((data) => {
-			if (matchesKey(data, "pageUp")) {
-				this.chatContainer.scrollUp();
-				this.tui.requestRender();
-				return { consume: true };
-			}
-			if (matchesKey(data, "pageDown")) {
-				this.chatContainer.scrollDown();
-				this.tui.requestRender();
-				return { consume: true };
-			}
-			// Any SGR mouse report (wheel, click, drag) is intercepted here and
-			// never forwarded to the focused editor — otherwise a wheel could be
-			// read by the editor as an Up/Down arrow and switch input history.
-			// Wheel events set bit 6 (0x40); bit 0 gives direction (0 = up,
-			// 1 = down). Modifier bits (shift 0x04 / meta 0x08 / control 0x10)
-			// and the motion bit (0x20) are OR'd in by some terminals and are
-			// ignored when deciding direction.
-			const mouse = /^\x1b\[<(\d+);\d+;\d+[Mm]/.exec(data);
-			if (mouse) {
-				const button = Number(mouse[1]);
-				if (button & 0x40) {
-					if (button & 0x01) {
-						this.chatContainer.scrollDown();
-					} else {
-						this.chatContainer.scrollUp();
-					}
-					this.tui.requestRender();
-				}
-				return { consume: true };
-			}
-			return undefined;
-		});
-		this.tui.addChild(bottomBar);
 		this.tui.start();
 		// Enable SGR mouse tracking only after the TUI has taken over the
 		// terminal (raw mode + alternate screen) so a terminal startup sequence
 		// cannot reset it. Paired with DISABLE_MOUSE_TRACKING on leave.
 		this.output.write(ENABLE_MOUSE_TRACKING);
-		renderInlineNow(this.tui);
 	}
+
+	onEditorChange(text:string):void {
+		let t1 = text;
+	}
+
 
 	stop(): void {
 		this.editorUnsub?.();
@@ -278,7 +150,7 @@ export class ChatRenderer implements ReplView {
 		this.leaveAltScreen();
 	}
 
-	readInput(_prompt = this.promptText): Promise<string | null> {
+	readInput(_prompt = ""): Promise<string | null> {
 		this.phase = "idle";
 		if (this.editor) {
 			this.tui.setFocus(this.editor);
@@ -333,8 +205,8 @@ export class ChatRenderer implements ReplView {
 		this.tui.requestRender();
 	}
 
-	setStatus(model: StatusBarComponent): void {
-		this.statusBar.setModel(model.getModel());
+	setStatusBarModel(model: StatusBarModel): void {
+		this.statusBar.setModel(model);
 		this.tui.requestRender();
 	}
 
@@ -358,17 +230,17 @@ export class ChatRenderer implements ReplView {
 	}
 
 	private handleSubmit(text: string): void {
-		if (!text.trim()) {
+		const trimText = text.trim();
+		if (!trimText) {
 			return;
 		}
-		this.chatContainer.scrollToBottom();
-		this.editor?.addToHistory(text);
+		this.editor?.addToHistory(trimText);
 		if (this.phase === "idle") {
 			const resolve = this.pendingResolve;
 			this.pendingResolve = null;
-			resolve?.(text);
+			resolve?.(trimText);
 		} else {
-			this.queuedLines.push(text);
+			this.queuedLines.push(trimText);
 		}
 	}
 
@@ -385,8 +257,4 @@ export class ChatRenderer implements ReplView {
 		}
 		return undefined;
 	}
-}
-
-function renderInlineNow(tui: TUI): void {
-	(tui as unknown as { doRender(): void }).doRender();
 }

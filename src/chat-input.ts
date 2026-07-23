@@ -2,14 +2,13 @@ import { stdin as processInput, stdout as processOutput } from "node:process";
 import { createInterface } from "node:readline/promises";
 import type { ReadStream, WriteStream } from "node:tty";
 import {
-	type Container,
+	Text,
 	Editor,
 	type EditorTheme,
 	TUI,
+	ProcessTerminal,
 } from "@earendil-works/pi-tui";
 import type { ChatCommandMetadata } from "./chat-commands.js";
-import { ProcessTerminal, SigPiTerminal } from "./tui/sigpi-terminal.js";
-import { SlashAutocompleteProvider } from "./tui/slash-autocomplete.js";
 import { StatusBarComponent } from "./tui/status-bar.js";
 
 export interface ChatInputOptions {
@@ -18,7 +17,6 @@ export interface ChatInputOptions {
 	prompt?: string;
 	commands?: readonly ChatCommandMetadata[];
 	statusBarComponent?: StatusBarComponent | null;
-	statusBarText?: string;
 }
 
 /**
@@ -61,12 +59,6 @@ function makeStatusBar(text?: string): StatusBarComponent | null {
 	return statusBar;
 }
 
-interface EditorSetup {
-	editor: Editor;
-	statusBar: StatusBarComponent | null;
-	ownsStatusBar: boolean;
-}
-
 /**
  * Build the editor (+ optional status bar) as children of `tui` and focus it.
  * Shared by the standalone prompter and the persistent-REPL renderer so the
@@ -77,35 +69,21 @@ interface EditorSetup {
 export function buildEditor(
 	tui: TUI,
 	opts: {
-		input: ReadStream;
-		output: WriteStream;
-		prompt: string;
 		commands: readonly ChatCommandMetadata[];
-		statusBarComponent?: StatusBarComponent | null;
-		statusBarText?: string;
-		parent?: Container;
 	},
-): EditorSetup {
+): Editor {
 	const editor = new Editor(tui, EDITOR_THEME, { paddingX: 0 });
-	editor.setAutocompleteProvider(
-		new SlashAutocompleteProvider(
-			opts.commands.map((command) => ({
-				name: command.name,
-				description: command.description,
-			})),
-			process.cwd(),
-		),
-	);
-	const provided = opts.statusBarComponent ?? null;
-	const statusBar = provided ?? makeStatusBar(opts.statusBarText);
-	const ownsStatusBar = statusBar !== null && provided === null;
-	const mount = opts.parent ?? tui;
-	if (ownsStatusBar && statusBar) {
-		mount.addChild(statusBar);
-	}
-	mount.addChild(editor);
-	tui.setFocus(editor);
-	return { editor, statusBar, ownsStatusBar };
+	// editor.setAutocompleteProvider(
+	// 	new SlashAutocompleteProvider(
+	// 		opts.commands.map((command) => ({
+	// 			name: command.name,
+	// 			description: command.description,
+	// 		})),
+	// 		process.cwd(),
+	// 	),
+	// );
+
+	return editor;
 }
 
 /**
@@ -131,7 +109,7 @@ export async function readChatInput(
 	}
 
 	return new Promise<string | null>((resolve) => {
-		const terminal = new SigPiTerminal(new ProcessTerminal(input, output));
+		const terminal = new ProcessTerminal();
 		// Pi-tui renders inline from the current cursor and never clears the
 		// screen; disable shrink-clearing so the transcript above is preserved.
 		const tui = new TUI(terminal, true);
@@ -150,15 +128,14 @@ export async function readChatInput(
 			resolve(value);
 		};
 
-		const { editor } = buildEditor(tui, {
-			input,
-			output,
-			prompt,
+		const editor = buildEditor(tui, {
 			commands,
-			statusBarComponent: args?.statusBarComponent,
-			statusBarText: args?.statusBarText,
 		});
-		editor.onSubmit = (text) => {
+		tui.addChild(editor);
+		if(args?.statusBarComponent){
+			tui.addChild(args?.statusBarComponent);
+		}
+		editor.onSubmit = (text: string) => {
 			if (!text.trim()) {
 				return;
 			}
@@ -228,22 +205,19 @@ export function attachChatInput(
 
 	let settled = false;
 	let resolveRead: (value: string | null) => void = () => {};
-	const { editor, statusBar, ownsStatusBar } = buildEditor(tui, {
-		input,
-		output,
-		prompt,
+	const editor = buildEditor(tui, {
 		commands,
-		statusBarComponent: options.statusBarComponent,
-		statusBarText: options.statusBarText,
 	});
 
 	editor.onSubmit = (text) => {
-		if (settled || !text.trim()) {
+		const trimedText = text.trim();
+		if (settled || !trimedText) {
 			return;
 		}
 		settled = true;
-		editor.addToHistory(text);
-		output.write(`${prompt}${text}\n`);
+		editor.addToHistory(trimedText);
+		tui.addChild(new Text(trimedText));
+		// output.write(`${prompt}${text}\n`);
 		options.onSubmit?.(text);
 		resolveRead(text);
 	};
@@ -270,9 +244,6 @@ export function attachChatInput(
 			settled = true;
 			unsubscribe();
 			tui.removeChild(editor);
-			if (ownsStatusBar && statusBar) {
-				tui.removeChild(statusBar);
-			}
 			tui.requestRender();
 		},
 	};

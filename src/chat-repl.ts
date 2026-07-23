@@ -139,7 +139,7 @@ export function getActiveSessionSummary(
 
 export async function formatStatusBar(
 	state: ChatReplState,
-): Promise<StatusBarComponent> {
+): Promise<StatusBarModel> {
 	const lastUsage = state.runtime.context.getLastUsage();
 	const usage = lastUsage?.usage ?? null;
 	// Use the provider-reported ground-truth token count from the last
@@ -151,7 +151,7 @@ export async function formatStatusBar(
 		usage,
 		null,
 	);
-	return new StatusBarComponent(model);
+	return model;
 }
 
 export function getCurrentWorkingDirectory(state: ChatReplState): string {
@@ -164,7 +164,7 @@ export function getCurrentWorkingDirectory(state: ChatReplState): string {
 export async function formatStatusBarForEvent(
 	state: ChatReplState,
 	event: TurnProgressEvent | null,
-): Promise<StatusBarComponent> {
+): Promise<StatusBarModel> {
 	if (typeof event?.estimatedContextTokens === "number") {
 		// A live, in-flight estimate of the request being built. It has no
 		// completed `usage` payload yet, so no cache-hit segment.
@@ -174,7 +174,7 @@ export async function formatStatusBarForEvent(
 			null,
 			getStatusEventLabel(event),
 		);
-		return new StatusBarComponent(model);
+		return model;
 	}
 
 	const base = await formatStatusBar(state);
@@ -182,10 +182,7 @@ export async function formatStatusBarForEvent(
 	if (!suffix) {
 		return base;
 	}
-	base.setModel({
-		...(base.getModel() as StatusBarModel),
-		eventLabel: suffix,
-	});
+	base.eventLabel = suffix;
 	return base;
 }
 

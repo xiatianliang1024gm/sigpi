@@ -159,6 +159,7 @@ export class SystemMessageComponent implements Component {
 	private readonly text: string;
 	private readonly tone: "error" | "info";
 
+	// todo use pi-tui Text
 	constructor(text: string, tone: "error" | "info" = "info") {
 		this.text = text;
 		this.tone = tone;

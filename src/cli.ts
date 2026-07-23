@@ -479,10 +479,12 @@ export async function runChatReplLoop(
 	// instead of `console.log` while the `TUI` is alive, avoiding viewport desync.
 	let view: ReplView;
 	if (useTui) {
+		const statusBar= await formatStatusBarForEvent(state, null);
 		const renderer = new ChatRenderer({
 			input: replInput,
 			output: replOutput,
 			prompt: options.prompt,
+			statusBarModel: statusBar,
 			commands,
 		});
 		renderer.start();
@@ -514,7 +516,7 @@ export async function runChatReplLoop(
 	const refreshStatusBar = async (
 		event: TurnProgressEvent | null = latestProgressEvent,
 	): Promise<void> => {
-		view.setStatus(await formatStatusBarForEvent(state, event));
+		view.setStatusBarModel(await formatStatusBarForEvent(state, event));
 	};
 
 	// Drives the persistent-TUI view from turn progress events. Set as the bridge
@@ -728,7 +730,7 @@ class ConsoleReplView implements ReplView {
 			this.writeLineImpl(text);
 		}
 	}
-	setStatus(): void {}
+	setStatusBarModel(): void {}
 	writeLine(line: string): void {
 		this.writeLineImpl(line);
 	}
