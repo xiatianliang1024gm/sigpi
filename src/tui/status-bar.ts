@@ -1,6 +1,9 @@
 import { homedir } from "node:os";
-import type { Component } from "@earendil-works/pi-tui";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { ModelUsage, TurnProgressEvent } from "../types.js";
 
 /**
@@ -71,14 +74,25 @@ export function composeStatusBar(model: StatusBarModel): string {
  * narrower than the line it will wrap or overflow rather than be clipped.
  */
 export class StatusBarComponent implements Component {
-	private model: StatusBarModel | null = null;
+	private model: StatusBarModel | null;
+	private readonly paddingX: number;
+	private readonly paddingY: number;
 
-	constructor(initial: StatusBarModel | null = null) {
-		this.model = initial;
+	constructor(
+		model: StatusBarModel | null = null,
+		paddingX: number = 0,
+		paddingY: number = 0,
+	) {
+		this.model = model;
+		this.paddingX = paddingX;
+		this.paddingY = paddingY;
 	}
 
-	/** Replace the rendered view-model. `null` disables the footer. */
-	setModel(model: StatusBarModel | null): void {
+	invalidate(): void {
+		// No cached state to invalidate currently
+	}
+
+	setModel(model: StatusBarModel | null) {
 		this.model = model;
 	}
 
@@ -90,12 +104,50 @@ export class StatusBarComponent implements Component {
 		if (!this.model) {
 			return [];
 		}
-		return [truncateToWidth(composeStatusBar(this.model), width)];
-	}
 
-	invalidate(): void {
-		// The component is stateless: the model is supplied on each update, so
-		// there is no cached render to discard.
+		const result: string[] = [];
+
+		// Empty line padded to width
+		const emptyLine = " ".repeat(width);
+
+		// Add vertical padding above
+		for (let i = 0; i < this.paddingY; i++) {
+			result.push(emptyLine);
+		}
+
+		// Calculate available width after horizontal padding
+		const availableWidth = Math.max(1, width - this.paddingX * 2);
+
+		const text = composeStatusBar(this.model);
+
+		// Take only the first line (stop at newline)
+		let singleLineText = text;
+		const newlineIndex = text.indexOf("\n");
+		if (newlineIndex !== -1) {
+			singleLineText = text.substring(0, newlineIndex);
+		}
+
+		// Truncate text if needed (accounting for ANSI codes)
+		const displayText = truncateToWidth(singleLineText, availableWidth);
+
+		// Add horizontal padding
+		const leftPadding = " ".repeat(this.paddingX);
+		const rightPadding = " ".repeat(this.paddingX);
+		const lineWithPadding = leftPadding + displayText + rightPadding;
+
+		// Pad line to exactly width characters
+		const lineVisibleWidth = visibleWidth(lineWithPadding);
+		const paddingNeeded = Math.max(0, width - lineVisibleWidth);
+		const finalLine = lineWithPadding + " ".repeat(paddingNeeded);
+
+		result.push(finalLine);
+
+		// Add vertical padding below
+		for (let i = 0; i < this.paddingY; i++) {
+			result.push(emptyLine);
+		}
+
+		return result;
 	}
 }
 

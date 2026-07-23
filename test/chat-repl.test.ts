@@ -471,7 +471,7 @@ test("formatStatusBarForEvent appends progress state", async () => {
 			}),
 		);
 
-		assert.match(status, /thinking$/);
+		assert.match(status, /thinking/);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -608,7 +608,7 @@ test("formatStatusBar appends git branch when cwd is a repo", async () => {
 		const state = runtimeToChatReplState(runtime);
 		const status = statusLine(await formatStatusBar(state));
 
-		assert.match(status, /\(main\)$/);
+		assert.match(status, /\(main\)/);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -983,7 +983,7 @@ test("formatStatusBar shows @shortSha for a detached HEAD", async () => {
 		const status = statusLine(await formatStatusBar(state));
 
 		// `@` followed by a short SHA, at the end of the cwd segment.
-		assert.match(status, /\(@[0-9a-f]+\)$/);
+		assert.match(status, /\(@[0-9a-f]+\)/);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);

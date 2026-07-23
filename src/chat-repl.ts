@@ -7,6 +7,7 @@ import {
 	prepareSessionChoices,
 	selectSessionInteractive,
 } from "./session-selector.js";
+import type { ReplView } from "./tui/chat-renderer.js";
 import {
 	getStatusEventLabel,
 	StatusBarComponent,
@@ -28,6 +29,7 @@ export interface ChatReplState {
 	modelId: string;
 	modelName: string;
 	models: Record<string, ModelConfig>;
+	view: ReplView | null;
 }
 
 export interface AttachSessionResult {
@@ -103,6 +105,7 @@ export function runtimeToChatReplState(runtime: AgentRuntime): ChatReplState {
 		modelId: runtime.config.modelId,
 		modelName: runtime.config.model.name,
 		models: runtime.config.models,
+		view: null,
 	};
 }
 

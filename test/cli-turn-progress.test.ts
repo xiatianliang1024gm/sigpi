@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { TUI } from "@earendil-works/pi-tui";
 import { applyTurnProgress } from "../src/cli.js";
 import type {
 	AssistantMessageView,
 	ReplView,
 } from "../src/tui/chat-renderer.js";
+import { VirtualTerminal } from "../src/tui/virtual-terminal.js";
 import type { TurnProgressEvent } from "../src/types.js";
 
 /**
@@ -39,6 +41,11 @@ class FakeAssistantView implements AssistantMessageView {
 class RecordingReplView implements ReplView {
 	readonly ops: string[] = [];
 	readonly assistants: FakeAssistantView[] = [];
+	readonly tui: TUI = new TUI(new VirtualTerminal());
+
+	getTuiInstance(): TUI {
+		return this.tui;
+	}
 
 	beginAssistantMessage(): AssistantMessageView {
 		const view = new FakeAssistantView();

@@ -63,6 +63,7 @@ export interface ReplView {
 	setStatus(model: StatusBarComponent): void;
 	writeLine(line: string): void;
 	writeError(line: string): void;
+	getTuiInstance(): TUI;
 }
 
 type Phase = "idle" | "turn";
@@ -194,7 +195,7 @@ export class ChatRenderer implements ReplView {
 		this.tui.addChild(this.chatContainer);
 	}
 
-	get tuiInstance(): TUI {
+	getTuiInstance(): TUI {
 		return this.tui;
 	}
 	private enterAltScreen(): void {

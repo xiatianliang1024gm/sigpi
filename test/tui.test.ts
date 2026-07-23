@@ -392,7 +392,7 @@ test("StatusBarComponent renders the composed status line in full (no truncation
 	const lines = component.render(STATUS_WIDTH);
 	assert.equal(lines.length, 1);
 	assert.match(lines[0], /test-model/);
-	assert.match(lines[0], /\/repo \(main\)$/);
+	assert.match(lines[0], /\/repo \(main\)/);
 });
 test("message components never emit a line wider than the terminal (ADR 0025 render safety)", () => {
 	const width = 40;

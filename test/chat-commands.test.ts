@@ -433,45 +433,50 @@ test("executeChatCommand reports when manual compaction is a no-op", async () =>
 	]);
 });
 
-test("/model lists configured models", async () => {
+test("/model with no args opens the TUI selector instead of printing a list", async () => {
 	const outputs: string[] = [];
-	await executeChatCommand("/model", createChatCommandDefinitions(), {
-		getState: () =>
-			({
-				modelId: "fast",
-				modelName: "fast-model",
-				models: {
-					fast: {
-						baseURL: "https://fast.example/v1",
-						apiKey: "fast-key",
-						name: "fast-model",
-						timeoutMs: 30000,
-						maxRetries: 2,
-						retryBaseDelayMs: 250,
+	let selectorOpened = false;
+	await executeChatCommand(
+		"/model",
+		createChatCommandDefinitions({
+			selectModelFromSelector: async () => {
+				selectorOpened = true;
+				return null;
+			},
+		}),
+		{
+			getState: () =>
+				({
+					modelId: "fast",
+					modelName: "fast-model",
+					models: {
+						fast: {
+							baseURL: "https://fast.example/v1",
+							apiKey: "fast-key",
+							name: "fast-model",
+							timeoutMs: 30000,
+							maxRetries: 2,
+							retryBaseDelayMs: 250,
+						},
+						deep: {
+							baseURL: "https://deep.example/v1",
+							apiKey: "deep-key",
+							name: "deep-model",
+							timeoutMs: 30000,
+							maxRetries: 2,
+							retryBaseDelayMs: 250,
+						},
 					},
-					deep: {
-						baseURL: "https://deep.example/v1",
-						apiKey: "deep-key",
-						name: "deep-model",
-						timeoutMs: 30000,
-						maxRetries: 2,
-						retryBaseDelayMs: 250,
-					},
-				},
-			}) as never,
-		setState: () => {},
-		store: {} as never,
-		writeLine: (line: string) => outputs.push(line),
-	});
+				}) as never,
+			setState: () => {},
+			store: {} as never,
+			writeLine: (line: string) => outputs.push(line),
+		},
+	);
 
-	assert.deepEqual(outputs, [
-		[
-			"Current model: fast (fast-model)",
-			"Available models:",
-			"* fast (fast-model)",
-			"  deep (deep-model)",
-		].join("\n"),
-	]);
+	// The model list is now rendered by the TUI selector overlay, not via writeLine.
+	assert.deepEqual(outputs, []);
+	assert.equal(selectorOpened, true);
 });
 
 test("/model switches to the interactively selected model", async () => {
