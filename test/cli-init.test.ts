@@ -15,8 +15,6 @@ test("initializeUserConfig creates ~/.sigpi/config.toml by default", async () =>
 
 	assert.equal(result.created, true);
 	assert.equal(result.configPath, getDefaultUserConfigPath(homeDir));
-	assert.match(content, /\[model\]/);
-	assert.match(content, /default = "local"/);
 	assert.match(content, /\[models\.local\]/);
 	assert.match(content, /\[storage\]/);
 	assert.match(content, /base_url = "http:\/\/localhost:8000\/v1"/);

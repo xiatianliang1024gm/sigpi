@@ -217,14 +217,6 @@ function snakeFields(
 }
 
 const tomlRootSchema = z.object({
-	model: z
-		.object({
-			active: z.string().min(1).optional(),
-			default: z.string().min(1).optional(),
-		})
-		.strict()
-		.partial()
-		.optional(),
 	models: z
 		.record(snakeFields(modelConfigSchema, MODEL_ALIASES, true))
 		.optional(),
@@ -398,19 +390,24 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
 	);
 	const envConfig = readEnvConfig(env);
 	const merged = mergeConfigs(fileConfig, envConfig);
+	if (!merged.models || Object.keys(merged.models).length <= 0) {
+		throw new Error("Missing models config");
+	}
 
 	const agentState = loadAgentStateSync({ homeDir });
 	const rememberedModelId =
 		!envConfig.modelId &&
 		agentState.lastModelId &&
-		fileConfig.models?.[agentState.lastModelId]
+		merged.models?.[agentState.lastModelId]
 			? agentState.lastModelId
 			: undefined;
 	const resolvedModelId =
-		envConfig.modelId ?? rememberedModelId ?? fileConfig.modelId;
+		envConfig.modelId ??
+		rememberedModelId ??
+		Object.keys(merged.models ?? {})[0];
 
 	const modelConfig = {
-		...fileConfig,
+		...merged,
 		modelId: resolvedModelId,
 	};
 
@@ -489,9 +486,6 @@ export function getDefaultLogFilePath(homeDir: string = os.homedir()): string {
 
 export function renderDefaultConfigToml(): string {
 	return [
-		"[model]",
-		'default = "local"',
-		"",
 		"[models.local]",
 		'base_url = "http://localhost:8000/v1"',
 		'api_key = "your-api-key"',
@@ -661,7 +655,6 @@ export function parseTomlConfig(content: string): PartialConfig {
 	const validated = parseTrustedSchema(parsed);
 
 	return {
-		modelId: validated.model?.default ?? validated.model?.active,
 		models: validated.models
 			? Object.fromEntries(
 					Object.entries(validated.models).map(([id, model]) => [
@@ -802,14 +795,13 @@ function resolveModelConfig(
 
 	const modelId = fileConfig.modelId;
 	if (!modelId) {
-		throw new Error("Missing required configuration: [model].default");
+		throw new Error("Missing modelId");
 	}
 
 	const selectedModel = models[modelId];
 	if (!selectedModel) {
 		throw new Error(`Active model "${modelId}" is not defined in [models]`);
 	}
-
 	const model = modelConfigSchema.parse({
 		...selectedModel,
 		...envOverrides,
