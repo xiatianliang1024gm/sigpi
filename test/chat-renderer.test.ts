@@ -233,7 +233,7 @@ test("Mouse wheel (SGR 1006) scrolls the transcript up to older content and back
 		for (let i = 0; i < 60; i++) {
 			renderer.addUserMessage(`msg ${i}`);
 		}
-		const tui = renderer.tuiInstance;
+		const tui = renderer.getTuiInstance();
 		const render = (): void => {
 			output.buf = "";
 			(tui as unknown as { doRender(): void }).doRender();

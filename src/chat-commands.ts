@@ -5,7 +5,6 @@ import {
 	type SelectItem,
 	SelectList,
 	type SelectListTheme,
-	TUI,
 } from "@earendil-works/pi-tui";
 import { CompactionFailedError } from "./agent/compaction-error.js";
 import {
@@ -19,7 +18,6 @@ import { createModelProvider } from "./model/provider.js";
 import type { SessionStore } from "./session/store.js";
 import { setLastModelId } from "./state.js";
 import type { BackgroundTaskManager } from "./tools/background.js";
-import { ProcessTerminal } from "./tui/sigpi-terminal.js";
 import type {
 	ContextUpdateResult,
 	LoadedSkill,
@@ -240,7 +238,7 @@ export function createChatCommandDefinitions(
 				}
 
 				if (!requestedModelId) {
-					context.writeLine(formatModelList(state));
+					// context.writeLine(formatModelList(state));
 					const selectedModelId = await selectModelFromSelector(state);
 					if (selectedModelId) {
 						await switchActiveModel(
@@ -556,20 +554,21 @@ export async function selectModelInteractive(
 		return null;
 	}
 
-	return new Promise<string | null>((resolve) => {
-		const terminal = new ProcessTerminal(input, output);
-		const tui = new TUI(terminal);
-		const component = new ModelSelectorComponent(state);
+	const tui = state.view?.getTuiInstance();
 
+	return new Promise<string | null>((resolve) => {
+		const component = new ModelSelectorComponent(state);
 		component.onResolve = (result) => {
-			tui.stop();
-			output.write("\x1B[2J\x1B[H");
 			resolve(result);
+			tui?.setFocus(null);
+			tui?.removeChild(component);
+			// Request render
+			tui?.requestRender();
 		};
 
-		tui.addChild(component);
-		tui.setFocus(component);
-		tui.start();
+		tui?.addChild(component);
+		tui?.setFocus(component);
+		tui?.start();
 	});
 }
 

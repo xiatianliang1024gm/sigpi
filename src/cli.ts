@@ -6,6 +6,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import type { ReadStream, WriteStream } from "node:tty";
 import { fileURLToPath } from "node:url";
+import { TUI } from "@earendil-works/pi-tui";
 import type { TurnResult } from "./agent/turn.js";
 import {
 	type ChatCommandDefinition,
@@ -59,6 +60,7 @@ import {
 	formatFileEditResultData,
 	formatFileEditSummaries,
 } from "./tui/file-edit-renderer.js";
+import { VirtualTerminal } from "./tui/virtual-terminal.js";
 import type {
 	ExecutedToolCall,
 	JsonValue,
@@ -496,6 +498,7 @@ export async function runChatReplLoop(
 			writeError: dependencies.writeError,
 		});
 	}
+	state.view = view;
 
 	const readInput = (prompt?: string): Promise<string | null> =>
 		view.readInput(prompt ?? options.prompt ?? "> ");
@@ -655,6 +658,7 @@ export async function runChatReplLoop(
  * final answer is printed once via `printResult`.
  */
 class ConsoleReplView implements ReplView {
+	private readonly tui: TUI;
 	private readonly input: ReadStream;
 	private readonly output: WriteStream;
 	private readonly prompt: string;
@@ -679,6 +683,12 @@ class ConsoleReplView implements ReplView {
 		this.readChatInputOverride = opts.readChatInput;
 		this.writeLineImpl = opts.writeLine ?? console.log;
 		this.writeErrorImpl = opts.writeError ?? console.error;
+
+		this.tui = new TUI(new VirtualTerminal(), true);
+	}
+
+	getTuiInstance(): TUI {
+		return this.tui;
 	}
 
 	start(): void {}
