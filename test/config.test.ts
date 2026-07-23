@@ -99,9 +99,6 @@ test("alias maps drive parseTomlConfig for every section", () => {
 
 test("parseTomlConfig maps supported sections into runtime config shape", () => {
 	const parsed = parseTomlConfig(`
-[model]
-default = "fast"
-
 [models.fast]
 base_url = "https://example.test/v1"
 api_key = "secret"
@@ -137,7 +134,6 @@ path = "/bin/bash"
 `);
 
 	assert.deepEqual(parsed, {
-		modelId: "fast",
 		models: {
 			fast: {
 				baseURL: "https://example.test/v1",
@@ -189,9 +185,6 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 	await writeFile(
 		path.join(userConfigDir, "config.toml"),
 		[
-			"[model]",
-			'active = "user"',
-			"",
 			"[models.user]",
 			'base_url = "https://user.example/v1"',
 			'api_key = "user-key"',
@@ -222,9 +215,6 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 	await writeFile(
 		path.join(projectConfigDir, "config.toml"),
 		[
-			"[model]",
-			'active = "project"',
-			"",
 			"[models.project]",
 			'name = "project-model"',
 			"keep_recent_tokens = 3000",
@@ -248,15 +238,14 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 		},
 	});
 
-	assert.equal(config.modelId, "project");
-	assert.equal(config.model.baseURL, "https://project.example/v1");
+	assert.equal(config.modelId, "user");
+	assert.equal(config.model.baseURL, "https://user.example/v1");
 	assert.equal(config.model.apiKey, "env-key");
-	assert.equal(config.model.name, "project-model");
+	assert.equal(config.model.name, "user-model");
 	assert.equal(config.model.apiFormat, "chat_completions");
 	assert.equal(config.model.timeoutMs, 19000);
 	assert.equal(config.model.maxRetries, 2);
 	assert.equal(config.model.retryBaseDelayMs, 250);
-	assert.equal(config.model.maxTokens, 4096);
 	assert.equal(config.agent.maxSteps, 7);
 	assert.equal(config.models.project.hardContextLimit, 100000);
 	assert.equal(config.models.project.keepRecentTokens, 3000);
@@ -554,9 +543,6 @@ test("default model config uses a 60 second timeout with 2 retries", async () =>
 	await writeFile(
 		path.join(configDir, "config.toml"),
 		[
-			"[model]",
-			'default = "demo"',
-			"",
 			"[models.demo]",
 			'base_url = "https://configured.example/v1"',
 			'api_key = "configured-key"',
@@ -579,7 +565,6 @@ test("default model config uses a 60 second timeout with 2 retries", async () =>
 	assert.equal(config.agent.processOutput, "detailed");
 	assert.equal(config.logging.filePath, getDefaultLogFilePath(homeDir));
 	assert.match(renderDefaultConfigToml(), /\[models\.local\]/);
-	assert.match(renderDefaultConfigToml(), /default = "local"/);
 	assert.match(renderDefaultConfigToml(), /timeout_ms = 60000/);
 	assert.match(renderDefaultConfigToml(), /max_retries = 2/);
 	assert.match(renderDefaultConfigToml(), /process_output = "detailed"/);
@@ -597,9 +582,6 @@ test("loadAppConfig rejects removed verbose agent key", async () => {
 	await writeFile(
 		path.join(configDir, "config.toml"),
 		[
-			"[model]",
-			'active = "demo"',
-			"",
 			"[models.demo]",
 			'base_url = "https://configured.example/v1"',
 			'api_key = "configured-key"',
@@ -622,9 +604,6 @@ test("loadAppConfig rejects invalid process_output", async () => {
 	await writeFile(
 		path.join(configDir, "config.toml"),
 		[
-			"[model]",
-			'active = "demo"',
-			"",
 			"[models.demo]",
 			'base_url = "https://configured.example/v1"',
 			'api_key = "configured-key"',
@@ -644,8 +623,6 @@ test("loadAppConfig rejects invalid process_output", async () => {
 
 test("parseTomlConfig rejects removed execution-guard keys under [tools.bash]", () => {
 	const toml = [
-		"[model]",
-		'default = "m"',
 		"[models.m]",
 		'base_url = "https://x/v1"',
 		'api_key = "k"',
@@ -669,8 +646,6 @@ test("loadAppConfig fails to load a config file carrying removed [tools.bash] gu
 	await writeFile(
 		path.join(homeDir, ".sigpi", "config.toml"),
 		[
-			"[model]",
-			'default = "m"',
 			"[models.m]",
 			'base_url = "https://x/v1"',
 			'api_key = "k"',

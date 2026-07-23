@@ -9,8 +9,7 @@
   },
   "files": [
     "dist",
-    "README.md",
-    "config.toml.example"
+    "README.md"
   ],
   "scripts": {
     "build": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.build.json",
