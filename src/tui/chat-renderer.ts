@@ -22,9 +22,9 @@ export interface AssistantMessageView {
 
 /** Handle for an in-flight tool-call line in the activity log. */
 export interface ToolLineHandle {
-	/** Append a success summary to the same line. For edit/write tools, an
-	 *  optional {@link FileEditSummary} renders an inline diff below. */
-	finish(outcome: string, diffSummary?: FileEditSummary | null): void;
+	/** Mark the tool line as succeeded. For edit/write tools, an optional
+	 *  {@link FileEditSummary} renders an inline diff below. */
+	finish(diffSummary?: FileEditSummary | null): void;
 	/** Append a red error summary to the same line. */
 	fail(error: string): void;
 }
@@ -158,10 +158,10 @@ export class ChatRenderer implements ReplView {
 		this.appendComponent(component);
 		let finalized = false;
 
-		const finish = (outcome: string, diffSummary?: FileEditSummary | null) => {
+		const finish = (diffSummary?: FileEditSummary | null) => {
 			if (finalized) return;
 			finalized = true;
-			component.finish(outcome, diffSummary ?? undefined);
+			component.finish(diffSummary ?? undefined);
 			this.tui.requestRender();
 		};
 

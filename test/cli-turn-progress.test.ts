@@ -41,8 +41,8 @@ class FakeToolLineHandle implements ToolLineHandle {
 		private readonly ops: string[],
 	) {}
 
-	finish(outcome: string): void {
-		this.ops.push(`tool-finish:${this.id}:${outcome}`);
+	finish(): void {
+		this.ops.push(`tool-finish:${this.id}`);
 	}
 	fail(error: string): void {
 		this.ops.push(`tool-fail:${this.id}:${error}`);
@@ -224,13 +224,13 @@ test("each agent step renders its own assistant component in order", () => {
 	assert.deepEqual(view.ops, [
 		"answer", // step 1 text
 		"tool-start:tc-bash:Run pwd",
-		"tool-finish:tc-bash:pwd",
+		"tool-finish:tc-bash",
 		"answer", // step 2 text
 		"tool-start:tc-read:Read README",
-		"tool-finish:tc-read:README",
+		"tool-finish:tc-read",
 		"answer", // step 3 text
 		"tool-start:tc-glob:Find docs",
-		"tool-finish:tc-glob:docs/adr/**/*.md",
+		"tool-finish:tc-glob",
 		"answer", // step 4 final conclusion
 	]);
 });
@@ -293,7 +293,7 @@ test("a step with no text does not emit an empty assistant bubble", () => {
 	// Tool lines are two-phase: start + finish.
 	assert.deepEqual(view.ops, [
 		"tool-start:tc-bash:Run pwd",
-		"tool-finish:tc-bash:pwd",
+		"tool-finish:tc-bash",
 		"answer",
 	]);
 	assert.match(view.assistants.at(-1)?.content ?? "", /Done\./);

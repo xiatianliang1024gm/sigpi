@@ -2,7 +2,6 @@
   "name": "sigpi",
   "version": "0.1.0-beta.2026070802",
   "private": false,
-  "packageManager": "pnpm@10.34.5",
   "license": "MIT",
   "type": "module",
   "bin": {

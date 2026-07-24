@@ -147,8 +147,7 @@ export class ToolLineComponent implements Component {
 		// this.toolName = toolName;
 	}
 
-	finish(outcome: string, diffSummary?: FileEditSummary): void {
-		this.outcome = outcome;
+	finish(diffSummary?: FileEditSummary): void {
 		this.failed = false;
 		if (diffSummary) {
 			this.diffComponent = new FileEditComponent().setSummary(diffSummary);
