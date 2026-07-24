@@ -46,8 +46,8 @@ import {
 	type AssistantMessageView,
 	ChatRenderer,
 	type ReplView,
+	type ToolLineHandle,
 } from "./tui/chat-renderer.js";
-import { formatFileEditSummaries } from "./tui/file-edit-renderer.js";
 import type { JsonValue, TurnProgressEvent } from "./types.js";
 
 /**
@@ -270,7 +270,8 @@ interface CompactProgressRenderState {
 /**
  * Apply one turn-progress event to the persistent REPL view. Returns the
  * current in-flight assistant-message view so the caller can thread it across
- * events within a turn.
+ * events within a turn, and a map of in-flight tool-line handles keyed by
+ * tool-call id so the caller can resolve them on finish/fail.
  *
  * Each model response (one per agent step) gets its OWN assistant component,
  * created lazily on the first content/reasoning delta and finalized at the
@@ -288,6 +289,7 @@ export function applyTurnProgress(
 	view: ReplView,
 	event: TurnProgressEvent,
 	currentAssistant: AssistantMessageView | null,
+	toolLines: Map<string, ToolLineHandle>,
 ): AssistantMessageView | null {
 	if (event.type === "model_delta") {
 		const assistant = currentAssistant ?? view.beginAssistantMessage();
@@ -300,9 +302,33 @@ export function applyTurnProgress(
 		return assistant;
 	}
 
+	if (event.type === "tool_execution_started" && event.toolName) {
+		const id = event.toolCallId;
+		if (id) {
+			const handle = view.beginToolLine(
+				id,
+				event.message ?? event.toolName,
+				event.toolName,
+			);
+			toolLines.set(id, handle);
+		}
+		return currentAssistant;
+	}
+
 	if (event.type === "tool_execution_finished" && event.toolName) {
-		const body = event.toolResult ?? event.message ?? "";
-		view.addToolResult(body, event.toolName, event.toolResultData);
+		const id = event.toolCallId || "";
+		const handle = toolLines.get(id);
+		if (handle) {
+			toolLines.delete(id);
+			if (event.toolOk === true) {
+				const body = event.toolResult ?? event.message ?? "";
+				handle.finish(body);
+			} else {
+				const errorMsg = event.toolResult ?? event.message ?? "failed";
+				handle.fail(errorMsg);
+				view.appendSystem(errorMsg, "error");
+			}
+		}
 		return currentAssistant;
 	}
 
@@ -314,6 +340,11 @@ export function applyTurnProgress(
 		event.type === "turn_max_steps_reached"
 	) {
 		currentAssistant?.finalize();
+		// Finalize any remaining in-flight tool lines on terminal events.
+		for (const handle of toolLines.values()) {
+			handle.fail("interrupted");
+		}
+		toolLines.clear();
 		return null;
 	}
 
@@ -341,6 +372,7 @@ export async function runChatReplLoop(
 	const queuedLines: string[] = [];
 	let latestProgressEvent: TurnProgressEvent | null = null;
 	let currentAssistant: AssistantMessageView | null = null;
+	let toolLines: Map<string, ToolLineHandle> = new Map();
 
 	const refreshStatusBar = async (
 		event: TurnProgressEvent | null = latestProgressEvent,
@@ -351,7 +383,12 @@ export async function runChatReplLoop(
 	const viewProgressListener = (event: TurnProgressEvent) => {
 		latestProgressEvent = event;
 		void refreshStatusBar(event);
-		currentAssistant = applyTurnProgress(view, event, currentAssistant);
+		currentAssistant = applyTurnProgress(
+			view,
+			event,
+			currentAssistant,
+			toolLines,
+		);
 	};
 	activeStatusBarProgressListener = viewProgressListener;
 
@@ -401,6 +438,8 @@ export async function runChatReplLoop(
 
 		const interruptController = new TurnInterruptController();
 		latestProgressEvent = null;
+		toolLines = new Map();
+		currentAssistant = null;
 		view.beginTurn(() => {
 			const interrupt = interruptController.requestInterrupt();
 			if (!interrupt.accepted || interrupt.alreadyRequested) {
@@ -432,6 +471,7 @@ export async function runChatReplLoop(
 		);
 		view.endTurn();
 		currentAssistant = null;
+		toolLines.clear();
 		queuedLines.push(...view.takeQueuedLines());
 
 		latestProgressEvent = null;
@@ -441,14 +481,6 @@ export async function runChatReplLoop(
 		}
 
 		if (turn.completionStatus === "interrupted") {
-			continue;
-		}
-
-		// todo
-		// The assistant message component already renders the streamed answer;
-		// emit file-edit summaries as components instead of reprinting it.
-		for (const summaryLine of formatFileEditSummaries(turn.toolExecutions)) {
-			view.addToolResult(summaryLine);
 		}
 	}
 

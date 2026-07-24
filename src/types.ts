@@ -189,6 +189,7 @@ export interface TurnProgressEvent {
 	elapsedMs?: number;
 	turnId?: string;
 	toolName?: string;
+	toolCallId?: string;
 	toolArguments?: Record<string, unknown>;
 	toolCallCount?: number;
 	toolExecutionCount?: number;

@@ -12,7 +12,6 @@ import type {
 	Message,
 	ModelProvider,
 	RunTurnResult,
-	ToolCall,
 	ToolExecutionResult,
 	ToolSchema,
 	TurnProgressEvent,
@@ -29,8 +28,6 @@ import {
 
 const MUTATING_TOOL_NAMES = new Set(["write", "edit"]);
 const VERIFICATION_TOOL_NAMES = new Set(["bash"]);
-const DEDUP_SKIPPED_TOOL_NAMES = new Set(["write", "edit", "bash", "read"]);
-const DEDUP_WINDOW = 6;
 const VERIFICATION_REMINDER =
 	"You changed files in this turn. Before finishing, run the narrowest relevant verification command with `bash` if feasible, or explain what blocked validation.";
 const TURN_CHECKPOINT_KEEP_LAST_MESSAGES = 4;
@@ -64,93 +61,6 @@ const DEFAULT_RUNNER_OPTIONS: AgentRunnerOptions = {
 	enableVerificationReminder: false,
 };
 const CLEAR_PROGRESS_TOOL_RESULT_MAX_CHARS = 4000;
-
-function normalizeToolCallKey(toolCall: ToolCall): string {
-	const sortedArgs = sortObjectKeys(toolCall.arguments ?? {});
-	return JSON.stringify({ name: toolCall.name, args: sortedArgs });
-}
-
-function sortObjectKeys(value: unknown): unknown {
-	if (Array.isArray(value)) {
-		return value.map((item) => sortObjectKeys(item));
-	}
-	if (value && typeof value === "object") {
-		const entries = Object.entries(value as Record<string, unknown>).sort(
-			([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
-		);
-		const result: Record<string, unknown> = {};
-		for (const [key, entry] of entries) {
-			result[key] = sortObjectKeys(entry);
-		}
-		return result;
-	}
-	if (typeof value === "string") {
-		return value.replace(/\s+/g, " ").trim().toLowerCase();
-	}
-	return value;
-}
-
-function findRecentDuplicateToolCall(
-	toolCall: ToolCall,
-	turnMessages: readonly Message[],
-): { stepsBack: number; previousCall: ToolCall } | null {
-	if (DEDUP_SKIPPED_TOOL_NAMES.has(toolCall.name)) {
-		return null;
-	}
-
-	const targetKey = normalizeToolCallKey(toolCall);
-	const currentAssistantIndex = findLastAssistantMessageIndex(turnMessages);
-
-	if (currentAssistantIndex === null) {
-		return null;
-	}
-
-	let assistantCount = 0;
-
-	for (let index = currentAssistantIndex - 1; index >= 0; index -= 1) {
-		const message = turnMessages[index];
-		if (message?.role !== "assistant") {
-			continue;
-		}
-		assistantCount += 1;
-		const calls = message.toolCalls ?? [];
-		for (const previousCall of calls) {
-			if (previousCall.name !== toolCall.name) {
-				continue;
-			}
-			if (normalizeToolCallKey(previousCall) === targetKey) {
-				return { stepsBack: assistantCount, previousCall };
-			}
-		}
-		if (assistantCount >= DEDUP_WINDOW) {
-			break;
-		}
-	}
-
-	return null;
-}
-
-function findLastAssistantMessageIndex(
-	messages: readonly Message[],
-): number | null {
-	for (let index = messages.length - 1; index >= 0; index -= 1) {
-		const message = messages[index];
-		if (message && message.role === "assistant") {
-			return index;
-		}
-	}
-	return null;
-}
-
-function buildDuplicateToolCallResult(_args: {
-	toolName: string;
-	stepsBack: number;
-}): ToolExecutionResult {
-	return {
-		ok: true,
-		data: "[repeated, see previous result]",
-	};
-}
 
 function findTurnCheckpointSplitIndex(
 	messages: readonly Message[],
@@ -529,52 +439,6 @@ export class AgentRunner {
 						interruptController?.throwIfInterrupted();
 						const toolStartedAt = Date.now();
 						const toolDescription = this.tools.describeProgress(toolCall);
-
-						const duplicate = findRecentDuplicateToolCall(
-							toolCall,
-							turnMessages,
-						);
-						if (duplicate) {
-							const dedupResult = buildDuplicateToolCallResult({
-								toolName: toolCall.name,
-								stepsBack: duplicate.stepsBack,
-							});
-							toolExecutions.push({ toolCall, result: dedupResult });
-							this.context.recordToolExecution(toolCall, dedupResult);
-
-							logger?.info("tool_call_deduplicated", {
-								runId: this.options.runId,
-								sessionId: this.options.sessionId ?? null,
-								turnId,
-								step,
-								toolName: toolCall.name,
-								arguments: JSON.stringify(toolCall.arguments),
-								stepsBack: duplicate.stepsBack,
-							});
-							reportProgress({
-								type: "tool_execution_finished",
-								step,
-								turnId,
-								toolName: toolCall.name,
-								toolOk: true,
-								elapsedMs: 0,
-								message: `Deduplicated repeat of ${toolCall.name}`,
-								toolResultData: dedupResult.data,
-								toolResult: formatToolExecutionResult(
-									toolCall.name,
-									dedupResult,
-								),
-							});
-
-							const toolMessage = createToolMessage(
-								toolCall.id,
-								toolCall.name,
-								dedupResult,
-							);
-							workingMessages.push(toolMessage);
-							turnMessages.push(toolMessage);
-							continue;
-						}
 						logger?.info("tool_execution_started", {
 							runId: this.options.runId,
 							sessionId: this.options.sessionId ?? null,
@@ -588,6 +452,7 @@ export class AgentRunner {
 							step,
 							turnId,
 							toolName: toolCall.name,
+							toolCallId: toolCall.id,
 							toolArguments: toolCall.arguments,
 							message: toolDescription.summary,
 							detail: toolDescription.detail,
@@ -643,6 +508,7 @@ export class AgentRunner {
 							step,
 							turnId,
 							toolName: toolCall.name,
+							toolCallId: toolCall.id,
 							toolOk: result.ok,
 							elapsedMs: Date.now() - toolStartedAt,
 							message: result.ok

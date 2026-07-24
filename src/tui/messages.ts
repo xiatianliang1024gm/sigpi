@@ -4,14 +4,23 @@ import {
 	Text,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { JsonValue } from "../types.js";
-import { formatFileEditResultData } from "./file-edit-renderer.js";
+import type { FileEditSummary } from "../tools/edit-summary.js";
+import { FileEditComponent } from "./file-edit-renderer.js";
 import { defaultMarkdownTheme } from "./themes.js";
 
 const ANSI_DIM = "\x1B[2m";
 const ANSI_RESET = "\x1B[0m";
 const ANSI_RED = "\x1B[31m";
 const ANSI_CYAN = "\x1B[36m";
+const ANSI_BLUE = "\x1B[34m";
+const ANSI_GREEN = "\x1B[32m";
+
+const GLYPH_BULLET = "\u25CF"; // ●
+const GLYPH_TOOL = "\u23BF"; // ⎿
+const GLYPH_DIFF = "\u23D0"; // ⏐
+
+const INDENT_TOOL = "  "; // 2-space indent for tool lines
+const INDENT_DIFF = "    "; // 4-space indent for diff lines
 
 /**
  * A single message in the persistent transcript. Under ADR 0025 the transcript
@@ -27,7 +36,7 @@ export class UserMessageComponent implements Component {
 	private readonly text: string;
 
 	constructor(text: string) {
-		this.text = `❯ ${text}`;
+		this.text = `\u276F ${text}`;
 		this.textComponent = new Text(this.text);
 		this.textComponent.setCustomBgFn(
 			(text: string) => `${ANSI_CYAN}${text}\x1b[39m`,
@@ -47,6 +56,9 @@ export class UserMessageComponent implements Component {
  * dim "thinking" block and content into the answer body, both rendered live,
  * in place. Unlike the retired `ReasoningStreamComponent` this component is a
  * permanent member of the transcript — it is never cleared, only finalized.
+ *
+ * Under ADR 0026 non-thinking content lines are prefixed with `●` (bullet) to
+ * form a visual narrative stream.
  */
 export class AssistantMessageComponent implements Component {
 	private readonly reasoningComponent: Text = new Text("");
@@ -89,7 +101,13 @@ export class AssistantMessageComponent implements Component {
 		}
 
 		if (this.hasContent) {
-			lines.push(...this.contentComponent.render(width));
+			const bulletPrefixWidth = GLYPH_BULLET.length + /* space */ 1;
+			const contentLines = this.contentComponent.render(
+				width - bulletPrefixWidth,
+			);
+			for (const line of contentLines) {
+				lines.push(`${ANSI_BLUE}${GLYPH_BULLET}${ANSI_RESET} ${line}`);
+			}
 		}
 		return lines;
 	}
@@ -97,60 +115,79 @@ export class AssistantMessageComponent implements Component {
 	invalidate(): void {}
 }
 
-/** Rendered tool result (already formatted by `formatToolExecutionResult`). */
-export class ToolResultMessageComponent implements Component {
-	private readonly rendered: string;
-	private readonly toolName?: string;
-	private readonly toolResultData?: JsonValue;
+/**
+ * A single tool-call line in the activity log. Two-phase lifecycle:
+ * phase 1 shows the label (tool summary), phase 2 appends the outcome inline.
+ * Under ADR 0026 this replaces the retired {@link ToolResultMessageComponent}.
+ */
+export class ToolLineComponent implements Component {
+	private label: string;
+	private readonly toolName: string;
+	private outcome: string = "";
+	private failed = false;
+	private diffComponent: FileEditComponent | null = null;
 
-	constructor(rendered: string, toolName?: string, toolResultData?: JsonValue) {
-		this.rendered = rendered;
+	constructor(label: string, toolName: string) {
+		this.label = label;
 		this.toolName = toolName;
-		this.toolResultData = toolResultData;
 	}
 
-	render(width: number, maxHeight?: number): string[] {
-		const displayText = formatTuiToolResult(
-			this.rendered,
-			this.toolName,
-			this.toolResultData,
-		);
+	finish(outcome: string, diffSummary?: FileEditSummary): void {
+		this.outcome = outcome;
+		this.failed = false;
+		if (diffSummary) {
+			this.diffComponent = new FileEditComponent().setSummary(diffSummary);
+		}
+	}
+
+	fail(error: string): void {
+		this.outcome = error;
+		this.failed = true;
+	}
+
+	render(width: number, _maxHeight?: number): string[] {
 		const lines: string[] = [];
-		for (const raw of displayText.split("\n")) {
-			for (const line of wrapTextWithAnsi(raw, width)) {
-				lines.push(line);
+
+		const body = this.outcome ? `${this.label} → ${this.outcome}` : this.label;
+
+		// Wrap the plain-text body first, then prefix each line with the
+		// indented glyph. Only the first line gets the glyph colored blue;
+		// continuation lines get a plain indent.
+		const wrapWidth = Math.max(
+			1,
+			width - INDENT_TOOL.length - /* glyph + space */ 2,
+		);
+		let first = true;
+		for (const raw of body.split("\n")) {
+			for (const wrapped of wrapTextWithAnsi(raw, wrapWidth)) {
+				if (first) {
+					const color = this.failed ? ANSI_RED : ANSI_BLUE;
+					lines.push(
+						`${INDENT_TOOL}${color}${GLYPH_TOOL}${ANSI_RESET} ${wrapped}`,
+					);
+					first = false;
+				} else {
+					lines.push(`${INDENT_TOOL}  ${wrapped}`);
+				}
 			}
 		}
-		return cap(lines, maxHeight);
-	}
 
-	invalidate(): void {}
-}
-
-function formatTuiToolResult(
-	rendered: string,
-	toolName?: string,
-	toolResultData?: JsonValue,
-): string {
-	if (!toolName || !rendered) {
-		return rendered;
-	}
-
-	// update_plan content is already rendered in tool_execution_started
-	if (toolName === "update_plan") {
-		return "";
-	}
-
-	// edit/write: render a line-numbered diff from editSummary in data
-	if (toolName === "edit" || toolName === "write") {
-		const editLines = formatFileEditResultData(toolResultData);
-		if (editLines.length > 0) {
-			return editLines.join("\n");
+		// Diff lines below edit/write success
+		if (this.diffComponent) {
+			const diffLines = this.diffComponent.render(width - INDENT_DIFF.length);
+			for (const diffLine of diffLines) {
+				lines.push(
+					`${INDENT_DIFF}${ANSI_DIM}${GLYPH_DIFF}${ANSI_RESET} ${diffLine}`,
+				);
+			}
 		}
+
+		return lines;
 	}
 
-	// read, grep, glob, bash, and everything else: show the pure result
-	return rendered;
+	invalidate(): void {
+		this.diffComponent?.invalidate();
+	}
 }
 
 /** System line: errors, compaction notices, interruptions. */
@@ -185,6 +222,6 @@ function cap(lines: string[], maxHeight?: number): string[] {
 	}
 	const overflow = lines.length - maxHeight;
 	const visible = lines.slice(overflow);
-	visible.unshift(`${ANSI_DIM}… (${overflow} more lines)${ANSI_RESET}`);
+	visible.unshift(`${ANSI_DIM}\u2026 (${overflow} more lines)${ANSI_RESET}`);
 	return visible.slice(0, maxHeight);
 }
