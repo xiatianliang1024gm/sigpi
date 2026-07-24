@@ -46,20 +46,6 @@ function setTestHome(homeDir: string): () => void {
 	};
 }
 
-function captureConsoleLog(operation: () => void): string[] {
-	const originalConsoleLog = console.log;
-	const lines: string[] = [];
-	console.log = (...values: unknown[]) => {
-		lines.push(values.join(" "));
-	};
-	try {
-		operation();
-	} finally {
-		console.log = originalConsoleLog;
-	}
-	return lines;
-}
-
 test("runtimeToChatReplState clears a plan left over from a previous session", async () => {
 	const cwd = await realpath(
 		await createTempDir("sigpi-chat-repl-plan-clear-"),

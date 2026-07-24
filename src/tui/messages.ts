@@ -1,7 +1,6 @@
 import {
 	type Component,
 	Markdown,
-	type MarkdownTheme,
 	Text,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
@@ -28,7 +27,7 @@ export class UserMessageComponent implements Component {
 	private readonly text: string;
 
 	constructor(text: string) {
-		this.text = "❯ " + text;
+		this.text = `❯ ${text}`;
 		this.textComponent = new Text(this.text);
 		this.textComponent.setCustomBgFn(
 			(text: string) => `${ANSI_CYAN}${text}\x1b[39m`,
@@ -83,7 +82,7 @@ export class AssistantMessageComponent implements Component {
 	/** Lock the message; further deltas are ignored (terminal phase reached). */
 	finalize(): void {}
 
-	render(width: number, maxHeight?: number): string[] {
+	render(width: number, _maxHeight?: number): string[] {
 		const lines: string[] = [];
 		if (this.hasReasoning) {
 			lines.push(...this.reasoningComponent.render(width));

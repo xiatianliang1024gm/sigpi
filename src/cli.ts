@@ -47,16 +47,8 @@ import {
 	ChatRenderer,
 	type ReplView,
 } from "./tui/chat-renderer.js";
-import {
-	formatFileEditResultData,
-	formatFileEditSummaries,
-} from "./tui/file-edit-renderer.js";
-import type {
-	ExecutedToolCall,
-	JsonValue,
-	RuntimeLogger,
-	TurnProgressEvent,
-} from "./types.js";
+import { formatFileEditSummaries } from "./tui/file-edit-renderer.js";
+import type { JsonValue, TurnProgressEvent } from "./types.js";
 
 /**
  * Resolve the effective config and the project-trust decision for the
@@ -244,21 +236,6 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 	}
 }
 
-function printResult(
-	outputText: string,
-	toolExecutions: ExecutedToolCall[],
-	toolResultsAlreadyStreamed = false,
-	writeLine: (line: string) => void = (line) => console.log(line),
-): void {
-	if (!toolResultsAlreadyStreamed) {
-		for (const line of formatFileEditSummaries(toolExecutions)) {
-			writeLine(line);
-		}
-	}
-
-	writeLine(outputText);
-}
-
 export interface RunChatReplLoopOptions {
 	state: ChatReplState;
 	store: SessionStore;
@@ -279,21 +256,12 @@ let activeStatusBarProgressListener:
 	| ((event: TurnProgressEvent) => void)
 	| null = null;
 const ANSI_RESET = "\x1B[0m";
-const ANSI_BOLD = "\x1B[1m";
 const ANSI_DIM = "\x1B[2m";
 const ANSI_RED = "\x1B[31m";
 const ANSI_GREEN = "\x1B[32m";
 const ANSI_YELLOW = "\x1B[33m";
 const ANSI_BLUE = "\x1B[34m";
-const ANSI_MAGENTA = "\x1B[35m";
 const ANSI_CYAN = "\x1B[36m";
-const DEFAULT_RULE_WIDTH = 80;
-
-interface ClearProgressRenderState {
-	hasPrintedToolInTurn: boolean;
-	modelRequestCountInTurn: number;
-}
-
 interface CompactProgressRenderState {
 	hasPrintedTurn: boolean;
 	groupActive: boolean;
@@ -705,122 +673,6 @@ const ASSISTANT_TEXT_NOISE_PATTERNS: RegExp[] = [
 
 function isAssistantTextNoise(text: string): boolean {
 	return ASSISTANT_TEXT_NOISE_PATTERNS.some((pattern) => pattern.test(text));
-}
-
-function printIndentedBlock(value: string): void {
-	for (const line of value.split("\n")) {
-		console.log(`  ${line}`);
-	}
-}
-
-function summarizeToolResultForDisplay(
-	toolName: string | undefined,
-	value: string,
-	ok: boolean | undefined,
-	data?: TurnProgressEvent["toolResultData"],
-): string {
-	if (ok && isFileEditTool(toolName)) {
-		const editLines = formatFileEditResultData(data);
-		if (editLines.length > 0) {
-			return editLines.join("\n");
-		}
-	}
-
-	if (toolName === "update_plan") {
-		// Plan content is already rendered in tool_execution_started's detail;
-		// avoid duplicating it here.
-		return "";
-	}
-
-	if (toolName === "bash") {
-		return value || (ok ? "ok" : "Command failed.");
-	}
-
-	// read, grep, glob, and everything else: show the pure result directly
-	return value || (ok ? "" : "error");
-}
-
-function isFileEditTool(toolName: string | undefined): boolean {
-	return toolName === "write" || toolName === "edit";
-}
-
-function truncateToolResult(value: string): string {
-	const maxChars = 2000;
-	const maxLines = 80;
-	const lines = value.split("\n");
-	const lineTruncated =
-		lines.length > maxLines
-			? `${lines.slice(0, maxLines).join("\n")}\n... [tool result truncated]`
-			: value;
-
-	if (lineTruncated.length <= maxChars) {
-		return lineTruncated;
-	}
-
-	return `${lineTruncated.slice(0, maxChars - 32)}\n... [tool result truncated]`;
-}
-
-function renderTurnDivider(turnNumber: number): string {
-	return dim(renderLabeledRule(`turn ${turnNumber}`, "━"));
-}
-
-function renderModelRunDivider(runNumber: number): string {
-	return dim(renderLabeledRule(`model run ${runNumber}`, "┄"));
-}
-
-function renderLabeledRule(label: string, fill: string): string {
-	const width = getRuleWidth();
-	const text = ` ${label} `;
-	if (text.length >= width) {
-		return text.slice(0, width);
-	}
-
-	const leftWidth = Math.max(2, Math.floor((width - text.length) / 2));
-	const rightWidth = Math.max(0, width - text.length - leftWidth);
-	return `${fill.repeat(leftWidth)}${text}${fill.repeat(rightWidth)}`;
-}
-
-function getRuleWidth(): number {
-	const columns = process.stdout.columns;
-	return Number.isInteger(columns) && columns > 0
-		? Math.max(40, columns)
-		: DEFAULT_RULE_WIDTH;
-}
-
-function color(value: string, code: string): string {
-	return `${code}${value}${ANSI_RESET}`;
-}
-
-function bold(value: string): string {
-	return color(value, ANSI_BOLD);
-}
-
-function dim(value: string): string {
-	return color(value, ANSI_DIM);
-}
-
-function red(value: string): string {
-	return color(value, ANSI_RED);
-}
-
-function green(value: string): string {
-	return color(value, ANSI_GREEN);
-}
-
-function yellow(value: string): string {
-	return color(value, ANSI_YELLOW);
-}
-
-function blue(value: string): string {
-	return color(value, ANSI_BLUE);
-}
-
-function magenta(value: string): string {
-	return color(value, ANSI_MAGENTA);
-}
-
-function cyan(value: string): string {
-	return color(value, ANSI_CYAN);
 }
 
 async function runSessionCommand(args: string[]): Promise<void> {

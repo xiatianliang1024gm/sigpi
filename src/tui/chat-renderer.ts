@@ -94,9 +94,7 @@ export class ChatRenderer implements ReplView {
 		this.tui.start();
 	}
 
-	onEditorChange(text: string): void {
-		const t1 = text;
-	}
+	onEditorChange(_text: string): void {}
 
 	stop(): void {
 		this.editorUnsub?.();
