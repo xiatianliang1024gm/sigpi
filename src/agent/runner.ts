@@ -12,7 +12,6 @@ import type {
 	Message,
 	ModelProvider,
 	RunTurnResult,
-	ToolExecutionResult,
 	ToolSchema,
 	TurnProgressEvent,
 } from "../types.js";

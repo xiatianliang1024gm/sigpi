@@ -13,7 +13,7 @@ const ANSI_RESET = "\x1B[0m";
 const ANSI_RED = "\x1B[31m";
 const ANSI_CYAN = "\x1B[36m";
 const ANSI_BLUE = "\x1B[34m";
-const ANSI_GREEN = "\x1B[32m";
+const _ANSI_GREEN = "\x1B[32m";
 
 const GLYPH_BULLET = "\u25CF"; // ●
 const GLYPH_TOOL = "\u23BF"; // ⎿
@@ -122,14 +122,14 @@ export class AssistantMessageComponent implements Component {
  */
 export class ToolLineComponent implements Component {
 	private label: string;
-	private readonly toolName: string;
+	// private readonly toolName: string;
 	private outcome: string = "";
 	private failed = false;
 	private diffComponent: FileEditComponent | null = null;
 
-	constructor(label: string, toolName: string) {
+	constructor(label: string, _toolName: string) {
 		this.label = label;
-		this.toolName = toolName;
+		// this.toolName = toolName;
 	}
 
 	finish(outcome: string, diffSummary?: FileEditSummary): void {

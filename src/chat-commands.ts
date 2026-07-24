@@ -2,7 +2,6 @@ import {
 	type Component,
 	type SelectItem,
 	SelectList,
-	type SelectListTheme,
 } from "@earendil-works/pi-tui";
 import { CompactionFailedError } from "./agent/compaction-error.js";
 import {
@@ -16,6 +15,7 @@ import { createModelProvider } from "./model/provider.js";
 import type { SessionStore } from "./session/store.js";
 import { setLastModelId } from "./state.js";
 import type { BackgroundTaskManager } from "./tools/background.js";
+import { defaultSelectListTheme } from "./tui/themes.js";
 import type {
 	ContextUpdateResult,
 	LoadedSkill,
@@ -488,14 +488,6 @@ function buildSkillInjection(skill: LoadedSkill, message?: string): string {
 	return lines.join("\n");
 }
 
-const SELECT_LIST_THEME: SelectListTheme = {
-	selectedPrefix: (str: string) => str,
-	selectedText: (str: string) => str,
-	description: (str: string) => str,
-	scrollInfo: (str: string) => str,
-	noMatch: (str: string) => str,
-};
-
 class ModelSelectorComponent implements Component {
 	public onResolve?: (result: string | null) => void;
 	private readonly list: SelectList;
@@ -514,7 +506,7 @@ class ModelSelectorComponent implements Component {
 				value: modelId,
 			})) as SelectItem[],
 			10,
-			SELECT_LIST_THEME,
+			defaultSelectListTheme,
 		);
 		this.list.setSelectedIndex(selectedIndex);
 		this.list.onSelect = (item: SelectItem) => this.onResolve?.(item.value);
