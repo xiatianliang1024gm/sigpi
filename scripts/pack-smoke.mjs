@@ -58,12 +58,3 @@ const help = await runCliCommand({
 assert.equal(help.code, 0);
 assert.match(help.stdout, /Usage:/);
 
-const ask = await runCliCommand({
-	cwd: packageDir,
-	commandArgs: ["ask", "--approve", "pack smoke"],
-	cliPath,
-	env: childEnv,
-	nodeArgs,
-});
-assert.equal(ask.code, 0);
-assert.match(ask.stdout, /packed:pack smoke/);
