@@ -5,6 +5,7 @@ import { applyTurnProgress } from "../src/cli.js";
 import type {
 	AssistantMessageView,
 	ReplView,
+	ToolLineHandle,
 } from "../src/tui/chat-renderer.js";
 import type { StatusBarModel } from "../src/tui/status-bar.js";
 import { VirtualTerminal } from "../src/tui/virtual-terminal.js";
@@ -19,22 +20,32 @@ import type { TurnProgressEvent } from "../src/types.js";
 class FakeAssistantView implements AssistantMessageView {
 	reasoning = "";
 	content = "";
-	// private hasReasoning = false;
-	// private hasContent = false;
 	private finalized = false;
 
 	appendReasoning(text: string): void {
 		if (this.finalized || !text) return;
 		this.reasoning += text;
-		// this.hasReasoning = true;
 	}
 	appendContent(text: string): void {
 		if (this.finalized || !text) return;
 		this.content += text;
-		// this.hasContent = true;
 	}
 	finalize(): void {
 		this.finalized = true;
+	}
+}
+
+class FakeToolLineHandle implements ToolLineHandle {
+	constructor(
+		private readonly id: string,
+		private readonly ops: string[],
+	) {}
+
+	finish(outcome: string): void {
+		this.ops.push(`tool-finish:${this.id}:${outcome}`);
+	}
+	fail(error: string): void {
+		this.ops.push(`tool-fail:${this.id}:${error}`);
 	}
 }
 
@@ -54,9 +65,12 @@ class RecordingReplView implements ReplView {
 		this.ops.push("answer");
 		return view;
 	}
-	addToolResult(rendered: string): void {
-		this.ops.push(`tool:${rendered}`);
+
+	beginToolLine(id: string, label: string, _toolName: string): ToolLineHandle {
+		this.ops.push(`tool-start:${id}:${label}`);
+		return new FakeToolLineHandle(id, this.ops);
 	}
+
 	start(): void {}
 	stop(): void {}
 	readInput(): Promise<string | null> {
@@ -98,10 +112,19 @@ function replay(view: RecordingReplView): void {
 			message: "Model returned tool calls",
 		},
 		{
+			type: "tool_execution_started",
+			step: 1,
+			turnId: "t",
+			toolName: "bash",
+			toolCallId: "tc-bash",
+			message: "Run pwd",
+		},
+		{
 			type: "tool_execution_finished",
 			step: 1,
 			turnId: "t",
 			toolName: "bash",
+			toolCallId: "tc-bash",
 			toolOk: true,
 			toolResult: "pwd",
 		},
@@ -120,10 +143,19 @@ function replay(view: RecordingReplView): void {
 			message: "Model returned tool calls",
 		},
 		{
+			type: "tool_execution_started",
+			step: 2,
+			turnId: "t",
+			toolName: "read",
+			toolCallId: "tc-read",
+			message: "Read README",
+		},
+		{
 			type: "tool_execution_finished",
 			step: 2,
 			turnId: "t",
 			toolName: "read",
+			toolCallId: "tc-read",
 			toolOk: true,
 			toolResult: "README",
 		},
@@ -142,10 +174,19 @@ function replay(view: RecordingReplView): void {
 			message: "Model returned tool calls",
 		},
 		{
+			type: "tool_execution_started",
+			step: 3,
+			turnId: "t",
+			toolName: "glob",
+			toolCallId: "tc-glob",
+			message: "Find docs",
+		},
+		{
 			type: "tool_execution_finished",
 			step: 3,
 			turnId: "t",
 			toolName: "glob",
+			toolCallId: "tc-glob",
 			toolOk: true,
 			toolResult: "docs/adr/**/*.md",
 		},
@@ -166,8 +207,9 @@ function replay(view: RecordingReplView): void {
 		},
 	];
 	let current: AssistantMessageView | null = null;
+	const toolLines = new Map<string, ToolLineHandle>();
 	for (const event of events) {
-		current = applyTurnProgress(view, event, current);
+		current = applyTurnProgress(view, event, current, toolLines);
 	}
 }
 
@@ -178,13 +220,17 @@ test("each agent step renders its own assistant component in order", () => {
 	// One component per model response (3 tool-call steps + 1 final answer).
 	assert.equal(view.assistants.length, 4, "expected one component per step");
 	// Chronological order: every answer is appended after the prior tools.
+	// Tool lines are two-phase: start (label) then finish (result).
 	assert.deepEqual(view.ops, [
 		"answer", // step 1 text
-		"tool:pwd",
+		"tool-start:tc-bash:Run pwd",
+		"tool-finish:tc-bash:pwd",
 		"answer", // step 2 text
-		"tool:README",
+		"tool-start:tc-read:Read README",
+		"tool-finish:tc-read:README",
 		"answer", // step 3 text
-		"tool:docs/adr/**/*.md",
+		"tool-start:tc-glob:Find docs",
+		"tool-finish:tc-glob:docs/adr/**/*.md",
 		"answer", // step 4 final conclusion
 	]);
 });
@@ -212,10 +258,19 @@ test("a step with no text does not emit an empty assistant bubble", () => {
 			message: "Model returned tool calls",
 		},
 		{
+			type: "tool_execution_started",
+			step: 1,
+			turnId: "t",
+			toolName: "bash",
+			toolCallId: "tc-bash",
+			message: "Run pwd",
+		},
+		{
 			type: "tool_execution_finished",
 			step: 1,
 			turnId: "t",
 			toolName: "bash",
+			toolCallId: "tc-bash",
 			toolOk: true,
 			toolResult: "pwd",
 		},
@@ -231,10 +286,15 @@ test("a step with no text does not emit an empty assistant bubble", () => {
 		},
 	];
 	let current: AssistantMessageView | null = null;
+	const toolLines = new Map<string, ToolLineHandle>();
 	for (const event of events) {
-		current = applyTurnProgress(view, event, current);
+		current = applyTurnProgress(view, event, current, toolLines);
 	}
-	// Only the final answer creates a component; the tool-only step adds none.
-	assert.deepEqual(view.ops, ["tool:pwd", "answer"]);
+	// Tool lines are two-phase: start + finish.
+	assert.deepEqual(view.ops, [
+		"tool-start:tc-bash:Run pwd",
+		"tool-finish:tc-bash:pwd",
+		"answer",
+	]);
 	assert.match(view.assistants.at(-1)?.content ?? "", /Done\./);
 });

@@ -6,11 +6,11 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ChatCommandMetadata } from "../chat-commands.js";
 import { buildEditor } from "../chat-input.js";
-import type { JsonValue } from "../types.js";
+import type { FileEditSummary } from "../tools/edit-summary.js";
 import {
 	AssistantMessageComponent,
 	SystemMessageComponent,
-	ToolResultMessageComponent,
+	ToolLineComponent,
 	UserMessageComponent,
 } from "./messages.js";
 import { StatusBarComponent, type StatusBarModel } from "./status-bar.js";
@@ -18,6 +18,15 @@ export interface AssistantMessageView {
 	appendReasoning(text: string): void;
 	appendContent(text: string): void;
 	finalize(): void;
+}
+
+/** Handle for an in-flight tool-call line in the activity log. */
+export interface ToolLineHandle {
+	/** Append a success summary to the same line. For edit/write tools, an
+	 *  optional {@link FileEditSummary} renders an inline diff below. */
+	finish(outcome: string, diffSummary?: FileEditSummary | null): void;
+	/** Append a red error summary to the same line. */
+	fail(error: string): void;
 }
 
 /**
@@ -35,11 +44,9 @@ export interface ReplView {
 	beginAssistantMessage(): AssistantMessageView;
 	beginTurn(onInterrupt: () => void): void;
 	endTurn(): void;
-	addToolResult(
-		rendered: string,
-		toolName?: string,
-		toolResultData?: JsonValue,
-	): void;
+	/** Open a tool-call line that resolves in place when the tool finishes or
+	 *  fails. Replaces the one-shot {@link addToolResult}. */
+	beginToolLine(id: string, label: string, toolName: string): ToolLineHandle;
 	appendSystem(text: string, tone?: "error" | "info"): void;
 	setStatusBarModel(model: StatusBarModel): void;
 	getStatusBarModel(): StatusBarModel | null;
@@ -146,17 +153,26 @@ export class ChatRenderer implements ReplView {
 		this.interruptHandler = null;
 	}
 
-	addToolResult(
-		rendered: string,
-		toolName?: string,
-		toolResultData?: JsonValue,
-	): void {
-		const component = new ToolResultMessageComponent(
-			rendered,
-			toolName,
-			toolResultData,
-		);
+	beginToolLine(id: string, label: string, toolName: string): ToolLineHandle {
+		const component = new ToolLineComponent(label, toolName);
 		this.appendComponent(component);
+		let finalized = false;
+
+		const finish = (outcome: string, diffSummary?: FileEditSummary | null) => {
+			if (finalized) return;
+			finalized = true;
+			component.finish(outcome, diffSummary ?? undefined);
+			this.tui.requestRender();
+		};
+
+		const fail = (error: string) => {
+			if (finalized) return;
+			finalized = true;
+			component.fail(error);
+			this.tui.requestRender();
+		};
+
+		return { finish, fail };
 	}
 
 	appendSystem(text: string, tone: "error" | "info" = "info"): void {
@@ -211,11 +227,9 @@ export class ChatRenderer implements ReplView {
 		if (data !== "\x1B" && data !== "\u0003") {
 			return undefined;
 		}
-		if (this.phase === "idle") {
-			const resolve = this.pendingResolve;
-			this.pendingResolve = null;
-			resolve?.(null);
-		} else {
+		// Esc / Ctrl+C only interrupt an active agent turn.
+		// Exit is only via the /exit command (or /quit, exit, quit).
+		if (this.phase === "turn") {
 			this.interruptHandler?.();
 		}
 		return undefined;

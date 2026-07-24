@@ -14,13 +14,12 @@ import {
 import {
 	FileEditComponent,
 	formatFileEditResultData,
-	formatFileEditSummaries,
 	formatFileEditSummary,
 } from "../src/tui/file-edit-renderer.js";
 import {
 	AssistantMessageComponent,
 	SystemMessageComponent,
-	ToolResultMessageComponent,
+	ToolLineComponent,
 	UserMessageComponent,
 } from "../src/tui/messages.js";
 import { moveSelectedIndex } from "../src/tui/move-selected-index.js";
@@ -187,7 +186,7 @@ test("FileEditComponent mounts under Pi-tui's TUI and renders the diff", async (
 	);
 });
 
-test("formatFileEditSummaries/ResultData now render through FileEditComponent", () => {
+test("formatFileEditResultData renders through FileEditComponent", () => {
 	const summary = createEditSummary(
 		"src/foo.ts",
 		"const a = 1;\n",
@@ -195,9 +194,8 @@ test("formatFileEditSummaries/ResultData now render through FileEditComponent", 
 		"const a = 2;",
 		false,
 	);
-	// The standalone helpers must still produce identical output now that they
-	// delegate to the Pi-tui Component.
-	assert.deepEqual(formatFileEditSummaries([], { color: false }), []);
+	// The standalone helper must still produce identical output now that it
+	// delegates to the Pi-tui Component.
 	assert.deepEqual(
 		formatFileEditResultData({ editSummary: summary }, { color: false }),
 		new FileEditComponent({ color: false }).setSummary(summary).render(0),
@@ -394,7 +392,7 @@ test("message components never emit a line wider than the terminal (ADR 0025 ren
 	// unbreakable token.
 	for (const component of [
 		new UserMessageComponent(longToken),
-		new ToolResultMessageComponent(longToken),
+		new ToolLineComponent(longToken, "test"),
 		new AssistantMessageComponent(),
 	]) {
 		if (component instanceof AssistantMessageComponent) {
