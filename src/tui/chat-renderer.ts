@@ -153,7 +153,7 @@ export class ChatRenderer implements ReplView {
 		this.interruptHandler = null;
 	}
 
-	beginToolLine(id: string, label: string, toolName: string): ToolLineHandle {
+	beginToolLine(_id: string, label: string, toolName: string): ToolLineHandle {
 		const component = new ToolLineComponent(label, toolName);
 		this.appendComponent(component);
 		let finalized = false;
