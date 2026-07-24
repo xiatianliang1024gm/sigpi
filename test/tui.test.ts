@@ -11,7 +11,6 @@ import {
 	createEditSummary,
 	createWriteSummary,
 } from "../src/tools/edit-summary.js";
-import { stripAnsi } from "../src/tui/ansi.js";
 import {
 	FileEditComponent,
 	formatFileEditResultData,
@@ -30,7 +29,6 @@ import {
 	StatusBarComponent,
 	type StatusBarModel,
 } from "../src/tui/status-bar.js";
-import { VirtualTerminal } from "../src/tui/virtual-terminal.js";
 
 class FakeTerminal {
 	public columns = 20;
@@ -83,10 +81,6 @@ class FakeTerminal {
 	clearRenderedRows(rows = 0): void {
 		this.write(`<clear-rows:${rows}>`);
 	}
-}
-
-function cleanRenderedLine(line: string): string {
-	return stripAnsi(line.replaceAll("\x1B_sigpi:c\x07", "")).trimEnd();
 }
 
 test("visibleWidth treats Chinese characters as double width", () => {

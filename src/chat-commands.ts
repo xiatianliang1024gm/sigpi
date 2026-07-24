@@ -1,5 +1,3 @@
-import { stdin as processInput, stdout as processOutput } from "node:process";
-import type { ReadStream, WriteStream } from "node:tty";
 import {
 	type Component,
 	type SelectItem,
