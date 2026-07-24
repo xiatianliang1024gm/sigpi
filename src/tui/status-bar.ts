@@ -199,15 +199,7 @@ export function getStatusEventLabel(
 		case "tool_calls_received":
 			return null;
 		case "tool_execution_started":
-			return (
-				event.message ?? (event.toolName ? `tool ${event.toolName}` : "tool")
-			);
 		case "tool_execution_finished":
-			return event.toolOk
-				? null
-				: event.toolName
-					? `failed ${event.toolName}`
-					: "tool failed";
 		case "turn_finished":
 			return "done";
 		case "turn_interrupted":

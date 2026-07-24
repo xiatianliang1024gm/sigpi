@@ -1,13 +1,7 @@
-import process, {
-	stdin as processInput,
-	stdout as processOutput,
-} from "node:process";
-import type { ReadStream, WriteStream } from "node:tty";
 import {
 	type Component,
-	Container,
 	type Editor,
-	matchesKey, ProcessTerminal,
+	ProcessTerminal,
 	TUI,
 } from "@earendil-works/pi-tui";
 import type { ChatCommandMetadata } from "../chat-commands.js";
@@ -19,20 +13,7 @@ import {
 	ToolResultMessageComponent,
 	UserMessageComponent,
 } from "./messages.js";
-import {StatusBarComponent, StatusBarModel} from "./status-bar.js";
-import {buildStatusBarModel} from "../chat-repl.js";
-
-const ENTER_ALT_SCREEN = "\x1b[?1049h";
-const LEAVE_ALT_SCREEN = "\x1b[?1049l";
-// Enable SGR (decimal) mouse *encoding* (1006) AND a tracking mode (1000:
-// button press/release + wheel up/down). 1006 alone only changes the encoding
-// format and emits no events, so the wheel used to fall through as plain arrow
-// keys (\x1b[A / \x1b[B) that the focused editor read as history navigation.
-// 1000 reports the wheel as SGR button 64 (up) / 65 (down), which the wheel
-// handler below consumes to scroll the transcript (ADR 0025).
-const ENABLE_MOUSE_TRACKING = "\x1b[?1000h\x1b[?1006h";
-const DISABLE_MOUSE_TRACKING = "\x1b[?1000l\x1b[?1006l";
-
+import { StatusBarComponent, type StatusBarModel } from "./status-bar.js";
 export interface AssistantMessageView {
 	appendReasoning(text: string): void;
 	appendContent(text: string): void;
@@ -61,6 +42,7 @@ export interface ReplView {
 	): void;
 	appendSystem(text: string, tone?: "error" | "info"): void;
 	setStatusBarModel(model: StatusBarModel): void;
+	getStatusBarModel(): StatusBarModel | null;
 	writeLine(line: string): void;
 	writeError(line: string): void;
 	getTuiInstance(): TUI;
@@ -70,10 +52,7 @@ type Phase = "idle" | "turn";
 
 export class ChatRenderer implements ReplView {
 	private readonly tui: TUI;
-	private readonly input: ReadStream;
-	private readonly output: WriteStream;
-	private readonly statusBar : StatusBarComponent;
-	private readonly chatContainer = new Container();
+	private readonly statusBar: StatusBarComponent;
 	private readonly commands: readonly ChatCommandMetadata[];
 	private editor: Editor | null = null;
 	private editorUnsub: (() => void) | null = null;
@@ -83,44 +62,24 @@ export class ChatRenderer implements ReplView {
 	private queuedLines: string[] = [];
 
 	constructor(options: {
-		input?: ReadStream;
-		output?: WriteStream;
 		prompt?: string;
 		statusBarModel?: StatusBarModel;
 		commands?: readonly ChatCommandMetadata[];
 	}) {
-		this.input = options.input ?? processInput;
-		this.output = options.output ?? processOutput;
 		this.statusBar = new StatusBarComponent(options.statusBarModel);
 		this.commands = options.commands ?? [];
 		const terminal = new ProcessTerminal();
-		this.tui = new TUI(terminal, true);
-		this.tui.setClearOnShrink(false);
+		this.tui = new TUI(terminal);
 	}
 
 	getTuiInstance(): TUI {
 		return this.tui;
 	}
-	private enterAltScreen(): void {
-		this.output.write(ENTER_ALT_SCREEN);
-	}
-
-	private leaveAltScreen(): void {
-		try {
-			this.output.write(LEAVE_ALT_SCREEN);
-			this.output.write(DISABLE_MOUSE_TRACKING);
-		} catch {
-			// output may already be closed on abrupt exit
-		}
-	}
 
 	start(): void {
-		this.enterAltScreen();
-		process.once("exit", () => this.leaveAltScreen());
 		const editor = buildEditor(this.tui, {
 			commands: this.commands,
 		});
-		this.tui.addChild(this.chatContainer);
 		this.editor = editor;
 		this.tui.addChild(editor);
 		this.tui.setFocus(editor);
@@ -133,24 +92,18 @@ export class ChatRenderer implements ReplView {
 			this.handleInterruptKey(data),
 		);
 		this.tui.start();
-		// Enable SGR mouse tracking only after the TUI has taken over the
-		// terminal (raw mode + alternate screen) so a terminal startup sequence
-		// cannot reset it. Paired with DISABLE_MOUSE_TRACKING on leave.
-		this.output.write(ENABLE_MOUSE_TRACKING);
 	}
 
-	onEditorChange(text:string):void {
-		let t1 = text;
+	onEditorChange(text: string): void {
+		const t1 = text;
 	}
-
 
 	stop(): void {
 		this.editorUnsub?.();
 		this.tui.stop();
-		this.leaveAltScreen();
 	}
 
-	readInput(_prompt = ""): Promise<string | null> {
+	readInput(): Promise<string | null> {
 		this.phase = "idle";
 		if (this.editor) {
 			this.tui.setFocus(this.editor);
@@ -167,15 +120,21 @@ export class ChatRenderer implements ReplView {
 		return queued;
 	}
 
-	addUserMessage(text: string): void {
-		this.chatContainer.addChild(new UserMessageComponent(text));
+	private appendComponent(component: Component): void {
+		const children = this.tui.children;
+		// reserve space for Editor, statusBar
+		children.splice(children.length - 2, 0, component);
 		this.tui.requestRender();
+	}
+
+	addUserMessage(text: string): void {
+		const component = new UserMessageComponent(text);
+		this.appendComponent(component);
 	}
 
 	beginAssistantMessage(): AssistantMessageComponent {
 		const component = new AssistantMessageComponent();
-		this.chatContainer.addChild(component);
-		this.tui.requestRender();
+		this.appendComponent(component);
 		return component;
 	}
 
@@ -194,20 +153,26 @@ export class ChatRenderer implements ReplView {
 		toolName?: string,
 		toolResultData?: JsonValue,
 	): void {
-		this.chatContainer.addChild(
-			new ToolResultMessageComponent(rendered, toolName, toolResultData),
+		const component = new ToolResultMessageComponent(
+			rendered,
+			toolName,
+			toolResultData,
 		);
-		this.tui.requestRender();
+		this.appendComponent(component);
 	}
 
 	appendSystem(text: string, tone: "error" | "info" = "info"): void {
-		this.chatContainer.addChild(new SystemMessageComponent(text, tone));
-		this.tui.requestRender();
+		const component = new SystemMessageComponent(text, tone);
+		this.appendComponent(component);
 	}
 
 	setStatusBarModel(model: StatusBarModel): void {
 		this.statusBar.setModel(model);
 		this.tui.requestRender();
+	}
+
+	getStatusBarModel(): StatusBarModel | null {
+		return this.statusBar.getModel();
 	}
 
 	writeLine(line: string): void {

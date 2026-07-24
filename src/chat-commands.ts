@@ -542,20 +542,8 @@ class ModelSelectorComponent implements Component {
 
 export async function selectModelInteractive(
 	state: ChatReplState,
-	args?: {
-		input?: ReadStream;
-		output?: WriteStream;
-	},
 ): Promise<string | null> {
-	const input = args?.input ?? processInput;
-	const output = args?.output ?? processOutput;
-
-	if (!input.isTTY || !output.isTTY || Object.keys(state.models).length === 0) {
-		return null;
-	}
-
 	const tui = state.view?.getTuiInstance();
-
 	return new Promise<string | null>((resolve) => {
 		const component = new ModelSelectorComponent(state);
 		component.onResolve = (result) => {
@@ -568,7 +556,6 @@ export async function selectModelInteractive(
 
 		tui?.addChild(component);
 		tui?.setFocus(component);
-		tui?.start();
 	});
 }
 
@@ -592,6 +579,12 @@ function switchActiveModel(
 		modelId: requestedModelId,
 		modelName: model.name,
 	});
+	const statusModel = state.view?.getStatusBarModel();
+	if (statusModel) {
+		statusModel.modelName = model.name;
+		// statusModel.limit = model.hardContextLimit;
+	}
+	state.view?.getTuiInstance()?.requestRender();
 	context.writeLine(`Switched model to ${requestedModelId} (${model.name}).`);
 	return rememberModelSelection(requestedModelId)
 		.then(() => true)

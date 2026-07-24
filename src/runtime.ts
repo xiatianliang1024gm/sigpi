@@ -319,7 +319,6 @@ export async function createAgentRuntime(
 			workingDirectory: cwd,
 			logger: runtimeLogger,
 			progressReporter: args.progressReporter,
-			processOutputMode: config.agent.processOutput,
 			runId,
 			sessionId: sessionState.session?.sessionId ?? null,
 			bashToolContext,

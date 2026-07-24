@@ -19,7 +19,6 @@ import type {
 } from "../types.js";
 import { CompactionFailedError } from "./compaction-error.js";
 import type { ConversationContext } from "./context.js";
-import { resolveCurrentGoal } from "./goal-resolution.js";
 import {
 	createAssistantMessage,
 	createSystemMessage,
@@ -58,7 +57,6 @@ Use this EXACT format:
 1. [What the assistant should do next]
 
 Preserve the user's current goal even if later tool results are large or distracting.`;
-const CHECKPOINT_GOAL_LOG_MAX_CHARS = 240;
 const DEFAULT_RUNNER_OPTIONS: AgentRunnerOptions = {
 	maxSteps: 40,
 	temperature: 0.2,
@@ -66,15 +64,6 @@ const DEFAULT_RUNNER_OPTIONS: AgentRunnerOptions = {
 	enableVerificationReminder: false,
 };
 const CLEAR_PROGRESS_TOOL_RESULT_MAX_CHARS = 4000;
-
-function formatGoalForLog(goal: string): string {
-	const compact = goal.replace(/\s+/g, " ").trim();
-	if (compact.length <= CHECKPOINT_GOAL_LOG_MAX_CHARS) {
-		return compact;
-	}
-
-	return `${compact.slice(0, CHECKPOINT_GOAL_LOG_MAX_CHARS)}...`;
-}
 
 function normalizeToolCallKey(toolCall: ToolCall): string {
 	const sortedArgs = sortObjectKeys(toolCall.arguments ?? {});
@@ -221,11 +210,6 @@ export class AgentRunner {
 		const toolExecutions: ExecutedToolCall[] = [];
 		const logger = this.options.logger;
 		const progress = this.options.progressReporter;
-		const currentGoal = resolveCurrentGoal(userInput, {
-			summary: this.context.getSummary(),
-			keyFindings: this.context.getExplorationLedger().keyFindings,
-			recentMessages: this.context.getRecentMessages(),
-		});
 		const turnStartedAt = Date.now();
 		const turnId = randomUUID();
 		let summaryCount = 0;
@@ -323,7 +307,6 @@ export class AgentRunner {
 					createSystemMessage(TURN_CHECKPOINT_SYSTEM_PROMPT),
 					createUserMessage(
 						[
-							`<current-user-goal>\n${currentGoal}\n</current-user-goal>`,
 							existingCheckpoint,
 							`<conversation>\n${transcript}\n</conversation>`,
 							TURN_CHECKPOINT_PROMPT,
@@ -341,10 +324,7 @@ export class AgentRunner {
 					purpose: "summary",
 				},
 			});
-			turnCheckpoint =
-				response.assistantText?.trim() ||
-				turnCheckpoint ||
-				`## Current Goal\n${currentGoal}`;
+			turnCheckpoint = response.assistantText?.trim() || turnCheckpoint;
 
 			workingMessages.length = 0;
 			workingMessages.push(
@@ -368,7 +348,7 @@ export class AgentRunner {
 				type: "context_checkpoint",
 				step: lastStep,
 				turnId,
-				message: `checkpoint compacted current turn; goal: ${formatGoalForLog(currentGoal)}`,
+				message: `checkpoint compacted current turn;`,
 				detail: `estimated context before checkpoint: ${estimatedTokens} tokens; kept recent messages: ${keptTurnMessages.length}`,
 				summaryCount,
 			});
@@ -669,10 +649,7 @@ export class AgentRunner {
 								? `Tool finished: ${toolCall.name}`
 								: `Tool failed: ${toolCall.name}`,
 							toolResultData: result.data,
-							toolResult:
-								this.options.processOutputMode === "detailed"
-									? truncateProgressToolResult(renderedToolResult)
-									: renderedToolResult,
+							toolResult: truncateProgressToolResult(renderedToolResult),
 						});
 
 						const toolMessage = createToolMessage(
@@ -807,7 +784,6 @@ export class AgentRunner {
 			}
 
 			const outputText = buildMaxStepsFallbackAnswer(
-				currentGoal,
 				toolExecutions,
 				this.options.maxSteps,
 				turnCheckpoint,
@@ -964,7 +940,6 @@ export class AgentRunner {
 }
 
 function buildMaxStepsFallbackAnswer(
-	currentGoal: string,
 	toolExecutions: readonly ExecutedToolCall[],
 	maxSteps: number,
 	checkpoint: string | null,
@@ -977,10 +952,6 @@ function buildMaxStepsFallbackAnswer(
 
 	const lines: string[] = [
 		`I reached the maximum tool-call steps (${maxSteps}) before the task was complete, so the work is not finished. Type 'go on' to continue from where this left off.`,
-		"",
-		`Current goal: ${currentGoal}`,
-		"",
-		"Work done this turn:",
 		...factLines,
 	];
 
