@@ -14,6 +14,8 @@ const ANSI_RED = "\x1B[31m";
 const ANSI_CYAN = "\x1B[36m";
 const ANSI_BLUE = "\x1B[34m";
 const _ANSI_GREEN = "\x1B[32m";
+const ANSI_WHITE = "\x1B[37m";
+const ANSI_BG_GRAY = "\x1B[100m";
 
 const GLYPH_BULLET = "\u25CF"; // ●
 const GLYPH_TOOL = "\u23BF"; // ⎿
@@ -37,9 +39,9 @@ export class UserMessageComponent implements Component {
 
 	constructor(text: string) {
 		this.text = `\u276F ${text}`;
-		this.textComponent = new Text(this.text);
+		this.textComponent = new Text(this.text, 0, 0);
 		this.textComponent.setCustomBgFn(
-			(text: string) => `${ANSI_CYAN}${text}\x1b[39m`,
+			(text: string) => `${ANSI_BG_GRAY}${ANSI_WHITE}${text}${ANSI_RESET}`,
 		);
 	}
 
@@ -61,17 +63,23 @@ export class UserMessageComponent implements Component {
  * form a visual narrative stream.
  */
 export class AssistantMessageComponent implements Component {
-	private readonly reasoningComponent: Text = new Text("");
+	private readonly reasoningComponent: Text = new Text("", 0, 0);
 	private readonly contentComponent: Markdown = new Markdown(
 		"",
-		2,
-		2,
+		0,
+		0,
 		defaultMarkdownTheme,
 	);
 	private reasoning: string = "";
 	private content: string = "";
 	private hasReasoning = false;
 	private hasContent = false;
+
+	constructor() {
+		this.reasoningComponent.setCustomBgFn(
+			(text: string) => `${ANSI_DIM}${text}${ANSI_RESET}`,
+		);
+	}
 
 	appendReasoning(text: string): void {
 		if (!text) {
@@ -105,8 +113,15 @@ export class AssistantMessageComponent implements Component {
 			const contentLines = this.contentComponent.render(
 				width - bulletPrefixWidth,
 			);
+			let firstLine = true;
 			for (const line of contentLines) {
-				lines.push(`${ANSI_BLUE}${GLYPH_BULLET}${ANSI_RESET} ${line}`);
+				// first line has BULLET
+				if (firstLine) {
+					lines.push(`${ANSI_BLUE}${GLYPH_BULLET}${ANSI_RESET} ${line}`);
+					firstLine = false;
+				} else {
+					lines.push(`  ${line}`);
+				}
 			}
 		}
 		return lines;
@@ -121,7 +136,7 @@ export class AssistantMessageComponent implements Component {
  * Under ADR 0026 this replaces the retired {@link ToolResultMessageComponent}.
  */
 export class ToolLineComponent implements Component {
-	private label: string;
+	private readonly label: string;
 	// private readonly toolName: string;
 	private outcome: string = "";
 	private failed = false;
@@ -145,7 +160,7 @@ export class ToolLineComponent implements Component {
 		this.failed = true;
 	}
 
-	render(width: number, _maxHeight?: number): string[] {
+	render(width: number): string[] {
 		const lines: string[] = [];
 
 		const body = this.outcome ? `${this.label} → ${this.outcome}` : this.label;

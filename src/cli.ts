@@ -321,7 +321,7 @@ export function applyTurnProgress(
 		if (handle) {
 			toolLines.delete(id);
 			if (event.toolOk === true) {
-				const body = event.toolResult ?? event.message ?? "";
+				const body = "ok";
 				handle.finish(body);
 			} else {
 				const errorMsg = event.toolResult ?? event.message ?? "failed";
