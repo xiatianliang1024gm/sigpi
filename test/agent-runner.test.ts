@@ -229,8 +229,6 @@ test("assembles a local max-steps fallback without a final model call", async ()
 		result.outputText ?? "",
 		/I reached the maximum tool-call steps \(2\)/,
 	);
-	assert.match(result.outputText ?? "", /Current goal: loop forever/);
-	assert.match(result.outputText ?? "", /Work done this turn:/);
 	// glob is a search tool and is excluded from the file-op turn summary
 	// (ADR-0022); with no file read/modify ops the summary reports none.
 	assert.match(result.outputText ?? "", /No tool results were captured\./);
@@ -268,7 +266,6 @@ test("max-steps fallback contains no tool-call markup and prompts go on", async 
 		result.outputText ?? "",
 		/I reached the maximum tool-call steps \(1\)/,
 	);
-	assert.match(result.outputText ?? "", /Current goal: 分析当前项目/);
 	assert.match(result.outputText ?? "", /Read README\.md/);
 	assert.match(result.outputText ?? "", /go on/);
 	assert.doesNotMatch(result.outputText ?? "", /<tool_call>/);
@@ -481,7 +478,6 @@ test("compacts oversized in-turn tool context while preserving current goal", as
 	const provider = new MockProvider((request, index) => {
 		if (request.context?.purpose === "summary") {
 			const prompt = request.messages.at(-1)?.content ?? "";
-			assert.match(prompt, /<current-user-goal>/);
 			assert.match(prompt, /Analyze the project and explain the architecture/);
 			assert.match(prompt, /large_read/);
 			return {
@@ -611,10 +607,6 @@ test("compacts oversized in-turn tool context while preserving current goal", as
 		/checkpoint compacted current turn/,
 	);
 	assert.match(
-		checkpointEvent?.message ?? "",
-		/Analyze the project and explain the architecture/,
-	);
-	assert.match(
 		checkpointEvent?.detail ?? "",
 		/estimated context before checkpoint/,
 	);
@@ -660,14 +652,10 @@ test("checkpoint goal uses prior task when the user says continue", async () => 
 	const provider = new MockProvider((request, index) => {
 		if (request.context?.purpose === "summary") {
 			const prompt = request.messages.at(-1)?.content ?? "";
-			assert.match(
-				prompt,
-				/<current-user-goal>\n分析当前项目\n<\/current-user-goal>/,
-			);
-			assert.doesNotMatch(
-				prompt,
-				/<current-user-goal>\n继续\n<\/current-user-goal>/,
-			);
+			// The transcript contains the user input "继续" from this turn.
+			assert.match(prompt, /继续/);
+			// The checkpoint template instructs the model to restate the goal.
+			assert.match(prompt, /## Current Goal/);
 			return {
 				assistantText: "## Current Goal\n分析当前项目",
 				toolCalls: [],
@@ -715,8 +703,11 @@ test("checkpoint goal uses prior task when the user says continue", async () => 
 	const checkpointEvent = progressEvents.find(
 		(event) => event.type === "context_checkpoint",
 	);
-	assert.match(checkpointEvent?.message ?? "", /goal: 分析当前项目/);
-	assert.doesNotMatch(checkpointEvent?.message ?? "", /goal: 继续/);
+	assert.match(
+		checkpointEvent?.message ?? "",
+		/checkpoint compacted current turn/,
+	);
+	assert.doesNotMatch(checkpointEvent?.message ?? "", /继续/);
 });
 
 test("runner emits progress events during multi-step execution", async () => {

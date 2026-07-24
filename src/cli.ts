@@ -1,21 +1,14 @@
 #!/usr/bin/env node
-
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
-import type { ReadStream, WriteStream } from "node:tty";
 import { fileURLToPath } from "node:url";
-import { TUI } from "@earendil-works/pi-tui";
-import type { TurnResult } from "./agent/turn.js";
 import {
 	type ChatCommandDefinition,
-	type ChatCommandMetadata,
 	createChatCommandDefinitions,
 	executeChatCommand,
 	formatDocumentedChatCommands,
 } from "./chat-commands.js";
-import { readChatInput } from "./chat-input.js";
 import {
 	type ChatReplState,
 	formatStatusBarForEvent,
@@ -37,7 +30,6 @@ import {
 	formatUpdatePlanBody,
 	getCurrentPlan,
 	parsePlanArgs,
-	renderPlanFull,
 	setCurrentPlan,
 } from "./plan-tracker.js";
 import {
@@ -47,7 +39,6 @@ import {
 } from "./project-trust.js";
 import { createAgentRuntime, createRuntimeSessionStore } from "./runtime.js";
 import { formatSessionDetails } from "./session/format.js";
-import { InMemorySessionStore } from "./session/in-memory-store.js";
 import type { SessionStore } from "./session/store.js";
 import { detectShellRuntime } from "./shell.js";
 import type { ToolRegistry } from "./tools/registry.js";
@@ -60,11 +51,9 @@ import {
 	formatFileEditResultData,
 	formatFileEditSummaries,
 } from "./tui/file-edit-renderer.js";
-import { VirtualTerminal } from "./tui/virtual-terminal.js";
 import type {
 	ExecutedToolCall,
 	JsonValue,
-	ProcessOutputMode,
 	RuntimeLogger,
 	TurnProgressEvent,
 } from "./types.js";
@@ -162,78 +151,6 @@ function printUsage(): void {
 	console.log(`In chat: use ${formatDocumentedChatCommands()}.`);
 }
 
-async function runAsk(args: string[]): Promise<void> {
-	const parsed = parseSessionArgs(args);
-	const prompt = parsed.rest.join(" ").trim();
-
-	if (!prompt) {
-		throw new Error('Missing prompt. Example: pnpm dev ask "What time is it?"');
-	}
-
-	const { config, trust } = await resolveConfigAndTrust({
-		ui: false,
-		approve: parsed.approve,
-		noApprove: parsed.noApprove,
-	});
-	// Make the model `fetch` proxy-aware (only installs when a proxy is
-	// configured via [models.<id>] proxy or HTTP(S)_PROXY env). Returns a
-	// status snapshot and prints a one-line notice to stderr.
-	const proxyStatus = configureHttpProxy(
-		config.model.proxy,
-		config.model.timeoutMs,
-	);
-	const progressReporter = createCliProgressReporter(
-		config.agent.processOutput,
-	);
-	// One-shot prompts persist a session by default (aligns with Claude Code /
-	// Codex / Pi). `--no-session` opts out via an in-memory store.
-	const store: SessionStore | undefined = parsed.noSession
-		? new InMemorySessionStore()
-		: undefined;
-	const runtime = await createAgentRuntime({
-		config,
-		progressReporter,
-		sessionId: parsed.sessionId,
-		createSession:
-			parsed.createSession || (!parsed.sessionId && !parsed.noSession),
-		sessionTitle: parsed.sessionTitle,
-		store,
-		includeProjectRoots: trust.allows,
-	});
-	runtime.logger.info(
-		"http_proxy_status",
-		proxyStatus as unknown as Record<string, JsonValue | undefined>,
-	);
-	if (trust.skipped) {
-		printTrustSkipWarning(process.cwd());
-	}
-	printSkillBootstrap(
-		runtime.loadedSkills.length,
-		runtime.skillWarnings.map((warning) => warning.message),
-	);
-	const result = await runtime.turn.runTurn(prompt, runtime.logger);
-
-	if (!result.ok) {
-		console.error(result.errorMessage);
-		process.exitCode = 1;
-		return;
-	}
-
-	if (runtime.sessionRuntime) {
-		const askSessionId = runtime.sessionRuntime.getCurrentSession().sessionId;
-		console.log(`[session] ${askSessionId}`);
-		console.log(
-			`To continue this session, run: sigpi --session ${askSessionId}`,
-		);
-	}
-	console.log("");
-	printResult(
-		result.outputText ?? "",
-		result.toolExecutions,
-		config.agent.processOutput !== "compact",
-	);
-}
-
 async function runChatWithArgs(args: string[]): Promise<void> {
 	const parsed = parseSessionArgs(args);
 	const { config, trust } = await resolveConfigAndTrust({
@@ -249,9 +166,7 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		config.model.proxy,
 		config.model.timeoutMs,
 	);
-	const progressReporter = createCliProgressReporter(
-		config.agent.processOutput,
-	);
+	const progressReporter = createCliProgressReporter();
 	const cleanupStore = createRuntimeSessionStore({
 		cwd: process.cwd(),
 		config,
@@ -303,16 +218,11 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		console.log(`[session-warning] ${warning}`);
 	}
 
-	console.log("Interactive chat started.");
-
 	const finalState = await runChatReplLoop(
 		{
 			state,
 			store: runtime.store,
 			progressReporter,
-			processOutputMode: config.agent.processOutput,
-			input,
-			output,
 			tools: runtime.tools,
 		},
 		{
@@ -353,25 +263,12 @@ export interface RunChatReplLoopOptions {
 	state: ChatReplState;
 	store: SessionStore;
 	progressReporter?: (event: TurnProgressEvent) => void;
-	processOutputMode?: ProcessOutputMode;
-	input?: ReadStream;
-	output?: WriteStream;
-	prompt?: string;
 	tools?: ToolRegistry;
 }
 
 export interface RunChatReplLoopDependencies {
-	readChatInput?: typeof readChatInput;
-	executeTurn?: (
-		state: ChatReplState,
-		input: string,
-		logger: RuntimeLogger,
-		interruptController?: TurnInterruptController,
-	) => Promise<TurnResult>;
-	commands?: readonly ChatCommandDefinition[];
-	writeLine?: (line: string) => void;
-	writeError?: (line: string) => void;
-	tools?: ToolRegistry;
+	commands: readonly ChatCommandDefinition[];
+	// tools?: ToolRegistry;
 }
 
 const compactState: CompactProgressRenderState = {
@@ -457,60 +354,24 @@ export function applyTurnProgress(
 
 export async function runChatReplLoop(
 	options: RunChatReplLoopOptions,
-	dependencies: RunChatReplLoopDependencies = {},
+	dependencies: RunChatReplLoopDependencies,
 ): Promise<ChatReplState> {
 	let state = options.state;
-	const replInput = options.input ?? input;
-	const replOutput = options.output ?? output;
-	const useTui = replInput.isTTY && replOutput.isTTY;
-
-	const executeTurn =
-		dependencies.executeTurn ??
-		((s, inp, logger, interruptController) =>
-			s.runtime.turn.runTurn(inp, logger, interruptController));
-	const commands =
-		dependencies.commands ??
-		createChatCommandDefinitions({
-			loadedSkills: options.state.runtime.loadedSkills,
-		});
-
-	// Output surface: one persistent Pi-tui `TUI` (TTY, ADR 0025 A1) or a console
-	// fallback (non-TTY / one-shot). The progress reporter renders to the view
-	// instead of `console.log` while the `TUI` is alive, avoiding viewport desync.
-	let view: ReplView;
-	if (useTui) {
-		const statusBar= await formatStatusBarForEvent(state, null);
-		const renderer = new ChatRenderer({
-			input: replInput,
-			output: replOutput,
-			prompt: options.prompt,
-			statusBarModel: statusBar,
-			commands,
-		});
-		renderer.start();
-		view = renderer;
-	} else {
-		view = new ConsoleReplView({
-			input: replInput,
-			output: replOutput,
-			prompt: options.prompt,
-			commands,
-			readChatInput: dependencies.readChatInput,
-			writeLine: dependencies.writeLine,
-			writeError: dependencies.writeError,
-		});
-	}
+	const commands = dependencies.commands;
+	const statusBar = await formatStatusBarForEvent(state, null);
+	const view = new ChatRenderer({
+		statusBarModel: statusBar,
+		commands,
+	});
+	view.start();
 	state.view = view;
 
-	const readInput = (prompt?: string): Promise<string | null> =>
-		view.readInput(prompt ?? options.prompt ?? "> ");
+	const readInput = (): Promise<string | null> => view.readInput();
 	const writeLine = (line: string) => view.writeLine(line);
 	const writeError = (line: string) => view.writeError(line);
 
 	const queuedLines: string[] = [];
 	let latestProgressEvent: TurnProgressEvent | null = null;
-	const processOutputMode = options.processOutputMode ?? "detailed";
-	let turnNumber = 0;
 	let currentAssistant: AssistantMessageView | null = null;
 
 	const refreshStatusBar = async (
@@ -519,15 +380,12 @@ export async function runChatReplLoop(
 		view.setStatusBarModel(await formatStatusBarForEvent(state, event));
 	};
 
-	// Drives the persistent-TUI view from turn progress events. Set as the bridge
-	// the console progress reporter forwards to, so the reporter's own
-	// `console.log` is skipped while the `TUI` owns rendering (ADR 0025).
 	const viewProgressListener = (event: TurnProgressEvent) => {
 		latestProgressEvent = event;
 		void refreshStatusBar(event);
 		currentAssistant = applyTurnProgress(view, event, currentAssistant);
 	};
-	activeStatusBarProgressListener = useTui ? viewProgressListener : null;
+	activeStatusBarProgressListener = viewProgressListener;
 
 	while (true) {
 		const queuedLine = queuedLines.shift();
@@ -549,9 +407,7 @@ export async function runChatReplLoop(
 				latestProgressEvent = null;
 			},
 			store: options.store,
-			progressReporter: useTui
-				? viewProgressListener
-				: options.progressReporter,
+			progressReporter: viewProgressListener,
 			writeLine,
 		});
 
@@ -601,8 +457,7 @@ export async function runChatReplLoop(
 			writeLine(`[agent] ${message}`);
 		});
 
-		const turn = await executeTurn(
-			state,
+		const turn = await state.runtime.turn.runTurn(
 			turnInput,
 			state.runtime.logger,
 			interruptController,
@@ -611,40 +466,21 @@ export async function runChatReplLoop(
 		currentAssistant = null;
 		queuedLines.push(...view.takeQueuedLines());
 
+		latestProgressEvent = null;
 		if (!turn.ok) {
-			latestProgressEvent = null;
 			writeError(turn.errorMessage);
 			continue;
 		}
 
-		latestProgressEvent = null;
 		if (turn.completionStatus === "interrupted") {
 			continue;
 		}
 
-		if (useTui) {
-			// The assistant message component already renders the streamed answer;
-			// emit file-edit summaries as components instead of reprinting it.
-			for (const summaryLine of formatFileEditSummaries(turn.toolExecutions)) {
-				view.addToolResult(summaryLine);
-			}
-		} else {
-			// Preserve the pre-A1 stdout transcript shape: a blank separator
-			// before each turn's output.
-			writeLine("");
-			if (processOutputMode === "compact") {
-				writeLine("");
-			}
-			printResult(
-				turn.outputText ?? "",
-				turn.toolExecutions,
-				Boolean(options.progressReporter) && processOutputMode !== "compact",
-				writeLine,
-			);
-			if (options.progressReporter && processOutputMode !== "compact") {
-				turnNumber += 1;
-				writeLine(renderTurnDivider(turnNumber));
-			}
+		// todo
+		// The assistant message component already renders the streamed answer;
+		// emit file-edit summaries as components instead of reprinting it.
+		for (const summaryLine of formatFileEditSummaries(turn.toolExecutions)) {
+			view.addToolResult(summaryLine);
 		}
 	}
 
@@ -652,103 +488,11 @@ export async function runChatReplLoop(
 	return state;
 }
 
-/**
- * Console fallback output surface for the REPL (non-TTY / one-shot modes).
- * Mirrors the old pre-A1 behavior: `readChatInput` (readline when not a TTY)
- * and `console.log`/`console.error` for all output. The streaming assistant
- * deltas are dropped here (spec-0020: non-TTY modes drop `model_delta`); the
- * final answer is printed once via `printResult`.
- */
-class ConsoleReplView implements ReplView {
-	private readonly tui: TUI;
-	private readonly input: ReadStream;
-	private readonly output: WriteStream;
-	private readonly prompt: string;
-	private readonly commands: readonly ChatCommandMetadata[];
-	private readonly readChatInputOverride?: typeof readChatInput;
-	private readonly writeLineImpl: (line: string) => void;
-	private readonly writeErrorImpl: (line: string) => void;
-
-	constructor(opts: {
-		input?: ReadStream;
-		output?: WriteStream;
-		prompt?: string;
-		commands?: readonly ChatCommandMetadata[];
-		readChatInput?: typeof readChatInput;
-		writeLine?: (line: string) => void;
-		writeError?: (line: string) => void;
-	}) {
-		this.input = opts.input ?? input;
-		this.output = opts.output ?? output;
-		this.prompt = opts.prompt ?? "> ";
-		this.commands = opts.commands ?? [];
-		this.readChatInputOverride = opts.readChatInput;
-		this.writeLineImpl = opts.writeLine ?? console.log;
-		this.writeErrorImpl = opts.writeError ?? console.error;
-
-		this.tui = new TUI(new VirtualTerminal(), true);
-	}
-
-	getTuiInstance(): TUI {
-		return this.tui;
-	}
-
-	start(): void {}
-	stop(): void {}
-
-	readInput(prompt = this.prompt): Promise<string | null> {
-		const reader = this.readChatInputOverride ?? readChatInput;
-		return reader({
-			prompt,
-			input: this.input,
-			output: this.output,
-			commands: this.commands,
-		});
-	}
-
-	takeQueuedLines(): string[] {
-		return [];
-	}
-
-	addUserMessage(): void {}
-	beginAssistantMessage(): AssistantMessageView {
-		return { appendReasoning() {}, appendContent() {}, finalize() {} };
-	}
-	beginTurn(): void {}
-	endTurn(): void {}
-	addToolResult(
-		rendered: string,
-		_toolName?: string,
-		_toolResultData?: JsonValue,
-	): void {
-		this.writeLineImpl(rendered);
-	}
-	appendSystem(text: string, tone: "error" | "info" = "info"): void {
-		if (tone === "error") {
-			this.writeErrorImpl(text);
-		} else {
-			this.writeLineImpl(text);
-		}
-	}
-	setStatusBarModel(): void {}
-	writeLine(line: string): void {
-		this.writeLineImpl(line);
-	}
-	writeError(line: string): void {
-		this.writeErrorImpl(line);
-	}
-}
-export function createCliProgressReporter(
-	mode: ProcessOutputMode = "detailed",
-): (event: TurnProgressEvent) => void {
-	if (mode === "compact") {
-		compactState.hasPrintedTurn = false;
-		compactState.groupActive = false;
-	}
-	const clearState: ClearProgressRenderState = {
-		hasPrintedToolInTurn: false,
-		modelRequestCountInTurn: 0,
-	};
+export function createCliProgressReporter(): (
+	event: TurnProgressEvent,
+) => void {
+	compactState.hasPrintedTurn = false;
+	compactState.groupActive = false;
 
 	return (event) => {
 		// `update_plan` updates shared plan state regardless of render surface.
@@ -765,12 +509,7 @@ export function createCliProgressReporter(
 			activeStatusBarProgressListener(event);
 			return;
 		}
-		if (mode === "compact") {
-			renderCompactProgressEvent(event, compactState);
-			return;
-		}
-
-		renderClearProgressEvent(event, clearState);
+		renderCompactProgressEvent(event, compactState);
 	};
 }
 
@@ -785,11 +524,13 @@ function quietColorEnabled(): boolean {
 	if (process.env.CLICOLOR === "0") return false;
 	return Boolean(process.stdout.isTTY);
 }
+
 const QUIET_COLOR_ON = quietColorEnabled();
 
 function qColor(code: string, value: string): string {
 	return QUIET_COLOR_ON ? `${code}${value}${ANSI_RESET}` : value;
 }
+
 const qBlue = (v: string) => qColor(ANSI_BLUE, v);
 const qCyan = (v: string) => qColor(ANSI_CYAN, v);
 const qGreen = (v: string) => qColor(ANSI_GREEN, v);
@@ -946,110 +687,6 @@ function renderCompactProgressEvent(
 			return;
 		case "turn_failed":
 			console.log(qRed(`${QUIET_GLYPH_CALL} Failed`));
-			return;
-	}
-}
-
-function renderClearProgressEvent(
-	event: TurnProgressEvent,
-	state: ClearProgressRenderState,
-): void {
-	const suffix = event.elapsedMs !== undefined ? ` (${event.elapsedMs}ms)` : "";
-	switch (event.type) {
-		case "turn_started":
-			state.hasPrintedToolInTurn = false;
-			state.modelRequestCountInTurn = 0;
-			if (event.userInput) {
-				printPrefixedBlock("> ", event.userInput);
-			}
-			{
-				const plan = getCurrentPlan();
-				if (plan?.items.every((item) => item.status === "completed")) {
-					setCurrentPlan(null);
-				} else if (plan) {
-					console.log(`${blue("•")} ${bold("Plan")}`);
-					printIndentedBlock(renderPlanFull(plan));
-				}
-			}
-			return;
-		case "step_started":
-			return;
-		case "interrupt_requested":
-			console.log(
-				event.interruptStage === "model"
-					? `${yellow("•")} ${yellow("Cancelling current model request")}`
-					: `${yellow("•")} ${yellow("Interrupt requested; waiting for current tool to finish")}`,
-			);
-			return;
-		case "model_request_started":
-			state.modelRequestCountInTurn += 1;
-			if (state.modelRequestCountInTurn > 1) {
-				console.log(renderModelRunDivider(state.modelRequestCountInTurn));
-			}
-			return;
-		case "model_request_finished":
-			return;
-		case "assistant_message": {
-			const trimmed = event.assistantText?.trim();
-			if (trimmed && !isAssistantTextNoise(trimmed)) {
-				printPrefixedBlock(`${magenta("•")} ${bold("Assistant:")} `, trimmed);
-			}
-			return;
-		}
-		case "context_checkpoint":
-			console.log(
-				`${blue("•")} ${bold("Checkpoint")}${event.message ? `: ${event.message}` : ""}`,
-			);
-			if (event.detail) {
-				printIndentedBlock(event.detail);
-			}
-			return;
-		case "tool_calls_received":
-			return;
-		case "tool_execution_started":
-			if (state.hasPrintedToolInTurn) {
-				console.log("");
-			}
-			state.hasPrintedToolInTurn = true;
-			console.log(
-				`${green("•")} ${bold("Ran")} ${cyan(event.message ?? `tool ${event.toolName}`)}`,
-			);
-			if (event.detail) {
-				printIndentedBlock(event.detail);
-			}
-			return;
-		case "tool_execution_finished":
-			if (!event.toolOk) {
-				console.log(
-					`${red("•")} ${red(`Failed ${event.toolName ?? "tool"}${suffix}`)}`,
-				);
-			}
-			if (event.toolResult) {
-				printIndentedBlock(
-					truncateToolResult(
-						summarizeToolResultForDisplay(
-							event.toolName,
-							event.toolResult,
-							event.toolOk,
-							event.toolResultData,
-						),
-					),
-				);
-			}
-			return;
-		case "turn_finished":
-			console.log(`${green("•")} ${green(`Done${suffix}`)}`);
-			return;
-		case "turn_interrupted":
-			console.log(
-				`${yellow("•")} ${yellow(`Interrupted${event.interruptStage ? ` during ${event.interruptStage}` : ""}${suffix}`)}`,
-			);
-			return;
-		case "turn_max_steps_reached":
-			console.log(`${yellow("•")} ${yellow(`Stopped at max steps${suffix}`)}`);
-			return;
-		case "turn_failed":
-			console.log(`${red("•")} ${red("Failed")}`);
 			return;
 	}
 }
@@ -1474,15 +1111,10 @@ async function main(): Promise<void> {
 	if (
 		command === "chat" ||
 		command.startsWith("--") ||
-		command === "ask" ||
 		command === "init" ||
 		command === "config" ||
 		command === "session"
 	) {
-		if (command === "ask") {
-			await runAsk(rest);
-			return;
-		}
 		if (command === "init") {
 			await runInitCommand(rest);
 			return;

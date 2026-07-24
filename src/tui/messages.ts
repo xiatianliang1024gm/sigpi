@@ -1,7 +1,13 @@
-import type { Component } from "@earendil-works/pi-tui";
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	Markdown,
+	type MarkdownTheme,
+	Text,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { JsonValue } from "../types.js";
 import { formatFileEditResultData } from "./file-edit-renderer.js";
+import { defaultMarkdownTheme } from "./themes.js";
 
 const ANSI_DIM = "\x1B[2m";
 const ANSI_RESET = "\x1B[0m";
@@ -18,18 +24,19 @@ const ANSI_CYAN = "\x1B[36m";
 
 /** User-submitted prompt line. */
 export class UserMessageComponent implements Component {
+	private readonly textComponent: Text;
 	private readonly text: string;
 
 	constructor(text: string) {
-		this.text = text;
+		this.text = "❯ " + text;
+		this.textComponent = new Text(this.text);
+		this.textComponent.setCustomBgFn(
+			(text: string) => `${ANSI_CYAN}${text}\x1b[39m`,
+		);
 	}
 
-	render(width: number, maxHeight?: number): string[] {
-		const lines = [`${ANSI_DIM}▸ you${ANSI_RESET}`];
-		for (const line of wrapTextWithAnsi(this.text, width)) {
-			lines.push(line);
-		}
-		return cap(lines, maxHeight);
+	render(width: number): string[] {
+		return this.textComponent.render(width);
 	}
 
 	invalidate(): void {}
@@ -43,56 +50,49 @@ export class UserMessageComponent implements Component {
  * permanent member of the transcript — it is never cleared, only finalized.
  */
 export class AssistantMessageComponent implements Component {
-	private reasoning = "";
-	private content = "";
+	private readonly reasoningComponent: Text = new Text("");
+	private readonly contentComponent: Markdown = new Markdown(
+		"",
+		2,
+		2,
+		defaultMarkdownTheme,
+	);
+	private reasoning: string = "";
+	private content: string = "";
 	private hasReasoning = false;
 	private hasContent = false;
-	private finalized = false;
 
 	appendReasoning(text: string): void {
-		if (this.finalized || !text) {
+		if (!text) {
 			return;
 		}
 		this.reasoning += text;
 		this.hasReasoning = true;
+		this.reasoningComponent.setText(this.reasoning);
 	}
 
 	appendContent(text: string): void {
-		if (this.finalized || !text) {
+		if (!text) {
 			return;
 		}
 		this.content += text;
 		this.hasContent = true;
+		this.contentComponent.setText(this.content);
 	}
 
 	/** Lock the message; further deltas are ignored (terminal phase reached). */
-	finalize(): void {
-		this.finalized = true;
-	}
-
-	get isFinalized(): boolean {
-		return this.finalized;
-	}
+	finalize(): void {}
 
 	render(width: number, maxHeight?: number): string[] {
 		const lines: string[] = [];
-
 		if (this.hasReasoning) {
-			lines.push(`${ANSI_DIM}▸ reasoning${ANSI_RESET}`);
-			for (const line of wrapTextWithAnsi(this.reasoning, width)) {
-				lines.push(`${ANSI_DIM}  ${line}${ANSI_RESET}`);
-			}
+			lines.push(...this.reasoningComponent.render(width));
 		}
 
 		if (this.hasContent) {
-			for (const line of wrapTextWithAnsi(this.content, width)) {
-				lines.push(line);
-			}
-		} else if (!this.hasReasoning) {
-			lines.push(`${ANSI_DIM}…${ANSI_RESET}`);
+			lines.push(...this.contentComponent.render(width));
 		}
-
-		return cap(lines, maxHeight);
+		return lines;
 	}
 
 	invalidate(): void {}

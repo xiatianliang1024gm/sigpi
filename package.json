@@ -41,6 +41,7 @@
   "dependencies": {
     "@earendil-works/pi-tui": "0.80.3",
     "@xterm/headless": "^6.0.0",
+    "chalk": "^5.6.2",
     "openai": "^6.47.0",
     "smol-toml": "^1.7.0",
     "undici": "^8.7.0",

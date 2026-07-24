@@ -6,7 +6,7 @@ import { parse } from "smol-toml";
 import { z } from "zod";
 import type { ProjectTrustPreference } from "./project-trust.js";
 import { loadAgentStateSync } from "./state.js";
-import type { LogLevel, ProcessOutputMode, ShellKind } from "./types.js";
+import type { LogLevel, ShellKind } from "./types.js";
 
 const modelConfigSchema = z.object({
 	baseURL: z.string().min(1),
@@ -48,14 +48,6 @@ const modelConfigSchema = z.object({
 
 const agentConfigSchema = z.object({
 	maxSteps: z.number().int().positive().default(40),
-	processOutput: z
-		.enum(["compact", "detailed"], {
-			errorMap: () => ({
-				message:
-					'Invalid [agent] process_output. Valid values are "compact" or "detailed".',
-			}),
-		})
-		.default("detailed"),
 });
 
 const loggingConfigSchema = z.object({
@@ -138,7 +130,6 @@ const MODEL_ALIASES: Record<string, string> = {
 };
 const AGENT_ALIASES: Record<string, string> = {
 	maxSteps: "max_steps",
-	processOutput: "process_output",
 };
 const LOGGING_ALIASES: Record<string, string> = {
 	level: "level",
@@ -260,7 +251,6 @@ export interface ModelConfig {
 
 export interface AgentConfig {
 	maxSteps: number;
-	processOutput: ProcessOutputMode;
 }
 
 export interface LoggingConfig {
@@ -515,7 +505,6 @@ export function renderDefaultConfigToml(): string {
 		"# [models.<id>] (see above). The compact trigger fires when",
 		"# `tokens > hard_context_limit - reserve_tokens`.",
 		"max_steps = 20",
-		'process_output = "detailed"',
 		"",
 		"[logging]",
 		'level = "info"',
@@ -715,7 +704,6 @@ function readEnvConfig(env: NodeJS.ProcessEnv): PartialConfig {
 		},
 		agent: {
 			maxSteps: parseOptionalInt(env.AGENT_MAX_STEPS),
-			processOutput: parseOptionalProcessOutputMode(env.AGENT_PROCESS_OUTPUT),
 		},
 		logging: {
 			level: parseOptionalLevel(env.AGENT_LOG_LEVEL),
@@ -874,18 +862,6 @@ function parseOptionalLevel(raw: string | undefined): LogLevel | undefined {
 		case "info":
 		case "warn":
 		case "error":
-			return raw;
-		default:
-			return undefined;
-	}
-}
-
-function parseOptionalProcessOutputMode(
-	raw: string | undefined,
-): ProcessOutputMode | undefined {
-	switch (raw) {
-		case "compact":
-		case "detailed":
 			return raw;
 		default:
 			return undefined;

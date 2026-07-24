@@ -158,7 +158,6 @@ export interface ShellRuntime {
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
-export type ProcessOutputMode = "compact" | "detailed";
 
 export interface RuntimeLogger {
 	debug(event: string, fields?: Record<string, JsonValue | undefined>): void;
@@ -562,7 +561,6 @@ export interface AgentRunnerOptions {
 	workingDirectory: string;
 	logger?: RuntimeLogger;
 	progressReporter?: ProgressReporter;
-	processOutputMode?: ProcessOutputMode;
 	runId?: string;
 	sessionId?: string | null;
 	/**

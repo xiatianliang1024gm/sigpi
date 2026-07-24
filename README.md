@@ -12,24 +12,15 @@ SigPi is a **reference implementation** of a coding agent. It shows the complete
 
 ### Documentation
 
-SigPi ships a **bilingual, teaching-oriented guide**. Read the overview first, then go chapter by chapter — each chapter maps to a source module you can open side by side.
+Architecture decisions: [docs/adr/README.md](./docs/adr/README.md)
 
-- 📘 **English guide** — [docs/guide/en/README.md](./docs/guide/en/README.md)
-- 📕 **中文指南** — [docs/guide/zh/README.md](./docs/guide/zh/README.md)
+Specifications:
+- [Streaming render of reasoning tokens](./docs/spec-0020-streaming-render.md)
+- [Model transport adopts OpenAI SDK](./docs/spec-0024-model-transport-openai-sdk.md)
+- [Streamlined tool results for the LLM](./docs/spec-0026-streamlined-tool-results.md)
 
-| # | Topic | English | 中文 |
-|---|-------|---------|------|
-| 01 | Overview | [en](./docs/guide/en/01-overview.md) | [中文](./docs/guide/zh/01-overview.md) |
-| 02 | Agent loop | [en](./docs/guide/en/02-agent-loop.md) | [中文](./docs/guide/zh/02-agent-loop.md) |
-| 03 | Function calling | [en](./docs/guide/en/03-function-calling.md) | [中文](./docs/guide/zh/03-function-calling.md) |
-| 04 | Context management | [en](./docs/guide/en/04-context-management.md) | [中文](./docs/guide/zh/04-context-management.md) |
-| 05 | Tools | [en](./docs/guide/en/05-tools.md) | [中文](./docs/guide/zh/05-tools.md) |
-| 06 | Model adapters | [en](./docs/guide/en/06-model-adapters.md) | [中文](./docs/guide/zh/06-model-adapters.md) |
-| 07 | Session | [en](./docs/guide/en/07-session.md) | [中文](./docs/guide/zh/07-session.md) |
-| 08 | Real-world concerns | [en](./docs/guide/en/08-real-world-concerns.md) | [中文](./docs/guide/zh/08-real-world-concerns.md) |
-| 09 | Higher-level features | [en](./docs/guide/en/09-higher-level.md) | [中文](./docs/guide/zh/09-higher-level.md) |
-
-Architecture decisions and project context: [docs/adr/README.md](./docs/adr/README.md) · [CONTEXT.md](./CONTEXT.md)
+Design notes:
+- [Loop prevention & context memory](./docs/loop-prevention-context-memory.md) (中文)
 
 ## Requirements
 

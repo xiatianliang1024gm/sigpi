@@ -6,6 +6,7 @@ import type {
 	AssistantMessageView,
 	ReplView,
 } from "../src/tui/chat-renderer.js";
+import type { StatusBarModel } from "../src/tui/status-bar.js";
 import { VirtualTerminal } from "../src/tui/virtual-terminal.js";
 import type { TurnProgressEvent } from "../src/types.js";
 
@@ -69,6 +70,9 @@ class RecordingReplView implements ReplView {
 	endTurn(): void {}
 	appendSystem(): void {}
 	setStatusBarModel(): void {}
+	getStatusBarModel(): StatusBarModel | null {
+		return null;
+	}
 	writeLine(): void {}
 	writeError(): void {}
 }
