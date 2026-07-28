@@ -30,12 +30,14 @@ export function createUserMessage(
 export function createAssistantMessage(
 	content: string | null,
 	toolCalls?: ToolCall[],
-	options: { id?: string } = {},
+	options: { id?: string; reasoning?: string } = {},
 ): AssistantMessage {
+	const reasoning = options.reasoning?.trim();
 	return {
 		role: "assistant",
 		content,
 		toolCalls,
+		...(reasoning ? { reasoning } : {}),
 		id: options.id ?? randomUUID(),
 	};
 }
@@ -98,7 +100,26 @@ export function renderMessagesForSummary(messages: Message[]): string {
 				const calls = message.toolCalls
 					.map((toolCall) => `${toolCall.name}(${toolCall.rawArguments})`)
 					.join(", ");
-				return `[assistant] tool_calls=${calls}`;
+				const lines = [`[assistant] tool_calls=${calls}`];
+				// Reasoning captured alongside the tool-call turn is preserved
+				// so the summarizer sees the model's chain-of-thought, not just
+				// the call it decided to make.
+				if (message.reasoning) {
+					lines.push(
+						`[assistant reasoning] ${truncateForSummary(message.reasoning, SUMMARY_TOOL_CONTENT_MAX_CHARS)}`,
+					);
+				}
+				return lines.join("\n");
+			}
+
+			if (message.role === "assistant" && message.reasoning) {
+				// Plain text answer that still carries a reasoning trace — both
+				// land in the transcript so the summarizer can quote either.
+				const lines = [`[assistant] ${message.content ?? ""}`];
+				lines.push(
+					`[assistant reasoning] ${truncateForSummary(message.reasoning, SUMMARY_TOOL_CONTENT_MAX_CHARS)}`,
+				);
+				return lines.join("\n");
 			}
 
 			if (message.role === "tool") {

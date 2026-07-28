@@ -127,3 +127,164 @@ test("parse throws ModelRequestError when output is missing", () => {
 			error instanceof ModelRequestError && error.kind === "invalid_response",
 	);
 });
+
+test("finalize accumulates reasoning from response.reasoning.delta frames", () => {
+	const adapter = new ResponsesAdapter(config());
+	for (const frame of [
+		{
+			type: "response.reasoning.delta",
+			delta: { text: "let me " },
+		},
+		{
+			type: "response.reasoning.delta",
+			delta: { text: "think" },
+		},
+		{
+			type: "response.output_item.added",
+			item: {
+				id: "msg1",
+				type: "message",
+				role: "assistant",
+				content: [],
+			},
+		},
+		{
+			type: "response.output_text.delta",
+			item_id: "msg1",
+			delta: "done",
+		},
+		{
+			type: "response.completed",
+			status: "completed",
+		},
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, "let me think");
+	assert.equal(response.assistantText, "done");
+});
+
+test("finalize accumulates reasoning_summary deltas", () => {
+	const adapter = new ResponsesAdapter(config());
+	for (const frame of [
+		{
+			type: "response.reasoning_summary.delta",
+			delta: { text: "plan: " },
+		},
+		{
+			type: "response.reasoning_summary.delta",
+			delta: { text: "call read" },
+		},
+		{
+			type: "response.output_item.added",
+			item: {
+				id: "msg1",
+				type: "message",
+				role: "assistant",
+				content: [],
+			},
+		},
+		{
+			type: "response.output_text.delta",
+			item_id: "msg1",
+			delta: "ok",
+		},
+		{
+			type: "response.completed",
+			status: "completed",
+		},
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, "plan: call read");
+	assert.equal(response.assistantText, "ok");
+});
+
+test("finalize prefers the terminal reasoning_summary_text.done text when longer", () => {
+	const adapter = new ResponsesAdapter(config());
+	for (const frame of [
+		{
+			type: "response.reasoning_summary.delta",
+			delta: { text: "partial " },
+		},
+		{
+			type: "response.reasoning_summary_text.done",
+			text: "full final reasoning text",
+		},
+		{
+			type: "response.output_item.added",
+			item: {
+				id: "msg1",
+				type: "message",
+				role: "assistant",
+				content: [],
+			},
+		},
+		{
+			type: "response.output_text.delta",
+			item_id: "msg1",
+			delta: "answer",
+		},
+		{
+			type: "response.completed",
+			status: "completed",
+		},
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, "full final reasoning text");
+});
+
+test("finalize returns null reasoning when none was streamed", () => {
+	const adapter = new ResponsesAdapter(config());
+	for (const frame of [
+		{
+			type: "response.output_item.added",
+			item: {
+				id: "msg1",
+				type: "message",
+				role: "assistant",
+				content: [],
+			},
+		},
+		{
+			type: "response.output_text.delta",
+			item_id: "msg1",
+			delta: "just the answer",
+		},
+		{
+			type: "response.completed",
+			status: "completed",
+		},
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, null);
+});
+
+test("parse (non-streaming) extracts reasoning from a reasoning output item", () => {
+	const adapter = new ResponsesAdapter(config());
+	const response = adapter.parse({
+		status: "completed",
+		output: [
+			{
+				type: "reasoning",
+				summary: [
+					{ type: "summary_text", text: "hidden " },
+					{ type: "summary_text", text: "plan" },
+				],
+			},
+			{
+				type: "message",
+				role: "assistant",
+				content: [{ type: "output_text", text: "answer" }],
+			},
+		],
+	});
+	assert.equal(response.reasoning, "hidden plan");
+	assert.equal(response.assistantText, "answer");
+});

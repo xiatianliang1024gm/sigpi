@@ -223,3 +223,93 @@ test("onDelta leaves plain content untouched", () => {
 	assert.equal(delta?.contentDelta, "plain");
 	assert.equal(delta?.reasoningDelta, undefined);
 });
+
+test("finalize exposes reasoning accumulated from reasoning_content deltas", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	for (const frame of [
+		{ choices: [{ delta: { reasoning_content: "let me " } }] },
+		{ choices: [{ delta: { reasoning_content: "think" } }] },
+		{ choices: [{ delta: { content: "answer" } }] },
+		{ choices: [{ delta: {}, finish_reason: "stop" }] },
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, "let me think");
+	assert.equal(response.assistantText, "answer");
+});
+
+test("finalize extracts tagged <think> reasoning into ModelResponse.reasoning", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	for (const frame of [
+		{ choices: [{ delta: { content: "<think>hidden</think>the answer" } }] },
+		{ choices: [{ delta: {}, finish_reason: "stop" }] },
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, "hidden");
+	assert.equal(response.assistantText, "the answer");
+});
+
+test("finalize combines reasoning_content with tag-extracted reasoning", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	for (const frame of [
+		{ choices: [{ delta: { reasoning_content: "step 1 " } }] },
+		{ choices: [{ delta: { content: "<think>step 2</think>" } }] },
+		{ choices: [{ delta: { content: "the answer" } }] },
+		{ choices: [{ delta: {}, finish_reason: "stop" }] },
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, "step 1 step 2");
+	assert.equal(response.assistantText, "the answer");
+});
+
+test("finalize returns null reasoning when the model emitted none", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	for (const frame of [
+		{ choices: [{ delta: { content: "just the answer" } }] },
+		{ choices: [{ delta: {}, finish_reason: "stop" }] },
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, null);
+	assert.equal(response.assistantText, "just the answer");
+});
+
+test("parse (non-streaming) extracts reasoning from tagged content via convert", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	const response = adapter.parse({
+		choices: [
+			{
+				message: {
+					role: "assistant",
+					content: "<think>hidden plan</think>the answer",
+				},
+			},
+		],
+	});
+	assert.equal(response.reasoning, "hidden plan");
+	assert.equal(response.assistantText, "the answer");
+});
+
+test("fold splitter state stays independent of the onDelta splitter", () => {
+	// Regression guard: the transport feeds the same SSE frame to both
+	// `accumulate` and `onDelta`. If the fold and onDelta splitters shared
+	// state, both would advance on every frame and the second pass would
+	// re-classify already-split content (returning reasoning for what is now
+	// plain text, or duplicating reasoning across calls).
+	const adapter = new ChatCompletionsAdapter(config());
+	const frame = {
+		choices: [{ delta: { content: "<think>hidden</think>" } }],
+	};
+	adapter.accumulate(frame);
+	const delta = adapter.onDelta(frame);
+	// Fold path captured the reasoning once; onDelta emits it once.
+	assert.equal(delta?.reasoningDelta, "hidden");
+	assert.equal(delta?.contentDelta, undefined);
+	assert.equal(adapter.finalize().reasoning, "hidden");
+});

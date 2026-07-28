@@ -224,7 +224,10 @@ export class AgentRunner {
 				],
 				tools: [],
 				temperature: 0,
-				maxTokens: 768,
+				maxTokens: Math.min(
+					budget.reserveTokens,
+					this.options.maxTokens ?? Number.POSITIVE_INFINITY,
+				),
 				context: {
 					runId: this.options.runId,
 					sessionId: this.options.sessionId ?? null,
@@ -414,6 +417,7 @@ export class AgentRunner {
 					const assistantMessage = createAssistantMessage(
 						response.assistantText,
 						response.toolCalls,
+						{ reasoning: response.reasoning ?? undefined },
 					);
 					workingMessages.push(assistantMessage);
 					turnMessages.push(assistantMessage);
@@ -567,7 +571,9 @@ export class AgentRunner {
 					continue;
 				}
 
-				const assistantMessage = createAssistantMessage(outputText);
+				const assistantMessage = createAssistantMessage(outputText, undefined, {
+					reasoning: response.reasoning ?? undefined,
+				});
 				turnMessages.push(assistantMessage);
 
 				let contextUpdated: ContextUpdateResult;
@@ -653,6 +659,10 @@ export class AgentRunner {
 				this.options.maxSteps,
 				turnCheckpoint,
 			);
+			// No reasoning to attach: this branch fires only when the loop
+			// exhausted `maxSteps` and the last `response` from the inner loop
+			// is out of scope. The fallback answer is synthesized locally and
+			// has no associated chain-of-thought.
 			turnMessages.push(createAssistantMessage(outputText));
 
 			let contextUpdated: ContextUpdateResult;

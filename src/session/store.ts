@@ -54,6 +54,9 @@ const assistantMessageSchema = z.object({
 	role: z.literal("assistant"),
 	content: z.string().nullable(),
 	toolCalls: z.array(toolCallSchema).optional(),
+	// Optional chain-of-thought. Older sessions (pre-reasoning-persistence)
+	// simply omit the field; the loader accepts both shapes.
+	reasoning: z.string().optional(),
 	id: z.string().min(1),
 });
 

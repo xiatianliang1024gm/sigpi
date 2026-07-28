@@ -70,9 +70,18 @@ interface ChatCompletionsChunk {
 /** Wire-format adapter for the OpenAI `chat/completions` API. */
 export class ChatCompletionsAdapter implements WireFormatAdapter {
 	private accumulated: ParsedResponse | null = null;
-	// Extracts thinking wrapped in tags (<mm:think>, <think>, <reasoning>) from
-	// streamed `content` so it is shown as a separate reasoning preview and kept
-	// out of the final answer (some providers do not use `reasoning_content`).
+	// Chain-of-thought accumulated across the stream. Populated from
+	// `delta.reasoning_content` and from `<reasoning>` / `<think>` / `<mm:think>`
+	// tags that the `ThinkingSplitter` extracts out of `delta.content`.
+	// Exposed via `ModelResponse.reasoning` so the agent loop can persist it
+	// on the assistant message entry and pass it to the compaction summarizer.
+	private accumulatedReasoning = "";
+	// Two independent splitters, one for the accumulate/fold path and one for
+	// the onDelta/emit path. Both see the same input sequence (the transport
+	// calls `accumulate(frame)` and then `onDelta(frame)` with the identical
+	// SSE frame), but each must advance its own state independently — sharing
+	// one splitter would double-step it and corrupt cross-chunk tag handling.
+	private foldThinking = new ThinkingSplitter();
 	private thinking = new ThinkingSplitter();
 
 	constructor(private readonly config: ModelConfig) {}
@@ -96,16 +105,39 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 	private convert(parsed: ParsedResponse): ModelResponse {
 		const choice = parsed.choices[0];
 		const message = choice.message;
+		// Prefer the streaming accumulator when it saw any frames (the
+		// accumulator has already cleaned thinking tags out of `content` and
+		// collected them into `accumulatedReasoning`, so `stripThinking` is a
+		// no-op here but kept as a belt-and-braces guard for the non-streaming
+		// `parse()` path that never sets `accumulatedReasoning`).
+		const accumulatedReasoning = this.accumulatedReasoning;
+		const reasoning = accumulatedReasoning
+			? accumulatedReasoning
+			: this.extractTagReasoning(message.content ?? null);
 		const assistantText = stripThinking(message.content ?? null);
 		const toolCalls = this.parseChatCompletionsToolCalls(message.tool_calls);
 
 		return {
 			assistantText,
+			reasoning: reasoning || null,
 			toolCalls,
 			finishReason: choice.finish_reason ?? null,
 			usage: parseChatCompletionsUsage(parsed.usage),
 			rawResponse: parsed,
 		};
+	}
+
+	/**
+	 * Pull every `<reasoning>` / `<think>` / `<mm:think>` block out of a raw
+	 * `content` string and return the concatenated reasoning body. Used by the
+	 * non-streaming `parse()` path where no per-frame splitter is wired up;
+	 * the streaming path already populates `accumulatedReasoning`.
+	 */
+	private extractTagReasoning(content: string | null): string {
+		if (!content) {
+			return "";
+		}
+		return new ThinkingSplitter().push(content).reasoning;
 	}
 
 	accumulate(frame: unknown): void {
@@ -128,8 +160,12 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 		const chunk = frame as ChatCompletionsChunk;
 		if (!this.accumulated) {
 			this.accumulated = { choices: [], usage: undefined };
-			// Fresh stream: clear any stale thinking-tag parsing state.
+			// Fresh stream: clear any stale thinking-tag parsing state on both
+			// splitters (fold + onDelta each own one), and reset the
+			// accumulator's reasoning buffer.
+			this.foldThinking = new ThinkingSplitter();
 			this.thinking = new ThinkingSplitter();
+			this.accumulatedReasoning = "";
 		}
 		this.foldChunk(this.accumulated, chunk);
 	}
@@ -322,9 +358,26 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 			}
 			const delta = chunkChoice.delta;
 			if (isPlainObject(delta)) {
+				// Dedicated `reasoning_content` field (DeepSeek / OpenAI
+				// reasoning models) feeds the accumulator directly; the tag
+				// splitter only sees the visible `content` stream.
+				if (typeof delta.reasoning_content === "string") {
+					this.accumulatedReasoning += delta.reasoning_content;
+				}
 				if (typeof delta.content === "string") {
-					target.message.content =
-						(target.message.content ?? "") + delta.content;
+					// Run `content` through the fold splitter so tagged
+					// reasoning blocks route into the accumulator and only the
+					// cleaned text lands in `state.message.content`. Using a
+					// separate splitter from the onDelta path keeps each path's
+					// state independent (the transport feeds the same frame to
+					// both methods).
+					const { reasoning, content } = this.foldThinking.push(delta.content);
+					if (reasoning) {
+						this.accumulatedReasoning += reasoning;
+					}
+					if (content) {
+						target.message.content = (target.message.content ?? "") + content;
+					}
 				}
 				if (Array.isArray(delta.tool_calls)) {
 					for (const tc of delta.tool_calls) {
