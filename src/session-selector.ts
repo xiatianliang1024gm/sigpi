@@ -17,6 +17,14 @@ export interface SelectSessionOptions {
 	 * the overlay composite can be verified through the Terminal seam.
 	 */
 	terminal?: Terminal;
+	/**
+	 * Parent TUI instance to reuse for the session selector overlay. When
+	 * provided, the picker is rendered as an overlay on the existing TUI
+	 * instead of creating a separate TUI / ProcessTerminal. This avoids
+	 * double-listen on process.stdin and the {@link ProcessTerminal#stop}
+	 * side effects (stdin pause, raw-mode toggle) that break the parent REPL.
+	 */
+	parentTui?: TUI;
 }
 
 const DEFAULT_SESSION_SELECTOR_LIMIT = 20;
@@ -191,19 +199,42 @@ export async function selectSessionInteractive(
 	}
 
 	const usingProvidedTerminal = Boolean(options?.terminal);
-	const terminal = options?.terminal ?? new ProcessTerminal();
+	const parentTui = options?.parentTui;
 
 	// In a non-interactive (piped) environment there is no TTY to drive an
 	// interactive picker, so fall back to the most recent session.
-	if (!usingProvidedTerminal && (!processInput.isTTY || !processOutput.isTTY)) {
+	if (
+		!parentTui &&
+		!usingProvidedTerminal &&
+		(!processInput.isTTY || !processOutput.isTTY)
+	) {
 		return sessions[0]?.sessionId ?? null;
 	}
 
 	return new Promise<string | null>((resolve) => {
-		const tui = new TUI(terminal);
 		const component = new SessionSelectorComponent(
 			createSessionSelectorState(sessions),
 		);
+
+		if (parentTui) {
+			// Reuse the parent TUI's overlay stack so we don't create a
+			// second ProcessTerminal on the same process.stdin.  A new
+			// ProcessTerminal would call process.stdin.pause() on stop,
+			// which breaks stdin for the parent REPL.
+			component.onResolve = (result) => {
+				parentTui.hideOverlay();
+				resolve(result);
+			};
+			parentTui.showOverlay(component, {
+				anchor: "center",
+				width: "100%",
+				maxHeight: "100%",
+			});
+			return;
+		}
+
+		const terminal = options?.terminal ?? new ProcessTerminal();
+		const tui = new TUI(terminal);
 
 		component.onResolve = (result) => {
 			tui.stop();
