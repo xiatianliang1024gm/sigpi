@@ -20,6 +20,7 @@ export function buildEditor(
 			description: command.description,
 		})),
 		process.cwd(),
+		"fd",
 	);
 	editor.setAutocompleteProvider(provider);
 	return editor;
