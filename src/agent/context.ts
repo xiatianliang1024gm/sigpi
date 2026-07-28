@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-	estimateContextTokens,
-	estimateMessageTokens,
-} from "../context-window.js";
+import { estimateContextTokens } from "../context-window.js";
 import {
 	appendCompactionEntry,
 	appendMessageEntries,
@@ -21,11 +18,18 @@ import type {
 	SessionEntry,
 	ToolCall,
 	ToolExecutionResult,
-	ToolMessage,
 	ToolSchema,
 } from "../types.js";
-import { CompactionFailedError } from "./compaction-error.js";
 import type { CompactionHookRegistry } from "./compaction-hook.js";
+import {
+	Compactor,
+	type CompactorDeps,
+	microCompactMessages,
+} from "./compactor.js";
+
+// Re-export for backwards compatibility (tests and potential consumers)
+export { microCompactMessages };
+
 import {
 	createEmptyExplorationLedger,
 	normalizeExplorationLedger,
@@ -34,7 +38,6 @@ import {
 	updateLedgerFromToolExecution,
 } from "./exploration-ledger.js";
 import { createSystemMessage, createUserMessage } from "./messages.js";
-import { summarize } from "./summarizer.js";
 
 const DEFAULT_CONTEXT_OPTIONS: ContextManagerOptions = {
 	getContextBudget: () => ({
@@ -45,8 +48,6 @@ const DEFAULT_CONTEXT_OPTIONS: ContextManagerOptions = {
 	summaryEnabled: true,
 	keepRecentMessagesFloor: 4,
 };
-
-const DEFAULT_KEEP_RECENT_MESSAGES_FLOOR = 4;
 
 function defaultLedgerRecorder(
 	_toolCall: ToolCall,
@@ -90,6 +91,7 @@ export class ConversationContext {
 	 * at or before `messageIndex` from `recentMessages`.
 	 */
 	private lastUsage: { usage: ModelUsage; messageIndex: number } | null = null;
+	private readonly compactor: Compactor;
 
 	constructor(options: Partial<ContextManagerOptions> = {}) {
 		this.options = { ...DEFAULT_CONTEXT_OPTIONS, ...options };
@@ -98,6 +100,38 @@ export class ConversationContext {
 		this.compactionHooks = this.options.compactionHooks ?? null;
 		this.ledgerRecorder = this.options.ledgerRecorder ?? defaultLedgerRecorder;
 		this.sessionId = this.options.sessionId ?? null;
+
+		const deps: CompactorDeps = {
+			getSummary: () => this.summary,
+			setSummary: (v) => {
+				this.summary = v;
+			},
+			getRecentMessages: () => this.recentMessages,
+			setRecentMessages: (v) => {
+				this.recentMessages = v;
+			},
+			getEntries: () => this.entries,
+			setEntries: (v) => {
+				this.entries = v;
+			},
+			getLastUsage: () => this.lastUsage,
+			setLastUsage: (v) => {
+				this.lastUsage = v;
+			},
+			getExplorationLedger: () => this.explorationLedger,
+			getKeepRecentMessagesFloor: () =>
+				this.options.keepRecentMessagesFloor ??
+				Compactor.DEFAULT_KEEP_RECENT_MESSAGES_FLOOR,
+			isSummaryEnabled: () => this.options.summaryEnabled,
+			getCompactionHooks: () => this.compactionHooks,
+			getRunId: () => this.runId,
+			getSessionId: () => this.sessionId,
+			getLogger: () => this.logger,
+			getBudget: () => this.getBudget(),
+			estimateRequest: (...args) => this.estimateRequest(...args),
+			recordCompactionEntry: (args) => this.recordCompaction(args),
+		};
+		this.compactor = new Compactor(deps);
 	}
 
 	bindSession(sessionId: string | null): void {
@@ -269,11 +303,13 @@ export class ConversationContext {
 			abortSignal?: AbortSignal;
 		},
 	): Promise<ContextUpdateResult> {
-		return this.compact(provider, systemPrompt, toolSchemas, requestContext, {
-			force: true,
-			instructions: options?.instructions,
-			abortSignal: options?.abortSignal,
-		});
+		return this.compactor.compactNow(
+			provider,
+			systemPrompt,
+			toolSchemas,
+			requestContext,
+			options,
+		);
 	}
 
 	getSummary(): string | null {
@@ -450,241 +486,13 @@ export class ConversationContext {
 			abortSignal?: AbortSignal;
 		},
 	): Promise<ContextUpdateResult> {
-		const previousRecentMessageCount = this.recentMessages.length;
-		const previousSummaryChars = this.summary?.length ?? 0;
-		const estimatedBefore = this.estimateRequest(systemPrompt, toolSchemas);
-		const tokensBefore = estimatedBefore.totalTokens;
-		let summarized = false;
-		let trimmed = false;
-		let trigger: ContextUpdateResult["trigger"] = null;
-
-		const tokenTriggered =
-			typeof estimatedBefore.threshold === "number" &&
-			estimatedBefore.totalTokens > estimatedBefore.threshold;
-		const floor =
-			this.options.keepRecentMessagesFloor ??
-			DEFAULT_KEEP_RECENT_MESSAGES_FLOOR;
-		// Force-driven compaction (e.g. `/compact` slash command) bypasses the
-		// message-count floor so users can always shrink a chat on demand.
-		const summarizable =
-			this.options.summaryEnabled &&
-			(options?.force || this.recentMessages.length > floor);
-
-		if (summarizable && (options?.force || tokenTriggered)) {
-			trigger = options?.force ? "force" : "token";
-			const splitIndex = this.findCompactSplitIndex({
-				trigger,
-			});
-			// Bridge the caller's AbortSignal (e.g. a /compact command
-			// triggered with Ctrl-C in flight) into a single internal
-			// AbortController so both the hook phase and the summary
-			// provider call observe the same abort state. The signal is
-			// created outside the `if (splitIndex > 0)` branch so it is
-			// always available for downstream code paths.
-			const compactAbortController = new AbortController();
-			const callerSignal = options?.abortSignal;
-			if (callerSignal) {
-				if (callerSignal.aborted) {
-					compactAbortController.abort(callerSignal.reason);
-				} else {
-					callerSignal.addEventListener(
-						"abort",
-						() => compactAbortController.abort(callerSignal.reason),
-						{ once: true },
-					);
-				}
-			}
-			if (splitIndex > 0) {
-				const messagesToSummarize = this.recentMessages.slice(0, splitIndex);
-				if (messagesToSummarize.length > 0) {
-					this.logger?.info("context_summarization_started", {
-						runId: this.runId,
-						sessionId: this.sessionId,
-						turnId: requestContext?.turnId,
-						trigger,
-						messageCount: messagesToSummarize.length,
-						estimatedTokens: estimatedBefore.totalTokens,
-						tokenThreshold: estimatedBefore.threshold,
-					});
-					let hookOverride:
-						| import("./compaction-hook.js").CompactionHookOverride
-						| null = null;
-					if (this.compactionHooks && this.compactionHooks.size > 0) {
-						const preparation = {
-							trigger: trigger ?? "force",
-							tokensBefore,
-							summarizedMessages: messagesToSummarize,
-							keptMessages: this.recentMessages.slice(splitIndex),
-							recentMessages: [...this.recentMessages],
-							previousSummary: this.summary,
-						};
-						hookOverride = await this.compactionHooks.runHooks(
-							preparation,
-							compactAbortController.signal,
-							(message, meta) =>
-								this.logger?.warn(
-									message,
-									meta as Record<
-										string,
-										import("../types.js").JsonValue | undefined
-									>,
-								),
-						);
-						if (hookOverride === null) {
-							this.logger?.info("context_summarization_cancelled_by_hook", {
-								runId: this.runId,
-								sessionId: this.sessionId,
-								turnId: requestContext?.turnId,
-								trigger,
-							});
-							return {
-								summarized: false,
-								trimmed: false,
-								summary: this.summary,
-								recentMessageCount: this.recentMessages.length,
-								previousRecentMessageCount,
-								summaryChars: previousSummaryChars,
-								previousSummaryChars,
-								tokensBefore,
-								tokensAfter: estimatedBefore.totalTokens,
-								trigger,
-							};
-						}
-					}
-					try {
-						this.summary =
-							hookOverride?.summary ??
-							(await summarize(provider, {
-								systemPrompt,
-								messages: microCompactMessages(messagesToSummarize),
-								previousSummary: this.summary,
-								ledger: this.explorationLedger,
-								instructions: options?.instructions,
-								requestContext,
-								reserveTokens: this.getBudget().reserveTokens,
-								runId: this.runId,
-								sessionId: this.sessionId ?? undefined,
-								abortSignal: compactAbortController.signal,
-							}));
-						this.recentMessages = this.recentMessages.slice(splitIndex);
-						this.recordCompaction({
-							summarizedCount: messagesToSummarize.length,
-							trigger,
-							tokensBefore,
-							customInstructions: options?.instructions?.trim() || undefined,
-						});
-						summarized = true;
-						this.invalidateLastUsageAfterTrim();
-						this.logger?.info("context_summarization_finished", {
-							runId: this.runId,
-							sessionId: this.sessionId,
-							turnId: requestContext?.turnId,
-							trigger,
-							summaryChars: this.summary.length,
-							remainingMessages: this.recentMessages.length,
-						});
-					} catch (error) {
-						this.logger?.error("context_summarization_failed", {
-							runId: this.runId,
-							sessionId: this.sessionId,
-							turnId: requestContext?.turnId,
-							trigger,
-							error: error instanceof Error ? error.message : String(error),
-							messageCount: messagesToSummarize.length,
-							estimatedTokens: estimatedBefore.totalTokens,
-						});
-						// No deterministic fallback (matches pi / Claude Code): the
-						// caller decides how to degrade. Bound tokens first so a
-						// summary outage can't grow the context unbounded, then
-						// propagate a typed error for the runner / command to handle.
-						this.trimToHardLimit(systemPrompt, toolSchemas, requestContext);
-						this.invalidateLastUsageAfterTrim();
-						if (error instanceof CompactionFailedError) {
-							throw new CompactionFailedError(error.message, {
-								reason: error.reason,
-								trigger: trigger ?? "force",
-							});
-						}
-						throw new CompactionFailedError(
-							error instanceof Error ? error.message : String(error),
-							{ reason: "summarize_error", trigger: trigger ?? "force" },
-						);
-					}
-				}
-			}
-		}
-
-		trimmed = this.trimToHardLimit(systemPrompt, toolSchemas, requestContext);
-
-		const estimatedAfter = this.estimateRequest(systemPrompt, toolSchemas);
-
-		return {
-			summarized,
-			trimmed,
-			summary: this.summary,
-			recentMessageCount: this.recentMessages.length,
-			previousRecentMessageCount,
-			summaryChars: this.summary?.length ?? 0,
-			previousSummaryChars,
-			tokensBefore,
-			tokensAfter: estimatedAfter.totalTokens,
-			trigger,
-		};
-	}
-
-	private findCompactSplitIndex(args: {
-		trigger: ContextUpdateResult["trigger"];
-	}): number {
-		const floor =
-			this.options.keepRecentMessagesFloor ??
-			DEFAULT_KEEP_RECENT_MESSAGES_FLOOR;
-		const keepRecentTokens = this.getBudget().keepRecentTokens;
-		const messageFloorIndex = alignSplitIndex(
-			this.recentMessages,
-			Math.max(1, this.recentMessages.length - floor),
+		return this.compactor.compact(
+			provider,
+			systemPrompt,
+			toolSchemas,
+			requestContext,
+			options,
 		);
-
-		// Token-based cut-point: walk backwards from the newest message,
-		// accumulating tokens until `keepRecentTokens` is reached. Cut at
-		// the nearest user / assistant boundary. This mirrors the algorithm
-		// used by pi and avoids summarizing tokens that we explicitly want
-		// to keep un-summarized.
-		let tokenCutIndex = this.recentMessages.length;
-		let accumulated = 0;
-		for (let i = this.recentMessages.length - 1; i >= 0; i -= 1) {
-			accumulated += estimateMessageTokens(this.recentMessages[i]);
-			if (accumulated >= keepRecentTokens) {
-				tokenCutIndex = alignSplitIndex(this.recentMessages, i);
-				break;
-			}
-		}
-		// When the budget can fit every message (e.g. very fresh
-		// conversation or generous budget) only the pure-token trigger
-		// may return 0 to signal "nothing to summarize yet". Forced
-		// compaction is the user explicitly asking for it, so we cut at
-		// the last user / assistant boundary and keep just the most recent
-		// message group.
-		if (tokenCutIndex >= this.recentMessages.length) {
-			if (args.trigger === "token") {
-				return 0;
-			}
-			return alignSplitIndex(
-				this.recentMessages,
-				Math.max(1, this.recentMessages.length - 1),
-			);
-		}
-		// Always honor the message-count safety floor: never cut more
-		// aggressively than the floor allows.
-		return Math.min(tokenCutIndex, messageFloorIndex);
-	}
-
-	private invalidateLastUsageAfterTrim(): void {
-		if (!this.lastUsage) {
-			return;
-		}
-		if (this.lastUsage.messageIndex >= this.recentMessages.length) {
-			this.lastUsage = null;
-		}
 	}
 
 	private trimToHardLimit(
@@ -694,35 +502,11 @@ export class ConversationContext {
 			turnId?: string;
 		},
 	): boolean {
-		let trimmed = false;
-		const floor =
-			this.options.keepRecentMessagesFloor ??
-			DEFAULT_KEEP_RECENT_MESSAGES_FLOOR;
-		const budget = this.getBudget();
-		const hardLimitTokens = budget.hardContextLimit - budget.reserveTokens;
-
-		while (
-			this.estimateRequest(systemPrompt, toolSchemas).totalTokens >
-				hardLimitTokens &&
-			this.recentMessages.length > floor
-		) {
-			this.recentMessages = trimOldestMessageGroup(this.recentMessages);
-			trimmed = true;
-		}
-
-		if (trimmed) {
-			this.invalidateLastUsageAfterTrim();
-			this.logger?.warn("context_trimmed", {
-				runId: this.runId,
-				sessionId: this.sessionId,
-				turnId: requestContext?.turnId,
-				remainingMessages: this.recentMessages.length,
-				estimatedTokens: this.estimateRequest(systemPrompt, toolSchemas)
-					.totalTokens,
-			});
-		}
-
-		return trimmed;
+		return this.compactor.trimToHardLimit(
+			systemPrompt,
+			toolSchemas,
+			requestContext,
+		);
 	}
 }
 
@@ -747,84 +531,6 @@ function extractSection(
 		.join(" ")
 		.trim();
 	return body || null;
-}
-
-const MICRO_COMPACT_KEEP_TOOL_TOKENS = 8_000;
-const MICRO_COMPACT_FLOOR_TOOL_RESULTS = 3;
-
-/**
- * Derived, non-mutating view used to shrink working-context noise without a
- * model call and without touching the append-only entry stream. Old tool
- * results are replaced by a placeholder that preserves `name` + `toolCallId`
- * (so tool_use/tool_result pairing stays intact); the most-recent tool results
- * up to a token budget, with a small floor, are kept intact so the summary
- * prompt and the model can still see recent tool output.
- */
-export function microCompactMessages(
-	messages: Message[],
-	options: {
-		keepToolTokens?: number;
-		floorToolResults?: number;
-	} = {},
-): Message[] {
-	const keepToolTokens =
-		options.keepToolTokens ?? MICRO_COMPACT_KEEP_TOOL_TOKENS;
-	const floor = options.floorToolResults ?? MICRO_COMPACT_FLOOR_TOOL_RESULTS;
-	let keptTokens = 0;
-	let keptCount = 0;
-	const keep = new Array<boolean>(messages.length).fill(false);
-	for (let i = messages.length - 1; i >= 0; i -= 1) {
-		const message = messages[i];
-		if (message.role !== "tool") {
-			continue;
-		}
-		if (keptCount < floor || keptTokens < keepToolTokens) {
-			keep[i] = true;
-			keptCount += 1;
-			keptTokens += estimateMessageTokens(message);
-		}
-	}
-	return messages.map((message, i) => {
-		if (message.role === "tool" && !keep[i]) {
-			return makeOmittedToolMessage(message);
-		}
-		return message;
-	});
-}
-
-function makeOmittedToolMessage(message: ToolMessage): ToolMessage {
-	return { ...message, content: "" };
-}
-
-/**
- * Extract the final <summary> block from a summarization response. If the model
- * omitted the tags, fall back to the whole text (after stripping a single
- * leading <analysis> scratch block) so a good summary is never discarded over
- * a formatting miss. Returns null only when there is genuinely no text.
- */
-
-function trimOldestMessageGroup(messages: Message[]): Message[] {
-	if (messages.length === 0) {
-		return messages;
-	}
-
-	let dropCount = 1;
-
-	while (dropCount < messages.length && messages[dropCount]?.role === "tool") {
-		dropCount += 1;
-	}
-
-	return messages.slice(dropCount);
-}
-
-function alignSplitIndex(messages: Message[], splitIndex: number): number {
-	let index = Math.min(splitIndex, messages.length);
-
-	while (index < messages.length && messages[index]?.role === "tool") {
-		index += 1;
-	}
-
-	return index;
 }
 
 /**

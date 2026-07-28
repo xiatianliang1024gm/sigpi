@@ -43,6 +43,16 @@ export interface AssistantMessage {
 	role: "assistant";
 	content: string | null;
 	toolCalls?: ToolCall[];
+	/**
+	 * Chain-of-thought text the model emitted alongside `content`. Captured
+	 * from the provider's `reasoning_content` / `reasoning_summary` field,
+	 * or extracted from `<reasoning>` / `<think>` / `<mm:think>` tags embedded
+	 * in `content` when the provider does not expose a dedicated field.
+	 * Persisted on the assistant message entry so resumed sessions keep the
+	 * model's reasoning, and surfaced to the summarizer during compaction so
+	 * the next phase can continue without losing the model's line of thought.
+	 */
+	reasoning?: string;
 	id?: string;
 }
 
@@ -322,6 +332,14 @@ export interface ModelUsage {
 
 export interface ModelResponse {
 	assistantText: string | null;
+	/**
+	 * Chain-of-thought text accumulated across the stream (or read from a
+	 * non-streaming response). See {@link AssistantMessage.reasoning} for
+	 * the provenance. The agent loop persists this on the assistant message
+	 * entry and includes it in the compaction transcript so the summarizer
+	 * sees the model's reasoning, not just its final answer.
+	 */
+	reasoning?: string | null;
 	toolCalls: ToolCall[];
 	finishReason: string | null;
 	/**

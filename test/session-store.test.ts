@@ -242,6 +242,57 @@ test("session store round-trips provider usage on assistant message entries", as
 	});
 });
 
+test("session store round-trips reasoning on an assistant message entry", async () => {
+	const cwd = await createTempDir("sigpi-session-reasoning-");
+	const store = createTestSessionStore({ cwd, homeDir: cwd });
+	const fingerprint = createSystemPromptFingerprint("system prompt");
+	const created = await store.createSession({
+		cwd,
+		systemPromptFingerprint: fingerprint,
+		loadedSkillNames: [],
+		skillsFingerprint: null,
+	});
+
+	const assistantId = "assistant-with-reasoning";
+	const contextState = {
+		summary: null,
+		recentMessages: [
+			{
+				role: "assistant" as const,
+				content: "the answer is 42",
+				reasoning: "the user asked a numeric question",
+				id: assistantId,
+			},
+		],
+	};
+
+	await store.updateSnapshot({
+		sessionId: created.sessionId,
+		contextState,
+	});
+
+	const loaded = await store.loadSession({
+		sessionId: created.sessionId,
+		cwd,
+		systemPromptFingerprint: fingerprint,
+	});
+
+	const assistantEntry = loaded.session.entries.find(
+		(entry) => entry.kind === "message" && entry.id === assistantId,
+	);
+	assert.ok(assistantEntry && assistantEntry.kind === "message");
+	assert.equal(
+		assistantEntry.message.role === "assistant" &&
+			assistantEntry.message.reasoning,
+		"the user asked a numeric question",
+	);
+	assert.equal(
+		assistantEntry.message.role === "assistant" &&
+			assistantEntry.message.content,
+		"the answer is 42",
+	);
+});
+
 test("session load marks in-progress turn as interrupted", async () => {
 	const cwd = await createTempDir("sigpi-session-interrupted-");
 	const store = createTestSessionStore({ cwd, homeDir: cwd });

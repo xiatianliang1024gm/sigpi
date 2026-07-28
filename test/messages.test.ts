@@ -1,161 +1,134 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createToolMessage } from "../src/agent/messages.js";
+import {
+	createAssistantMessage,
+	renderMessagesForSummary,
+} from "../src/agent/messages.js";
 
-test("createToolMessage formats read content as raw text", () => {
-	const content = [
-		'const payload = "{\\"path\\":\\"C:\\\\temp\\\\file.json\\"}";',
-		"const done = true;",
-		"",
-	].join("\n");
+test("createAssistantMessage omits reasoning when none was provided", () => {
+	const message = createAssistantMessage("hello");
+	assert.equal(message.role, "assistant");
+	assert.equal(message.content, "hello");
+	assert.equal(message.reasoning, undefined);
+});
 
-	const message = createToolMessage("call_1", "read", {
-		ok: true,
-		data: {
-			path: "tmp/demo.txt",
-			totalLines: 3,
-			totalChars: content.length,
-			returnedLineStart: 1,
-			returnedLineEnd: 3,
-			returnedChars: 77,
-			truncated: false,
-			continuation: null,
-			content,
-			rendered: [
-				"[Read tmp/demo.txt lines 1-3 of 3 (77 chars)]",
-				"=== CONTENT START ===",
-				'const payload = "{\\"path\\":\\"C:\\\\temp\\\\file.json\\"}";',
-				"const done = true;",
-				"=== CONTENT END ===",
-			].join("\n"),
-		},
+test("createAssistantMessage persists reasoning when supplied", () => {
+	const message = createAssistantMessage("hello", undefined, {
+		reasoning: "let me think this through",
 	});
+	assert.equal(message.content, "hello");
+	assert.equal(message.reasoning, "let me think this through");
+});
 
-	assert.equal(
-		message.content,
+test("createAssistantMessage persists reasoning alongside tool calls", () => {
+	const message = createAssistantMessage(
+		null,
 		[
-			"[Read tmp/demo.txt lines 1-3 of 3 (77 chars)]",
-			"=== CONTENT START ===",
-			'const payload = "{\\"path\\":\\"C:\\\\temp\\\\file.json\\"}";',
-			"const done = true;",
-			"=== CONTENT END ===",
-		].join("\n"),
-	);
-});
-
-test("createToolMessage formats read metadata and raw content", () => {
-	const message = createToolMessage("call_2", "read", {
-		ok: true,
-		data: {
-			path: "src/example.ts",
-			totalLines: 20,
-			totalChars: 10,
-			returnedLineStart: 4,
-			returnedLineEnd: 5,
-			returnedChars: 10,
-			truncated: false,
-			continuation: null,
-			content: "4 │ alpha\n5 │ beta",
-			rendered: [
-				"[Read src/example.ts lines 4-5 of 20 (10 chars)]",
-				"=== CONTENT START ===",
-				"4 │ alpha",
-				"5 │ beta",
-				"=== CONTENT END ===",
-			].join("\n"),
-		},
-	});
-
-	assert.equal(
-		message.content,
-		[
-			"[Read src/example.ts lines 4-5 of 20 (10 chars)]",
-			"=== CONTENT START ===",
-			"4 │ alpha",
-			"5 │ beta",
-			"=== CONTENT END ===",
-		].join("\n"),
-	);
-});
-
-test("createToolMessage formats tool errors with explicit details", () => {
-	const message = createToolMessage("call_3", "edit", {
-		ok: false,
-		error: "Exact old block not found.",
-		details: {
-			block: 2,
-			reason: "no_match",
-		},
-	});
-
-	assert.equal(
-		message.content,
-		[
-			"TOOL: edit",
-			"STATUS: error",
-			"ERROR: Exact old block not found.",
-			"DETAILS:",
-			"block: 2",
-			"reason: no_match",
-		].join("\n"),
-	);
-});
-
-test("createToolMessage picks a non-conflicting raw-content end marker", () => {
-	const content = ["alpha", "=== CONTENT END ===", "omega"].join("\n");
-
-	const message = createToolMessage("call_4", "read", {
-		ok: true,
-		data: {
-			path: "tmp/marker.txt",
-			truncated: false,
-			content,
-			rendered: [
-				"[Read tmp/marker.txt (24 chars total)]",
-				"=== CONTENT START ===",
-				"alpha",
-				"=== CONTENT END ===",
-				"omega",
-				"=== CONTENT END ===_1",
-			].join("\n"),
-		},
-	});
-
-	assert.match(message.content, /=== CONTENT END ===_1$/);
-	assert.match(
-		message.content,
-		/=== CONTENT START ===\nalpha\n=== CONTENT END ===\nomega\n=== CONTENT END ===_1$/u,
-	);
-});
-
-test("createToolMessage preserves truncation guidance outside raw file content", () => {
-	const message = createToolMessage("call_5", "read", {
-		ok: true,
-		data: {
-			path: "tmp/demo.txt",
-			totalLines: 10,
-			totalChars: 10,
-			returnedLineStart: 1,
-			returnedLineEnd: 1,
-			returnedChars: 10,
-			truncated: true,
-			continuation: {
-				path: "tmp/demo.txt",
-				nextOffset: 1,
-				suggestedLimit: 100,
+			{
+				id: "c1",
+				name: "grep",
+				arguments: { q: "x" },
+				rawArguments: '{"q":"x"}',
 			},
-			content: "1 │ abcdefghij",
-			rendered: [
-				"[Read tmp/demo.txt lines 1-1 of 10 (10 chars)]",
-				"=== CONTENT START ===",
-				"1 │ abcdefghij",
-				"=== CONTENT END ===",
-				'[PARTIAL view – received lines 1-1 of 10 (10 of 51200 chars used). Use read({"file_path":"tmp/demo.txt","offset":1,"limit":100}) to continue reading from line 2.]',
-			].join("\n"),
+		],
+		{
+			reasoning: "the user wants me to grep first",
 		},
-	});
+	);
+	assert.equal(message.content, null);
+	assert.equal(message.toolCalls?.[0]?.name, "grep");
+	assert.equal(message.reasoning, "the user wants me to grep first");
+});
 
-	assert.match(message.content, /PARTIAL view/);
-	assert.equal(message.content.includes("guess offsets\nabcd"), false);
-	assert.equal(message.content.includes("1 │ abcdefghij"), true);
+test("createAssistantMessage drops empty / whitespace-only reasoning", () => {
+	const message = createAssistantMessage("hello", undefined, {
+		reasoning: "   \n\t  ",
+	});
+	assert.equal(message.reasoning, undefined);
+});
+
+test("renderMessagesForSummary renders a plain assistant message without reasoning", () => {
+	const transcript = renderMessagesForSummary([
+		{ role: "assistant", content: "hi", id: "a1" },
+	]);
+	assert.equal(transcript, "[assistant] hi");
+});
+
+test("renderMessagesForSummary emits reasoning on a line below the answer", () => {
+	const transcript = renderMessagesForSummary([
+		{
+			role: "assistant",
+			content: "42",
+			reasoning: "user asked a numeric question",
+			id: "a1",
+		},
+	]);
+	assert.equal(
+		transcript,
+		[
+			"[assistant] 42",
+			"[assistant reasoning] user asked a numeric question",
+		].join("\n"),
+	);
+});
+
+test("renderMessagesForSummary emits reasoning alongside tool calls", () => {
+	const transcript = renderMessagesForSummary([
+		{
+			role: "assistant",
+			content: null,
+			reasoning: "I need to inspect the file first",
+			toolCalls: [
+				{
+					id: "c1",
+					name: "read",
+					arguments: { file_path: "/tmp/x" },
+					rawArguments: '{"file_path":"/tmp/x"}',
+				},
+			],
+			id: "a1",
+		},
+	]);
+	// Order: tool_calls header line first, reasoning line second.
+	assert.equal(
+		transcript,
+		[
+			'[assistant] tool_calls=read({"file_path":"/tmp/x"})',
+			"[assistant reasoning] I need to inspect the file first",
+		].join("\n"),
+	);
+});
+
+test("renderMessagesForSummary does not emit a reasoning line for empty reasoning", () => {
+	const transcript = renderMessagesForSummary([
+		{ role: "assistant", content: "hi", id: "a1" },
+	]);
+	assert.equal(transcript.includes("[assistant reasoning]"), false);
+});
+
+test("renderMessagesForSummary truncates very long reasoning to the summary budget", () => {
+	const long = "x".repeat(5000);
+	const transcript = renderMessagesForSummary([
+		{
+			role: "assistant",
+			content: "done",
+			reasoning: long,
+			id: "a1",
+		},
+	]);
+	const reasoningPrefix = "[assistant reasoning] ";
+	// `truncateForSummary` (shared with tool results) caps the body at
+	// `SUMMARY_TOOL_CONTENT_MAX_CHARS` (2_000) and appends a truncation marker
+	// on a new line. The first `[assistant reasoning]` line should fit inside
+	// that budget plus the prefix, and the transcript should carry the marker.
+	const firstReasoningLine = transcript
+		.split("\n")
+		.find((line) => line.startsWith(reasoningPrefix));
+	assert.ok(firstReasoningLine);
+	assert.ok(
+		firstReasoningLine.length <=
+			reasoningPrefix.length + 2_000 + /* slack for any future tweak */ 32,
+		`expected reasoning line to be budget-capped, got length ${firstReasoningLine.length}`,
+	);
+	assert.match(transcript, /truncated/);
 });

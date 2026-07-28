@@ -45,6 +45,12 @@ interface ResponsesFunctionTool {
 /** Wire-format adapter for the OpenAI `responses` API. */
 export class ResponsesAdapter implements WireFormatAdapter {
 	private accumulated: ValidatedResponsesResponse = { output: [] };
+	// Chain-of-thought accumulated from `response.reasoning.delta` and
+	// `response.reasoning_summary.delta` frames. The onDelta path mirrors the
+	// same fields for live UI rendering, but the accumulator is the source of
+	// truth for `ModelResponse.reasoning` so non-streaming callers (and any
+	// future `onDelta`-less code path) keep access to the full reasoning.
+	private accumulatedReasoning = "";
 
 	constructor(private readonly config: ModelConfig) {}
 
@@ -71,8 +77,16 @@ export class ResponsesAdapter implements WireFormatAdapter {
 
 	private convert(parsed: ValidatedResponsesResponse): ModelResponse {
 		const toolCalls = this.parseResponsesToolCalls(parsed.output);
+		// Fall back to scanning `parsed` for the reasoning the OpenAI
+		// responses API surfaces as a top-level field or as a `reasoning`
+		// output item. The accumulator is the streaming source of truth; this
+		// only fires when the caller never streamed (the non-streaming
+		// `parse()` path) or when the gateway skipped the per-token deltas.
+		const reasoning =
+			this.accumulatedReasoning || extractResponsesReasoning(parsed) || null;
 		return {
 			assistantText: extractResponsesAssistantText(parsed),
+			reasoning,
 			toolCalls,
 			finishReason: mapResponsesFinishReason(parsed.status, toolCalls, parsed),
 			usage: parseResponsesUsage(parsed.usage),
@@ -99,6 +113,32 @@ export class ResponsesAdapter implements WireFormatAdapter {
 
 		const eventType = typeof frameObj.type === "string" ? frameObj.type : "";
 		switch (eventType) {
+			case "response.reasoning.delta":
+			case "response.reasoning_summary.delta": {
+				const d = isPlainObject(frameObj.delta)
+					? (frameObj.delta as { text?: unknown })
+					: undefined;
+				if (typeof d?.text === "string") {
+					this.accumulatedReasoning += d.text;
+				}
+				break;
+			}
+			case "response.reasoning_summary_text.done": {
+				// Some responses-API gateways emit the full reasoning text in a
+				// terminal `done` frame instead of (or in addition to) the
+				// per-token deltas. Prefer the explicit full text when present
+				// and longer than the running accumulator — the per-token
+				// deltas are the live feed, but the terminal event is the
+				// authoritative final payload and may carry more content.
+				const text = frameObj.text;
+				if (
+					typeof text === "string" &&
+					text.length >= this.accumulatedReasoning.length
+				) {
+					this.accumulatedReasoning = text;
+				}
+				break;
+			}
 			case "response.output_item.added":
 			case "response.output_item.done": {
 				const item = frameObj.item;
@@ -548,6 +588,44 @@ function parseResponsesUsage(raw: unknown): ModelUsage | undefined {
 		cacheWrite: 0,
 		totalTokens: total,
 	};
+}
+
+/**
+ * Pull reasoning text out of a parsed (non-streaming) responses-API payload.
+ * The provider surfaces reasoning in two shapes:
+ *   1. A top-level `reasoning` field carrying a string or an array of summary
+ *      items with a `text` field.
+ *   2. One or more `output` items of type `reasoning` (carrying `summary[]`
+ *      or, less commonly, a flat `text`).
+ *
+ * Returns an empty string when no reasoning is present.
+ */
+function extractResponsesReasoning(parsed: {
+	output: unknown[];
+	output_text?: unknown;
+}): string {
+	const pieces: string[] = [];
+	for (const item of parsed.output) {
+		if (!isPlainObject(item) || item.type !== "reasoning") {
+			continue;
+		}
+		// OpenAI emits `summary` as an array of { type, text } segments.
+		if (Array.isArray(item.summary)) {
+			for (const seg of item.summary) {
+				if (isPlainObject(seg) && typeof seg.text === "string") {
+					pieces.push(seg.text);
+				}
+			}
+		}
+		// Some gateways emit a flat `text` instead.
+		if (typeof item.text === "string") {
+			pieces.push(item.text);
+		}
+	}
+	if (pieces.length > 0) {
+		return pieces.join("");
+	}
+	return "";
 }
 
 function extractResponsesAssistantText(parsed: {
