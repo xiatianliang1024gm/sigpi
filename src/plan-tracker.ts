@@ -82,6 +82,36 @@ export function formatPlanInProgress(view: PlanView): string | null {
 }
 
 /**
+ * One-line summary for the `update_plan` tool's progress description, e.g.
+ * "[2/5] Patching the renderer" while a step is in progress, or
+ * "[5/5] All steps completed" when every step is done. Falls back to
+ * "[completed/total]" with no trailing step label when no step is in progress
+ * and the plan is not fully complete (e.g. all items still pending).
+ */
+export function formatPlanProgressSummaryLine(view: PlanView): string {
+	const total = view.items.length;
+	const completed = view.items.filter(
+		(item) => item.status === "completed",
+	).length;
+	const inProgressCount = view.items.filter(
+		(item) => item.status === "in_progress",
+	).length;
+	const done = completed + inProgressCount;
+
+	if (view.items.every((item) => item.status === "completed")) {
+		return `[${total}/${total}] All steps completed`;
+	}
+
+	const inProgress = view.items.find((item) => item.status === "in_progress");
+	if (inProgress) {
+		const label = inProgress.activeForm?.trim() || inProgress.step;
+		return `[${done}/${total}] ${label}`;
+	}
+
+	return `[${completed}/${total}]`;
+}
+
+/**
  * Body text for a compact `update_plan` result line. Prefers the completion
  * message when the plan is fully done, then the in-progress step label, then a
  * generic "Plan updated", and finally "error" on failure. Keeps the

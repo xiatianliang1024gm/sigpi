@@ -569,7 +569,7 @@ test("update_plan progress renders a concise checklist instead of JSON", () => {
 		],
 	});
 
-	assert.equal(progress.summary, "plan");
+	assert.equal(progress.summary, "[2/3] Patch rendering");
 	assert.match(progress.detail ?? "", /1\. ✅ Inspect logging/);
 	assert.match(progress.detail ?? "", /2\. 🔄 Patch rendering/);
 	assert.match(progress.detail ?? "", /3\. ⬜ Run tests/);
@@ -591,9 +591,37 @@ test("update_plan shows activeForm for the in_progress step", () => {
 		],
 	});
 
-	assert.equal(progress.summary, "plan");
+	assert.equal(progress.summary, "[2/3] Patching the renderer");
 	assert.match(progress.detail ?? "", /🔄 Patching the renderer/);
 	assert.doesNotMatch(progress.detail ?? "", /Patch rendering/);
+});
+
+test("update_plan summary reports all steps completed when every item is done", () => {
+	const describePlan = updatePlanTool.describeProgress;
+	assert.ok(describePlan);
+	const progress = describePlan({
+		plan: [
+			{ step: "Inspect logging", status: "completed" },
+			{ step: "Patch rendering", status: "completed" },
+			{ step: "Run tests", status: "completed" },
+		],
+	});
+
+	assert.equal(progress.summary, "[3/3] All steps completed");
+});
+
+test("update_plan summary falls back to completed count when no step is in progress", () => {
+	const describePlan = updatePlanTool.describeProgress;
+	assert.ok(describePlan);
+	const progress = describePlan({
+		plan: [
+			{ step: "Inspect logging", status: "completed" },
+			{ step: "Patch rendering", status: "pending" },
+			{ step: "Run tests", status: "pending" },
+		],
+	});
+
+	assert.equal(progress.summary, "[1/3]");
 });
 
 test("update_plan accepts blank activeForm on non-active steps", async () => {
