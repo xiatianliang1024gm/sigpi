@@ -127,6 +127,7 @@ export async function showHistoryOverlay(
 		// Stash the current children and focused component so we can put
 		// them back exactly as they were when the user dismisses.
 		const previousChildren = tui.children;
+		// biome-ignore lint/complexity/useLiteralKeys: focusedComponent is private in pi-tui
 		const previousFocus = tui["focusedComponent"] as Component | null;
 
 		tui.children = [component];

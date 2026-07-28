@@ -2,7 +2,7 @@ import { z } from "zod";
 import { formatPlanStatusGlyph } from "../../plan-tracker.js";
 import { compactWhitespace, getString, truncate } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
-import { joinRenderedSections, withRendered } from "../render.js";
+import { withRendered } from "../render.js";
 
 const planItemSchema = z.object({
 	step: z.string().min(1).max(120),
@@ -131,18 +131,4 @@ function renderPlanProgress(
 		);
 	}
 	return lines.length > 0 ? lines.join("\n") : undefined;
-}
-
-function _renderPlan(state: PlanState): string {
-	return joinRenderedSections([
-		state.explanation ? `Note: ${state.explanation}` : null,
-		"Plan:",
-		...state.items.map((item, index) => {
-			const label =
-				item.status === "in_progress" && item.activeForm?.trim()
-					? item.activeForm.trim()
-					: item.step;
-			return `${index + 1}. ${formatPlanStatusGlyph(item.status)} ${label}`;
-		}),
-	]);
 }
