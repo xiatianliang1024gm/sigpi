@@ -15,13 +15,15 @@ import { createModelProvider } from "./model/provider.js";
 import type { SessionStore } from "./session/store.js";
 import { setLastModelId } from "./state.js";
 import type { BackgroundTaskManager } from "./tools/background.js";
+import {
+	formatSessionHistory,
+	showHistoryOverlay,
+} from "./tui/history-component.js";
 import { defaultSelectListTheme } from "./tui/themes.js";
 import type {
 	ContextUpdateResult,
 	LoadedSkill,
-	PersistedSession,
 	ProgressReporter,
-	SessionTurnHistoryEntry,
 } from "./types.js";
 
 export interface ChatCommandMetadata {
@@ -303,7 +305,7 @@ export function createChatCommandDefinitions(
 		{
 			name: "/history",
 			description: "Show saved turn history for the active session",
-			handler: (context, args) => {
+			handler: async (context, args) => {
 				const limit = parseHistoryLimit(args);
 				if (limit === "invalid") {
 					context.writeLine("Usage: /history [all|<count>]");
@@ -316,7 +318,15 @@ export function createChatCommandDefinitions(
 					return { action: "continue" };
 				}
 
-				context.writeLine(formatSessionHistory(session, limit));
+				const tui = context.getState().view?.getTuiInstance();
+				if (!tui) {
+					// Non-TTY fallback: keep the old behaviour of dumping to the
+					// output stream so scripted callers still get the history.
+					context.writeLine(formatSessionHistory(session, limit));
+					return { action: "continue" };
+				}
+
+				await showHistoryOverlay(tui, session, limit);
 				return { action: "continue" };
 			},
 		},
@@ -615,42 +625,6 @@ function parseHistoryLimit(args: string[]): number | "all" | "invalid" {
 	}
 
 	return "invalid";
-}
-
-function formatSessionHistory(
-	session: PersistedSession,
-	limit: number | "all",
-): string {
-	if (session.turns.length === 0) {
-		return "(no saved turns)";
-	}
-
-	const turns = limit === "all" ? session.turns : session.turns.slice(-limit);
-	return turns.map(formatHistoryTurn).join("\n\n");
-}
-
-function formatHistoryTurn(turn: SessionTurnHistoryEntry): string {
-	const lines = [
-		`Turn ${turn.turnId} [${turn.status}] ${formatTurnTimeRange(turn)}`,
-		`User: ${turn.userInput}`,
-		`Assistant: ${turn.assistantOutput ?? "(no assistant output)"}`,
-	];
-
-	if (turn.errorMessage) {
-		lines.push(`Error: ${turn.errorMessage}`);
-	}
-
-	if (turn.toolExecutions.length > 0) {
-		lines.push(`Tools: ${turn.toolExecutions.length}`);
-	}
-
-	return lines.join("\n");
-}
-
-function formatTurnTimeRange(turn: SessionTurnHistoryEntry): string {
-	return turn.finishedAt
-		? `${turn.startedAt} -> ${turn.finishedAt}`
-		: turn.startedAt;
 }
 
 export function parseChatCommand(

@@ -427,53 +427,6 @@ function truncateHeadTail(value: string, maxChars: number): string {
 	return `${value.slice(0, headChars)}${marker}${value.slice(value.length - tailChars)}`;
 }
 
-function _renderBashResult(result: {
-	command: string;
-	description?: string;
-	shell: string;
-	platform: NodeJS.Platform;
-	ok: boolean;
-	exitCode: number | null;
-	signal: string | null;
-	timedOut: boolean;
-	cwd: string;
-	cwdReset: boolean;
-	overflowPath?: string;
-	stdout: string;
-	stderr: string;
-}): string {
-	const sections = [
-		`Command: ${result.command}`,
-		result.description ? `Description: ${result.description}` : null,
-		`Shell: ${result.shell} on ${result.platform}`,
-		`Cwd: ${result.cwd}`,
-		result.cwdReset
-			? "Note: Shell cwd was reset to the project directory because the command left the allowed directory."
-			: null,
-		`Command succeeded: ${result.ok ? "yes" : "no"}`,
-		`Exit code: ${result.exitCode ?? "(none)"}`,
-		`Signal: ${result.signal ?? "(none)"}`,
-		`Timed out: ${result.timedOut ? "yes" : "no"}`,
-		result.overflowPath
-			? `Full output written to: ${result.overflowPath}`
-			: null,
-		result.stdout
-			? formatRawBlock(
-					result.overflowPath ? "STDOUT (preview)" : "STDOUT",
-					result.stdout,
-				)
-			: "STDOUT: (empty)",
-		result.stderr
-			? formatRawBlock(
-					result.overflowPath ? "STDERR (preview)" : "STDERR",
-					result.stderr,
-				)
-			: "STDERR: (empty)",
-	];
-
-	return joinRenderedSections(sections);
-}
-
 /**
  * If `command` is a recognized single-file read understood by Claude Code's
  * read-before-edit rule (cat/head/tail/sed -n 'X,Yp'/grep/egrep/fgrep on a
