@@ -51,7 +51,9 @@ export async function attachSessionFromSelector(
 	}
 
 	const sessions = prepareSessionChoices(await store.listSessions());
-	const sessionId = await selectSessionInteractive(sessions);
+	const sessionId = await selectSessionInteractive(sessions, {
+		parentTui: state.view?.getTuiInstance(),
+	});
 
 	if (!sessionId) {
 		return null;
