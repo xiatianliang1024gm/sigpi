@@ -51,8 +51,9 @@ if [[ -z "$TARBALL" ]]; then
 fi
 echo "==> Packed: $TARBALL"
 
-# 4. Install the tarball globally via pnpm.
+# 4. Remove any stale global install, then install the tarball globally via pnpm.
 echo "==> Installing globally with pnpm"
+pnpm remove -g sigpi 2>/dev/null || true
 pnpm add -g "$TARBALL"
 
 # 5. Report where the binary landed.

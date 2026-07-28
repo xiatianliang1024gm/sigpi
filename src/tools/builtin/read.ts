@@ -238,8 +238,18 @@ export function createReadTool(tracker: ReadTracker): ToolDefinition<ReadArgs> {
 			);
 		},
 		describeProgress(args) {
+			const offsetNum = getNumber(args.offset);
+			const limitNum = getNumber(args.limit);
+			let rangeSuffix = "";
+			if (offsetNum !== null && limitNum !== null) {
+				rangeSuffix = ` [${offsetNum}, ${offsetNum + limitNum}]`;
+			} else if (offsetNum !== null) {
+				rangeSuffix = ` [${offsetNum}, ...]`;
+			} else if (limitNum !== null) {
+				rangeSuffix = ` [0, ${limitNum}]`;
+			}
 			return {
-				summary: `read ${asInlineCode(getString(args.file_path) ?? "(unknown file)")}`,
+				summary: `read ${asInlineCode(getString(args.file_path) ?? "(unknown file)")}${rangeSuffix}`,
 			};
 		},
 		recordLedger(recorder, toolCall, result) {

@@ -16,3 +16,4 @@ bench/swebench-work
 bench/data
 .npmrc
 .agents/
+*.js

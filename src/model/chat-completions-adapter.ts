@@ -20,6 +20,13 @@ import type { WireFormatAdapter } from "./wire-format.js";
 interface OpenAIMessage {
 	role: "system" | "user" | "assistant" | "tool";
 	content?: string | null;
+	/**
+	 * Chain-of-thought text the model emitted for this assistant message.
+	 * Passed back to the provider on subsequent requests so the model can
+	 * reference its own reasoning and providers can use it to compute cache
+	 * hits (e.g. OpenAI prompt caching keys on reasoning_content).
+	 */
+	reasoning_content?: string;
 	name?: string;
 	tool_call_id?: string;
 	tool_calls?: Array<{
@@ -286,12 +293,16 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 						arguments: sanitizeToolArguments(toolCall.rawArguments),
 					},
 				})),
+				...(message.reasoning ? { reasoning_content: message.reasoning } : {}),
 			};
 		}
 
 		return {
 			role: message.role,
 			content: message.content,
+			...(message.role === "assistant" && message.reasoning
+				? { reasoning_content: message.reasoning }
+				: {}),
 		};
 	}
 
