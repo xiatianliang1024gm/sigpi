@@ -296,6 +296,57 @@ test("parse (non-streaming) extracts reasoning from tagged content via convert",
 	assert.equal(response.assistantText, "the answer");
 });
 
+test("toParams forwards reasoning_content on assistant messages", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	const req: ModelRequest = {
+		messages: [
+			{
+				role: "assistant",
+				content: "answer",
+				reasoning: "step-by-step chain of thought",
+			},
+			{
+				role: "assistant",
+				content: null,
+				toolCalls: [
+					{
+						id: "c1",
+						name: "read",
+						arguments: { file_path: "x.ts" },
+						rawArguments: '{"file_path":"x.ts"}',
+					},
+				],
+				reasoning: "i need to read this file",
+			},
+			{
+				role: "user",
+				content: "go on",
+			},
+		],
+		tools: [],
+	};
+	const params = adapter.toParams(req) as {
+		messages: Array<{
+			role: string;
+			content: string | null;
+			reasoning_content?: string;
+			tool_calls?: unknown[];
+		}>;
+	};
+	// Plain assistant text carries reasoning_content.
+	assert.equal(
+		params.messages[0]?.reasoning_content,
+		"step-by-step chain of thought",
+	);
+	// Assistant with tool calls also carries reasoning_content.
+	assert.equal(
+		params.messages[1]?.reasoning_content,
+		"i need to read this file",
+	);
+	// Non-assistant messages must not carry reasoning_content.
+	assert.equal(params.messages[2]?.reasoning_content, undefined);
+});
+
 test("fold splitter state stays independent of the onDelta splitter", () => {
 	// Regression guard: the transport feeds the same SSE frame to both
 	// `accumulate` and `onDelta`. If the fold and onDelta splitters shared

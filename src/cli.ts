@@ -323,8 +323,8 @@ export function applyTurnProgress(
 			if (event.toolOk === true) {
 				handle.finish();
 			} else {
+				handle.finish();
 				const errorMsg = event.toolResult ?? event.message ?? "failed";
-				handle.fail(errorMsg);
 				view.appendSystem(errorMsg, "error");
 			}
 		}
