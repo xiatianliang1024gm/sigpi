@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { formatPlanStatusGlyph } from "../../plan-tracker.js";
+import {
+	formatPlanProgressSummaryLine,
+	formatPlanStatusGlyph,
+	parsePlanArgs,
+} from "../../plan-tracker.js";
 import { compactWhitespace, getString, truncate } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
 import { withRendered } from "../render.js";
@@ -83,7 +87,9 @@ export function createUpdatePlanTool(
 			);
 		},
 		describeProgress(args) {
-			return { summary: "plan", detail: renderPlanProgress(args) };
+			const view = parsePlanArgs(args);
+			const summary = view ? formatPlanProgressSummaryLine(view) : "plan";
+			return { summary, detail: renderPlanProgress(args) };
 		},
 	};
 }
