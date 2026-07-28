@@ -4,18 +4,10 @@ import {
 	Text,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import chalk from "chalk";
 import type { FileEditSummary } from "../tools/edit-summary.js";
 import { FileEditComponent } from "./file-edit-renderer.js";
 import { defaultMarkdownTheme } from "./themes.js";
-
-const ANSI_DIM = "\x1B[2m";
-const ANSI_RESET = "\x1B[0m";
-const ANSI_RED = "\x1B[31m";
-const ANSI_CYAN = "\x1B[36m";
-const ANSI_BLUE = "\x1B[34m";
-const _ANSI_GREEN = "\x1B[32m";
-const ANSI_WHITE = "\x1B[37m";
-const ANSI_BG_GRAY = "\x1B[100m";
 
 const GLYPH_BULLET = "\u25CF"; // ●
 const GLYPH_TOOL = "\u23BF"; // ⎿
@@ -40,8 +32,8 @@ export class UserMessageComponent implements Component {
 	constructor(text: string) {
 		this.text = `\u276F ${text}`;
 		this.textComponent = new Text(this.text, 0, 0);
-		this.textComponent.setCustomBgFn(
-			(text: string) => `${ANSI_BG_GRAY}${ANSI_WHITE}${text}${ANSI_RESET}`,
+		this.textComponent.setCustomBgFn((text: string) =>
+			chalk.white.bgGray(text),
 		);
 	}
 
@@ -76,9 +68,7 @@ export class AssistantMessageComponent implements Component {
 	private hasContent = false;
 
 	constructor() {
-		this.reasoningComponent.setCustomBgFn(
-			(text: string) => `${ANSI_DIM}${text}${ANSI_RESET}`,
-		);
+		this.reasoningComponent.setCustomBgFn((text: string) => chalk.dim(text));
 	}
 
 	appendReasoning(text: string): void {
@@ -117,7 +107,7 @@ export class AssistantMessageComponent implements Component {
 			for (const line of contentLines) {
 				// first line has BULLET
 				if (firstLine) {
-					lines.push(`${ANSI_BLUE}${GLYPH_BULLET}${ANSI_RESET} ${line}`);
+					lines.push(`${chalk.blue(GLYPH_BULLET)} ${line}`);
 					firstLine = false;
 				} else {
 					lines.push(`  ${line}`);
@@ -175,10 +165,8 @@ export class ToolLineComponent implements Component {
 		for (const raw of body.split("\n")) {
 			for (const wrapped of wrapTextWithAnsi(raw, wrapWidth)) {
 				if (first) {
-					const color = this.failed ? ANSI_RED : ANSI_BLUE;
-					lines.push(
-						`${INDENT_TOOL}${color}${GLYPH_TOOL}${ANSI_RESET} ${wrapped}`,
-					);
+					const color = this.failed ? chalk.red : chalk.blue;
+					lines.push(`${INDENT_TOOL}${color(GLYPH_TOOL)} ${wrapped}`);
 					first = false;
 				} else {
 					lines.push(`${INDENT_TOOL}  ${wrapped}`);
@@ -186,13 +174,12 @@ export class ToolLineComponent implements Component {
 			}
 		}
 
+		// todo 未生效
 		// Diff lines below edit/write success
 		if (this.diffComponent) {
 			const diffLines = this.diffComponent.render(width - INDENT_DIFF.length);
 			for (const diffLine of diffLines) {
-				lines.push(
-					`${INDENT_DIFF}${ANSI_DIM}${GLYPH_DIFF}${ANSI_RESET} ${diffLine}`,
-				);
+				lines.push(`${INDENT_DIFF}${chalk.dim(GLYPH_DIFF)} ${diffLine}`);
 			}
 		}
 
@@ -215,27 +202,16 @@ export class SystemMessageComponent implements Component {
 		this.tone = tone;
 	}
 
-	render(width: number, maxHeight?: number): string[] {
-		const color = this.tone === "error" ? ANSI_RED : ANSI_CYAN;
+	render(width: number): string[] {
+		const color = this.tone === "error" ? chalk.red : chalk.cyan;
 		const lines: string[] = [];
 		for (const raw of this.text.split("\n")) {
 			for (const line of wrapTextWithAnsi(raw, width)) {
-				lines.push(`${color}${line}${ANSI_RESET}`);
+				lines.push(color(line));
 			}
 		}
-		return cap(lines, maxHeight);
+		return lines;
 	}
 
 	invalidate(): void {}
-}
-
-/** Keep at most `maxHeight` lines (most recent) so the prompt stays visible. */
-function cap(lines: string[], maxHeight?: number): string[] {
-	if (maxHeight === undefined || lines.length <= maxHeight) {
-		return lines;
-	}
-	const overflow = lines.length - maxHeight;
-	const visible = lines.slice(overflow);
-	visible.unshift(`${ANSI_DIM}\u2026 (${overflow} more lines)${ANSI_RESET}`);
-	return visible.slice(0, maxHeight);
 }
