@@ -329,7 +329,7 @@ test("compactNow throws CompactionFailedError when the summary is truncated", as
 	assert.equal(context.getSummary(), null);
 });
 
-test("buildMessages injects active goal reminder from summary", () => {
+test("buildMessages includes summary but does not inject a separate active-goal message", () => {
 	const context = new ConversationContext();
 	context.hydrateState({
 		summary:
@@ -341,16 +341,27 @@ test("buildMessages injects active goal reminder from summary", () => {
 		"You are a test agent.",
 		"还记得你的目的吗",
 	);
-	const reminder = messages.find(
+
+	// The summary text is still present in the summary system message
+	const summaryMessage = messages.find(
+		(message) =>
+			message.role === "system" &&
+			message.content.includes("Conversation summary from earlier turns"),
+	);
+	assert.ok(summaryMessage, "summary system message should be present");
+	assert.match(summaryMessage?.content ?? "", /分析当前项目/);
+
+	// No separate active-goal message is injected
+	const goalReminder = messages.find(
 		(message) =>
 			message.role === "system" &&
 			message.content.includes(
 				"Active user task from the conversation summary",
 			),
 	);
+	assert.equal(goalReminder, undefined, "no separate active-goal message");
 
-	assert.match(reminder?.content ?? "", /分析当前项目/);
-	assert.match(reminder?.content ?? "", /goal, purpose, objective, or task/);
+	// The pending user input is still at the end
 	assert.equal(messages.at(-1)?.role, "user");
 	assert.equal(messages.at(-1)?.content, "还记得你的目的吗");
 });

@@ -165,18 +165,6 @@ export class ConversationContext {
 					`Conversation summary from earlier turns:\n${this.summary}`,
 				),
 			);
-			const activeGoal = extractSection(this.summary, "Goal");
-			if (activeGoal) {
-				messages.push(
-					createSystemMessage(
-						[
-							`Active user task from the conversation summary: ${activeGoal}`,
-							"If the user asks whether you remember your goal, purpose, objective, or task, answer with this active user task.",
-							"Do not answer that question with your model identity, product identity, or general system role unless the user explicitly asks about your identity.",
-						].join("\n"),
-					),
-				);
-			}
 		}
 
 		const explorationState = renderExplorationState(this.explorationLedger);
@@ -508,29 +496,6 @@ export class ConversationContext {
 			requestContext,
 		);
 	}
-}
-
-function extractSection(
-	summary: string | null,
-	heading: string,
-): string | null {
-	if (!summary) {
-		return null;
-	}
-	const escapedHeading = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const match = summary.match(
-		new RegExp(
-			`## ${escapedHeading}\\s*\\n(?<body>[\\s\\S]*?)(?:\\n## |$)`,
-			"i",
-		),
-	);
-	const body = match?.groups?.body
-		?.split("\n")
-		.map((line) => line.replace(/^[-*\d.\s[\]x]+/i, "").trim())
-		.filter(Boolean)
-		.join(" ")
-		.trim();
-	return body || null;
 }
 
 /**
