@@ -464,28 +464,26 @@ test("buildSystemPrompt includes platform, shell, and tool safety details", () =
 	assert.match(prompt, /Current shell for bash: powershell/);
 	assert.match(prompt, /operating system or container/i);
 	assert.match(prompt, /not a strong sandbox/i);
-	assert.match(prompt, /glob tool with a pattern to find files by name/i);
-	assert.match(prompt, /when glob can answer it/i);
-	assert.match(prompt, /edit tool for targeted changes/i);
-	assert.match(prompt, /read-before-edit/i);
-	assert.match(prompt, /old_string/i);
-	assert.match(prompt, /new_string/i);
 	assert.match(
 		prompt,
-		/use the provided offset and limit metadata to continue/i,
+		/Do not use bash or shell scripts for file\/path discovery when glob or grep can answer it/i,
 	);
-	assert.match(prompt, /Use the tool's continuation metadata/i);
+	assert.match(prompt, /Prefer the edit tool for targeted changes/i);
+	assert.match(
+		prompt,
+		/write tool creates or overwrites an entire file without requiring a prior read/i,
+	);
+	assert.match(
+		prompt,
+		/truncated and no continuation metadata is available, retry with a smaller window/i,
+	);
 	assert.doesNotMatch(prompt, /replace_in_file/);
 	assert.doesNotMatch(prompt, /apply_text_edits/);
 	assert.match(
 		prompt,
 		/treat the task as incomplete until you verify the change/i,
 	);
-	assert.match(
-		prompt,
-		/use bash for the narrowest relevant validation command/i,
-	);
-	assert.match(prompt, /update_plan/i);
+	assert.match(prompt, /run the narrowest relevant validation command/i);
 	assert.doesNotMatch(prompt, /apply_unified_patch/i);
 });
 
