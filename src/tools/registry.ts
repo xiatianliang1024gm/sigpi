@@ -1,11 +1,6 @@
 import type { ZodType } from "zod";
-import {
-	makeLedgerRecorder,
-	normalizeExplorationLedger,
-} from "../agent/exploration-ledger.js";
 import { isTurnInterruptedError, TurnInterruptedError } from "../interrupt.js";
 import type {
-	ExplorationLedger,
 	JsonValue,
 	ToolCall,
 	ToolDefinition,
@@ -65,20 +60,6 @@ export class ToolRegistry {
 			return tool.describeProgress(toolCall.arguments);
 		}
 		return { summary: `tool ${toolCall.name}` };
-	}
-
-	recordLedger(
-		toolCall: ToolCall,
-		result: ToolExecutionResult,
-		ledger: ExplorationLedger,
-	): ExplorationLedger {
-		const tool = this.tools.get(toolCall.name);
-		if (!tool?.recordLedger) {
-			return ledger;
-		}
-		const next = normalizeExplorationLedger(ledger);
-		tool.recordLedger(makeLedgerRecorder(next), toolCall, result);
-		return next;
 	}
 
 	async execute(

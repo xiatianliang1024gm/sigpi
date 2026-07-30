@@ -1,11 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
-import {
-	asInlineCode,
-	getBoolean,
-	getNumber,
-	getString,
-} from "../../progress.js";
+import { asInlineCode, getNumber, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
 import { resolveWorkspacePath } from "../path-utils.js";
 import { ReadTracker } from "../read-tracker.js";
@@ -251,18 +246,6 @@ export function createReadTool(tracker: ReadTracker): ToolDefinition<ReadArgs> {
 			return {
 				summary: `read ${asInlineCode(getString(args.file_path) ?? "(unknown file)")}${rangeSuffix}`,
 			};
-		},
-		recordLedger(recorder, toolCall, result) {
-			const path = getString(toolCall.arguments.file_path);
-			if (!path) {
-				return;
-			}
-			const data = (result.data ?? null) as Record<string, unknown> | null;
-			recorder.read(path, {
-				startLine: getNumber(data?.returnedLineStart) ?? undefined,
-				endLine: getNumber(data?.returnedLineEnd) ?? undefined,
-				truncated: getBoolean(data?.truncated) ?? undefined,
-			});
 		},
 	};
 }

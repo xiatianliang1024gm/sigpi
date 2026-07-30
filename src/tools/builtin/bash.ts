@@ -10,13 +10,7 @@ import {
 	isTurnInterruptedError,
 	TurnInterruptedError,
 } from "../../interrupt.js";
-import {
-	compactWhitespace,
-	getBoolean,
-	getNumber,
-	getString,
-	truncate,
-} from "../../progress.js";
+import { compactWhitespace, getString, truncate } from "../../progress.js";
 import {
 	buildShellInvocation,
 	detectShellRuntime,
@@ -384,15 +378,6 @@ export function createBashTool(
 		describeProgress(args) {
 			const command = getString(args.command) ?? "";
 			return { summary: `shell ${truncate(compactWhitespace(command), 300)}` };
-		},
-		recordLedger(recorder, toolCall, result) {
-			const command = getString(toolCall.arguments.command) ?? "";
-			const data = (result.data ?? null) as Record<string, unknown> | null;
-			recorder.shellFinding(
-				command,
-				getBoolean(data?.ok),
-				getNumber(data?.exitCode),
-			);
 		},
 	};
 }

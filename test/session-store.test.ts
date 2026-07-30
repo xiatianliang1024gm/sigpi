@@ -81,24 +81,6 @@ test("session store persists and restores session state", async () => {
 				{ role: "user", content: "inspect repo" },
 				{ role: "assistant", content: "done" },
 			],
-			explorationLedger: {
-				searchedQueries: [
-					{
-						query: "inspect repo",
-						glob: null,
-						output: "files",
-						caseSensitive: null,
-						resultCount: 1,
-						truncated: false,
-						repeatedCount: 1,
-					},
-				],
-				candidateFiles: ["src/index.ts"],
-				readRanges: [],
-				rejectedPaths: [],
-				keyFindings: [],
-				modifiedFiles: [],
-			},
 		},
 	});
 
@@ -122,9 +104,6 @@ test("session store persists and restores session state", async () => {
 	assert.equal(loaded.session.turns[0]?.status, "completed");
 	assert.equal(loaded.session.turns[0]?.steps, 2);
 	assert.equal(loaded.session.turns[0]?.toolExecutions.length, 1);
-	assert.deepEqual(loaded.session.explorationLedger?.candidateFiles, [
-		"src/index.ts",
-	]);
 	assert.deepEqual(loaded.session.turns[0]?.toolExecutions[0]?.result.data, {
 		matches: ["src/index.ts:1"],
 	});
@@ -134,24 +113,6 @@ test("session store persists and restores session state", async () => {
 		{ role: "user", content: "inspect repo" },
 		{ role: "assistant", content: "done" },
 	]);
-	assert.deepEqual(derivedState.explorationLedger, {
-		searchedQueries: [
-			{
-				query: "inspect repo",
-				glob: null,
-				output: "files",
-				caseSensitive: null,
-				resultCount: 1,
-				truncated: false,
-				repeatedCount: 1,
-			},
-		],
-		candidateFiles: ["src/index.ts"],
-		readRanges: [],
-		rejectedPaths: [],
-		keyFindings: [],
-		modifiedFiles: [],
-	});
 });
 
 test("session store round-trips provider usage on assistant message entries", async () => {
@@ -212,14 +173,6 @@ test("session store round-trips provider usage on assistant message entries", as
 					},
 				},
 			],
-			explorationLedger: {
-				searchedQueries: [],
-				candidateFiles: [],
-				readRanges: [],
-				rejectedPaths: [],
-				keyFindings: [],
-				modifiedFiles: [],
-			},
 		},
 	});
 
@@ -992,14 +945,6 @@ test("session store appends transcript deltas across turns instead of rewriting"
 				{ role: "user", content: "first task" },
 				{ role: "assistant", content: "first answer" },
 			],
-			explorationLedger: {
-				searchedQueries: [],
-				candidateFiles: [],
-				readRanges: [],
-				rejectedPaths: [],
-				keyFindings: [],
-				modifiedFiles: [],
-			},
 		},
 	});
 	const afterFirst = await store.getSession(created.sessionId);
@@ -1020,14 +965,6 @@ test("session store appends transcript deltas across turns instead of rewriting"
 				{ role: "user", content: "second task" },
 				{ role: "assistant", content: "second answer" },
 			],
-			explorationLedger: {
-				searchedQueries: [],
-				candidateFiles: [],
-				readRanges: [],
-				rejectedPaths: [],
-				keyFindings: [],
-				modifiedFiles: [],
-			},
 		},
 	});
 	const afterSecond = await store.getSession(created.sessionId);
@@ -1058,14 +995,6 @@ test("session store appends transcript deltas across turns instead of rewriting"
 				{ role: "user", content: "third task" },
 				{ role: "assistant", content: "third answer" },
 			],
-			explorationLedger: {
-				searchedQueries: [],
-				candidateFiles: [],
-				readRanges: [],
-				rejectedPaths: [],
-				keyFindings: [],
-				modifiedFiles: [],
-			},
 		},
 	});
 	const transcript2 = await readFile(jsonlPath, "utf8");
@@ -1115,14 +1044,6 @@ test("session store tolerates a single torn transcript line on read", async () =
 				{ role: "user", content: "task" },
 				{ role: "assistant", content: "answer" },
 			],
-			explorationLedger: {
-				searchedQueries: [],
-				candidateFiles: [],
-				readRanges: [],
-				rejectedPaths: [],
-				keyFindings: [],
-				modifiedFiles: [],
-			},
 		},
 	});
 	const before = await store.getSession(created.sessionId);

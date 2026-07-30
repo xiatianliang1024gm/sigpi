@@ -1,15 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { type ZodType, z } from "zod";
-import { extractPathsFromSearchOutput } from "../../agent/exploration-ledger.js";
-import {
-	asInlineCode,
-	asQuoted,
-	getBoolean,
-	getNumber,
-	getString,
-	getStringArray,
-} from "../../progress.js";
+import { asInlineCode, asQuoted, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
 import {
 	grepWorkspaceContentFallback,
@@ -290,38 +282,6 @@ export function createGrepTool(
 				};
 			}
 			return { summary: `search ${asQuoted(pattern)}${globText}` };
-		},
-		recordLedger(recorder, toolCall, result) {
-			const pattern = getString(toolCall.arguments.pattern) ?? "";
-			const output = getString(toolCall.arguments.output_mode) ?? null;
-			const glob = getString(toolCall.arguments.glob) ?? null;
-			const caseSensitive =
-				getBoolean(toolCall.arguments.case_sensitive) ?? null;
-			const data = (result.data ?? null) as Record<string, unknown> | null;
-			const totalMatchCount = getNumber(data?.totalMatchCount);
-			const truncated = getBoolean(data?.truncated);
-			recorder.search({
-				query: pattern,
-				glob,
-				output,
-				caseSensitive,
-				resultCount: totalMatchCount,
-				truncated,
-			});
-			recorder.finding(
-				`Search "${truncate(pattern, 80)}"${
-					totalMatchCount === null ? "" : ` found ${totalMatchCount}`
-				} match(es)${truncated ? " and was truncated" : ""}.`,
-			);
-			const matches = getString(data?.matches);
-			if (matches) {
-				for (const found of extractPathsFromSearchOutput(matches)) {
-					recorder.candidate(found);
-				}
-			}
-			for (const file of getStringArray(data?.files)) {
-				recorder.candidate(file);
-			}
 		},
 	};
 }

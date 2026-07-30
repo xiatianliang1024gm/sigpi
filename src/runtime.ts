@@ -257,8 +257,6 @@ export async function createAgentRuntime(
 		runId,
 		sessionId: args.sessionId ?? null,
 		compactionHooks,
-		ledgerRecorder: (toolCall, result, ledger) =>
-			tools.recordLedger(toolCall, result, ledger),
 	});
 	const sessionState = await bootstrapSessionState({
 		store,

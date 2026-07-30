@@ -237,37 +237,6 @@ export interface ToolExecutionResult {
 	details?: JsonValue;
 }
 
-export interface LedgerRecorder {
-	search(entry: {
-		query: string;
-		glob?: string | null;
-		output?: string | null;
-		caseSensitive?: boolean | null;
-		resultCount?: number | null;
-		truncated?: boolean | null;
-		repeatedCount?: number;
-	}): void;
-	read(
-		path: string,
-		range?: {
-			startLine?: number;
-			endLine?: number;
-			startChar?: number;
-			endChar?: number;
-			truncated?: boolean;
-		},
-	): void;
-	modified(path: string): void;
-	candidate(path: string): void;
-	finding(text: string): void;
-	rejected(path: string): void;
-	shellFinding(
-		command: string,
-		ok: boolean | null,
-		exitCode: number | null,
-	): void;
-}
-
 export interface ToolDefinition<
 	TArgs = unknown,
 	TResult extends JsonValue = JsonValue,
@@ -289,17 +258,6 @@ export interface ToolDefinition<
 		summary: string;
 		detail?: string;
 	};
-	/**
-	 * Optional exploration-ledger recording for a successful tool call.
-	 * Receives a `LedgerRecorder` facade so the tool expresses intent (searched,
-	 * read, modified, ...) without knowing the ledger's caps or dedup rules.
-	 * When absent the ledger records nothing for the tool on success.
-	 */
-	recordLedger?: (
-		recorder: LedgerRecorder,
-		toolCall: ToolCall,
-		result: ToolExecutionResult,
-	) => void;
 }
 
 export interface ModelRequest {
@@ -444,18 +402,6 @@ export interface ContextManagerOptions {
 	 * the resulting summary / firstKeptEntryId / details.
 	 */
 	compactionHooks?: import("./agent/compaction-hook.js").CompactionHookRegistry;
-	/**
-	 * Callback that records a tool's explorable effects into the exploration
-	 * ledger, mirroring how `compactionHooks` is injected. Wired by the runtime
-	 * to the tool registry's `recordLedger` dispatch so the context stays
-	 * ignorant of the tool set. When absent, the ledger records nothing for
-	 * successful tool calls (the failure path still records `rejectedPaths`).
-	 */
-	ledgerRecorder?: (
-		toolCall: ToolCall,
-		result: ToolExecutionResult,
-		ledger: ExplorationLedger,
-	) => ExplorationLedger;
 }
 
 export interface ContextUpdateResult {
@@ -481,38 +427,9 @@ export interface ContextUpdateResult {
 	trigger?: "token" | "force" | null;
 }
 
-export interface ExplorationSearchEntry {
-	query: string;
-	glob: string | null;
-	output: string | null;
-	caseSensitive: boolean | null;
-	resultCount: number | null;
-	truncated: boolean | null;
-	repeatedCount: number;
-}
-
-export interface ExplorationReadRange {
-	path: string;
-	startLine?: number | null;
-	endLine?: number | null;
-	startChar?: number | null;
-	endChar?: number | null;
-	truncated?: boolean | null;
-}
-
-export interface ExplorationLedger {
-	searchedQueries: ExplorationSearchEntry[];
-	candidateFiles: string[];
-	readRanges: ExplorationReadRange[];
-	rejectedPaths: string[];
-	keyFindings: string[];
-	modifiedFiles: string[];
-}
-
 export interface ConversationContextState {
 	summary: string | null;
 	recentMessages: Message[];
-	explorationLedger?: ExplorationLedger;
 	/**
 	 * Optional entry stream backing this context. When present, `summary` and
 	 * `recentMessages` are derived from it (last compaction entry's summary,
@@ -678,7 +595,6 @@ export interface PersistedSession {
 	 * first load; the original v3 file is backed up as `<id>.v3.json.bak`.
 	 */
 	entries: SessionEntry[];
-	explorationLedger?: ExplorationLedger;
 	turnCount: number;
 	lastCompletedUserInput: string | null;
 	status: SessionStatus;

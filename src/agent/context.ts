@@ -10,7 +10,6 @@ import type {
 	ContextManagerOptions,
 	ContextUpdateResult,
 	ConversationContextState,
-	ExplorationLedger,
 	Message,
 	MessageEntry,
 	ModelProvider,
@@ -30,13 +29,6 @@ import {
 // Re-export for backwards compatibility (tests and potential consumers)
 export { microCompactMessages };
 
-import {
-	createEmptyExplorationLedger,
-	normalizeExplorationLedger,
-	renderExplorationState,
-	updateLedgerFromMessages,
-	updateLedgerFromToolExecution,
-} from "./exploration-ledger.js";
 import { createSystemMessage, createUserMessage } from "./messages.js";
 
 const DEFAULT_CONTEXT_OPTIONS: ContextManagerOptions = {
@@ -49,24 +41,11 @@ const DEFAULT_CONTEXT_OPTIONS: ContextManagerOptions = {
 	keepRecentMessagesFloor: 4,
 };
 
-function defaultLedgerRecorder(
-	_toolCall: ToolCall,
-	_result: ToolExecutionResult,
-	ledger: ExplorationLedger,
-): ExplorationLedger {
-	return ledger;
-}
-
 export class ConversationContext {
 	private readonly options: ContextManagerOptions;
 	private readonly logger;
 	private readonly runId;
 	private readonly compactionHooks: CompactionHookRegistry | null;
-	private readonly ledgerRecorder: (
-		toolCall: ToolCall,
-		result: ToolExecutionResult,
-		ledger: ExplorationLedger,
-	) => ExplorationLedger;
 	private sessionId;
 	private summary: string | null = null;
 	private recentMessages: Message[] = [];
@@ -79,7 +58,6 @@ export class ConversationContext {
 	 * source of truth; `summary` / `recentMessages` are derived on demand.
 	 */
 	private entries: SessionEntry[] = [];
-	private explorationLedger: ExplorationLedger = createEmptyExplorationLedger();
 	/**
 	 * The most recent provider-reported token usage for this conversation,
 	 * together with the index in `recentMessages` of the assistant message
@@ -98,7 +76,6 @@ export class ConversationContext {
 		this.logger = this.options.logger;
 		this.runId = this.options.runId;
 		this.compactionHooks = this.options.compactionHooks ?? null;
-		this.ledgerRecorder = this.options.ledgerRecorder ?? defaultLedgerRecorder;
 		this.sessionId = this.options.sessionId ?? null;
 
 		const deps: CompactorDeps = {
@@ -118,7 +95,6 @@ export class ConversationContext {
 			setLastUsage: (v) => {
 				this.lastUsage = v;
 			},
-			getExplorationLedger: () => this.explorationLedger,
 			getKeepRecentMessagesFloor: () =>
 				this.options.keepRecentMessagesFloor ??
 				Compactor.DEFAULT_KEEP_RECENT_MESSAGES_FLOOR,
@@ -163,15 +139,6 @@ export class ConversationContext {
 			messages.push(
 				createSystemMessage(
 					`Conversation summary from earlier turns:\n${this.summary}`,
-				),
-			);
-		}
-
-		const explorationState = renderExplorationState(this.explorationLedger);
-		if (explorationState) {
-			messages.push(
-				createSystemMessage(
-					`<exploration_ledger>\n${explorationState}\n</exploration_ledger>`,
 				),
 			);
 		}
@@ -308,20 +275,8 @@ export class ConversationContext {
 		return [...this.recentMessages];
 	}
 
-	getExplorationLedger(): ExplorationLedger {
-		return normalizeExplorationLedger(this.explorationLedger);
-	}
-
-	recordToolExecution(toolCall: ToolCall, result: ToolExecutionResult): void {
-		let ledger = this.explorationLedger;
-		if (this.ledgerRecorder) {
-			ledger = this.ledgerRecorder(toolCall, result, ledger) ?? ledger;
-		}
-		this.explorationLedger = updateLedgerFromToolExecution(
-			ledger,
-			toolCall,
-			result,
-		);
+	recordToolExecution(_toolCall: ToolCall, _result: ToolExecutionResult): void {
+		// No-op: exploration ledger has been removed.
 	}
 
 	getContextBudget(): ContextBudget {
@@ -342,16 +297,12 @@ export class ConversationContext {
 			summary: this.summary,
 			recentMessages: [...this.recentMessages],
 			entries: this.entries.map((entry) => ({ ...entry })),
-			explorationLedger: this.getExplorationLedger(),
 		};
 	}
 
 	hydrateState(state: ConversationContextState): void {
 		this.summary = state.summary;
 		this.recentMessages = [...state.recentMessages];
-		this.explorationLedger = normalizeExplorationLedger(
-			state.explorationLedger,
-		);
 		// Prefer the caller's entry stream when available. Otherwise rebuild
 		// it from the legacy {summary, recentMessages} pair (one synthetic
 		// compaction entry + one message entry per recent message) so older
@@ -391,15 +342,11 @@ export class ConversationContext {
 		this.summary = null;
 		this.recentMessages = [];
 		this.entries = [];
-		this.explorationLedger = createEmptyExplorationLedger();
 		this.lastUsage = null;
 	}
 
-	private recordMessages(messages: readonly Message[]): void {
-		this.explorationLedger = updateLedgerFromMessages(
-			this.explorationLedger,
-			messages,
-		);
+	private recordMessages(_messages: readonly Message[]): void {
+		// No-op: previously updated exploration ledger from messages.
 	}
 
 	private recordCompaction(args: {

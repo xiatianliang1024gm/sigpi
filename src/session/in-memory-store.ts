@@ -40,7 +40,6 @@ export class InMemorySessionStore implements SessionStore {
 			loadedSkillNames: [...(args.loadedSkillNames ?? [])],
 			skillsFingerprint: args.skillsFingerprint ?? null,
 			entries: [],
-			explorationLedger: undefined,
 			turnCount: 0,
 			lastCompletedUserInput: null,
 			status: "active",
@@ -133,7 +132,6 @@ export class InMemorySessionStore implements SessionStore {
 			title,
 			updatedAt: finishedAt,
 			entries: args.contextState.entries ?? session.entries,
-			explorationLedger: args.contextState.explorationLedger,
 			turnCount: session.turnCount + 1,
 			lastCompletedUserInput: args.userInput,
 			status: "active",
@@ -191,8 +189,6 @@ export class InMemorySessionStore implements SessionStore {
 			...session,
 			updatedAt: finishedAt,
 			entries: args.contextState?.entries ?? session.entries,
-			explorationLedger:
-				args.contextState?.explorationLedger ?? session.explorationLedger,
 			status: "active",
 			lastTurn: session.lastTurn
 				? {
@@ -260,8 +256,6 @@ export class InMemorySessionStore implements SessionStore {
 			...session,
 			updatedAt: finishedAt,
 			entries: args.contextState?.entries ?? session.entries,
-			explorationLedger:
-				args.contextState?.explorationLedger ?? session.explorationLedger,
 			status: "interrupted",
 			lastTurn: {
 				startedAt,
@@ -305,7 +299,6 @@ export class InMemorySessionStore implements SessionStore {
 			...session,
 			updatedAt,
 			entries: args.contextState.entries ?? session.entries,
-			explorationLedger: args.contextState.explorationLedger,
 		};
 		this.sessions.set(updated.sessionId, updated);
 		return updated;
