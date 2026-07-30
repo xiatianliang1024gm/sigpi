@@ -12,15 +12,8 @@ SigPi is a **reference implementation** of a coding agent. It shows the complete
 
 ### Documentation
 
-Architecture decisions: [docs/adr/README.md](./docs/adr/README.md)
-
-Specifications:
-- [Streaming render of reasoning tokens](./docs/spec-0020-streaming-render.md)
-- [Model transport adopts OpenAI SDK](./docs/spec-0024-model-transport-openai-sdk.md)
-- [Streamlined tool results for the LLM](./docs/spec-0026-streamlined-tool-results.md)
-
-Design notes:
-- [Loop prevention & context memory](./docs/loop-prevention-context-memory.md) (中文)
+Architecture decisions and specifications are tracked in the source code and
+`CONTEXT-MAP.md`. See `AGENTS.md` for the reading path.
 
 ## Requirements
 

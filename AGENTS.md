@@ -26,4 +26,4 @@ Key sections: `[model]` (default model + manual selection), `[models.<id>]` (per
 
 ## Agent skills
 
-Single-context layout — one `CONTEXT.md` at the repo root plus `docs/adr/`.
+Single-context layout — one `CONTEXT.md` at the repo root.
