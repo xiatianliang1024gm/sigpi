@@ -2,7 +2,6 @@ import { estimateMessageTokens } from "../context-window.js";
 import type {
 	ContextBudget,
 	ContextUpdateResult,
-	ExplorationLedger,
 	JsonValue,
 	Message,
 	ModelProvider,
@@ -40,7 +39,6 @@ export interface CompactorDeps {
 	setLastUsage: (
 		value: { usage: ModelUsage; messageIndex: number } | null,
 	) => void;
-	getExplorationLedger: () => ExplorationLedger;
 
 	// config accessors
 	getKeepRecentMessagesFloor: () => number;
@@ -209,7 +207,6 @@ export class Compactor {
 									systemPrompt,
 									messages: microCompactMessages(messagesToSummarize),
 									previousSummary: this.d.getSummary(),
-									ledger: this.d.getExplorationLedger(),
 									instructions: options?.instructions,
 									requestContext,
 									reserveTokens: this.d.getBudget().reserveTokens,

@@ -1,6 +1,5 @@
-import type { ExplorationLedger, Message, ModelProvider } from "../types.js";
+import type { Message, ModelProvider } from "../types.js";
 import { CompactionFailedError } from "./compaction-error.js";
-import { renderExplorationDetails } from "./exploration-ledger.js";
 import {
 	createSystemMessage,
 	createUserMessage,
@@ -47,7 +46,7 @@ Structure your response as: an <analysis>...</analysis> block where you reason a
 
 ## Critical Context
 - [Any data, examples, exact file paths, function names, commands, tool results, or error messages needed to continue]
-- [Include important facts from <exploration-ledger>: searched queries, candidate files, read ranges, modified files, and rejected paths]
+- [Include important facts: searched queries, candidate files, read ranges, modified files, and rejected paths]
 - [Or "(none)" if not applicable]
 
 Keep each section concise. Preserve the current user goal, unresolved work, constraints, exact file paths, function names, commands, and error messages.
@@ -103,7 +102,7 @@ Structure your response as: an <analysis>...</analysis> block where you reason a
 
 ## Critical Context
 - [Preserve important context, add new if needed]
-- [Preserve important facts from <exploration-ledger>: searched queries, candidate files, read ranges, modified files, and rejected paths]
+- [Preserve important facts: searched queries, candidate files, read ranges, modified files, and rejected paths]
 
 Keep each section concise. Preserve the current user goal, unresolved work, constraints, exact file paths, function names, commands, and error messages.
 
@@ -115,7 +114,6 @@ export interface SummarizeArgs {
 	/** Messages to summarize. The caller is responsible for micro-compacting tool results first. */
 	messages: Message[];
 	previousSummary: string | null;
-	ledger: ExplorationLedger;
 	instructions?: string;
 	requestContext?: { turnId?: string };
 	reserveTokens: number;
@@ -148,15 +146,11 @@ export async function summarize(
 			: new DOMException("Aborted", "AbortError");
 	}
 	const transcript = renderMessagesForSummary(args.messages);
-	const explorationDetails = renderExplorationDetails(args.ledger);
 	const customInstructions = args.instructions?.trim();
 	const prompt = args.previousSummary
 		? [
 				`<conversation>\n${transcript}\n</conversation>`,
 				`<previous-summary>\n${args.previousSummary}\n</previous-summary>`,
-				explorationDetails
-					? `<exploration-ledger>\n${explorationDetails}\n</exploration-ledger>`
-					: null,
 				customInstructions
 					? `<custom-instructions>\n${customInstructions}\n</custom-instructions>`
 					: null,
@@ -166,9 +160,6 @@ export async function summarize(
 				.join("\n\n")
 		: [
 				`<conversation>\n${transcript}\n</conversation>`,
-				explorationDetails
-					? `<exploration-ledger>\n${explorationDetails}\n</exploration-ledger>`
-					: null,
 				customInstructions
 					? `<custom-instructions>\n${customInstructions}\n</custom-instructions>`
 					: null,

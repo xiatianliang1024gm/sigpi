@@ -214,17 +214,6 @@ export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 				summary: `edit ${asInlineCode(getString(args.file_path) ?? "(unknown file)")}`,
 			};
 		},
-		recordLedger(recorder, toolCall, result) {
-			const path = getString(toolCall.arguments.file_path);
-			if (path) {
-				recorder.modified(path);
-			}
-			const data = (result.data ?? null) as Record<string, unknown> | null;
-			const dataPath = getString(data?.path);
-			if (dataPath) {
-				recorder.modified(dataPath);
-			}
-		},
 	};
 }
 

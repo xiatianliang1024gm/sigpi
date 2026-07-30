@@ -79,34 +79,6 @@ const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 	]),
 );
 
-const explorationSearchEntrySchema = z.object({
-	query: z.string(),
-	glob: z.string().nullable(),
-	output: z.string().nullable(),
-	caseSensitive: z.boolean().nullable(),
-	resultCount: z.number().nullable(),
-	truncated: z.boolean().nullable(),
-	repeatedCount: z.number().int().positive(),
-});
-
-const explorationReadRangeSchema = z.object({
-	path: z.string(),
-	startLine: z.number().nullable().optional(),
-	endLine: z.number().nullable().optional(),
-	startChar: z.number().nullable().optional(),
-	endChar: z.number().nullable().optional(),
-	truncated: z.boolean().nullable().optional(),
-});
-
-const explorationLedgerSchema = z.object({
-	searchedQueries: z.array(explorationSearchEntrySchema),
-	candidateFiles: z.array(z.string()),
-	readRanges: z.array(explorationReadRangeSchema),
-	rejectedPaths: z.array(z.string()),
-	keyFindings: z.array(z.string()),
-	modifiedFiles: z.array(z.string()),
-});
-
 const turnStatusSchema = z.enum([
 	"in_progress",
 	"completed",
@@ -225,7 +197,6 @@ const persistedSessionSchema = z.object({
 	loadedSkillNames: z.array(z.string().min(1)),
 	skillsFingerprint: z.string().nullable(),
 	entries: z.array(sessionEntrySchema),
-	explorationLedger: explorationLedgerSchema.optional(),
 	turnCount: z.number().int().nonnegative(),
 	lastCompletedUserInput: z.string().nullable(),
 	status: sessionStatusSchema,
@@ -351,7 +322,6 @@ export class DiskSessionStore implements SessionStore {
 			loadedSkillNames: [...(args.loadedSkillNames ?? [])],
 			skillsFingerprint: args.skillsFingerprint ?? null,
 			entries: [],
-			explorationLedger: undefined,
 			turnCount: 0,
 			lastCompletedUserInput: null,
 			status: "active",
@@ -559,7 +529,6 @@ export class DiskSessionStore implements SessionStore {
 			title,
 			updatedAt: finishedAt,
 			entries,
-			explorationLedger: args.contextState.explorationLedger,
 			turnCount: session.turnCount + 1,
 			lastCompletedUserInput: args.userInput,
 			status: "active",
@@ -610,7 +579,6 @@ export class DiskSessionStore implements SessionStore {
 			...session,
 			updatedAt,
 			entries,
-			explorationLedger: args.contextState.explorationLedger,
 		};
 
 		return this.commit(updated);
@@ -643,8 +611,6 @@ export class DiskSessionStore implements SessionStore {
 			...session,
 			updatedAt: finishedAt,
 			entries,
-			explorationLedger:
-				args.contextState?.explorationLedger ?? session.explorationLedger,
 			status: "active",
 			lastTurn: session.lastTurn
 				? {
@@ -717,8 +683,6 @@ export class DiskSessionStore implements SessionStore {
 			...session,
 			updatedAt: finishedAt,
 			entries,
-			explorationLedger:
-				args.contextState?.explorationLedger ?? session.explorationLedger,
 			status: "interrupted",
 			lastTurn: {
 				startedAt,
@@ -1016,9 +980,6 @@ export function sessionToContextState(
 		summary: derived.summary,
 		recentMessages: derived.recentMessages,
 	};
-	if (session.explorationLedger) {
-		state.explorationLedger = session.explorationLedger;
-	}
 	if (session.entries.length > 0) {
 		state.entries = session.entries;
 	}

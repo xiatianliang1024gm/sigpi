@@ -2,8 +2,7 @@ import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import { z } from "zod";
-import { extractPathsFromSearchOutput } from "../../agent/exploration-ledger.js";
-import { asQuoted, getString, getStringArray } from "../../progress.js";
+import { asQuoted, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
 import { isRgUnavailable } from "../local-search.js";
 import { resolveWorkspacePath } from "../path-utils.js";
@@ -202,18 +201,6 @@ export function createGlobTool(
 			return {
 				summary: `find files matching ${asQuoted(getString(args.pattern) ?? "*")}`,
 			};
-		},
-		recordLedger(_recorder, _toolCall, result) {
-			const data = (result.data ?? null) as Record<string, unknown> | null;
-			for (const file of getStringArray(data?.files)) {
-				_recorder.candidate(file);
-			}
-			const matches = getString(data?.matches);
-			if (matches) {
-				for (const found of extractPathsFromSearchOutput(matches)) {
-					_recorder.candidate(found);
-				}
-			}
 		},
 	};
 }

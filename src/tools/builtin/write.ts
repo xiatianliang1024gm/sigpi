@@ -79,12 +79,6 @@ export function createWriteTool(
 				summary: `write ${asInlineCode(getString(args.file_path) ?? "(unknown file)")}`,
 			};
 		},
-		recordLedger(recorder, toolCall) {
-			const path = getString(toolCall.arguments.file_path);
-			if (path) {
-				recorder.modified(path);
-			}
-		},
 	};
 }
 
