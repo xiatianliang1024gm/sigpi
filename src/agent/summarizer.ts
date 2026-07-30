@@ -13,101 +13,104 @@ const SUMMARIZATION_SYSTEM_PROMPT = [
 	"Structure your response as two parts: first a brief <analysis>...</analysis> block where you reason about what must be preserved (this is scratch space and is discarded), then a <summary>...</summary> block containing the final summary that enters the working context. Only the <summary> block is kept; the <analysis> block is stripped.",
 ].join(" ");
 
-export const SUMMARIZATION_PROMPT = `The transcript above is conversation history to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+export const SUMMARIZATION_PROMPT = `The transcript above is conversation history to summarize. Create a structured checkpoint that another LLM will use to continue the work without re-reading files. Write for an audience with zero prior context.
 
-If a <custom-instructions> block is present, treat its contents as additional user-provided instructions for THIS compaction only — they override the structure below where they conflict (e.g. "summarize as bullet list", "focus on the database schema").
+If a <custom-instructions> block is present, treat its contents as additional user-provided instructions for THIS compaction only — they override the structure below where they conflict.
 
-Preserve EVERY non-tool user message verbatim. Quote user instructions, preferences, and requests exactly so the next phase can honor them; do not paraphrase or drop any user message.
+Preserve EVERY non-tool user message verbatim in the ## User Messages section. Quote them exactly — do not paraphrase or drop any.
 
 Structure your response as: an <analysis>...</analysis> block where you reason about what must be preserved (scratch space, discarded), followed by a <summary>...</summary> block with the final summary. Inside the <summary> block, use this EXACT format:
 
-## Goal
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+## Primary Request
+[One sentence stating what the user wants to accomplish, plus any hard constraints.]
 
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned by user]
-- [Or "(none)" if none were mentioned]
+## Key Concepts
+- [Technical terminology, design patterns, architectural decisions the agent reasoned about]
+- [Include function names, type names, config keys, and their roles — verbatim, not paraphrased]
+- [Or "(none)" if the session had no technical depth]
+
+## Files & Code
+- [Every file path the agent read, with line/byte range if partial]
+- [Every file path the agent modified, with a one-sentence description of what changed]
+- [Include critical code snippets (function signatures, key logic) so the next turn doesn't need to re-read]
+- [List rejected paths and searches that turned up nothing, to avoid repeating them]
+
+## User Messages
+[Every non-tool user message, quoted verbatim. Preserve the original wording — these are instructions, preferences, and decisions that constrain future work.]
+
+## Errors & Diagnostics
+- **Introduced**: [Errors caused by our changes — include exact messages, file paths, and line numbers]
+- **Pre-existing**: [Errors confirmed to exist before our changes, e.g. via git stash or main-branch check]
+- [Or "(none)" if no errors were encountered]
 
 ## Progress
 ### Done
-- [x] [Completed tasks/changes]
+- [x] [Completed tasks]
 
 ### In Progress
-- [ ] [Current work]
+- [ ] [Ongoing work]
 
 ### Blocked
-- [Issues preventing progress, if any]
+- [Blockers, if any]
 
-## Key Decisions
-- **[Decision]**: [Brief rationale]
+## Current Work
+[The exact action or task in flight when compaction hit. Include what was just done and the immediate next action. Be specific: what function was being edited, what test was being fixed, what commit was being prepared.]
 
 ## Next Steps
-1. [Ordered list of what should happen next]
+1. [Ordered list of concrete next actions — commands, edits, commits]
 
-## Critical Context
-- [Any data, examples, exact file paths, function names, commands, tool results, or error messages needed to continue]
-- [Include important facts: searched queries, candidate files, read ranges, modified files, and rejected paths]
-- [Or "(none)" if not applicable]
-
-Keep each section concise. Preserve the current user goal, unresolved work, constraints, exact file paths, function names, commands, and error messages.
-
-## REQUIRED FACTS (HARD CONSTRAINTS)
-Your summary MUST include every one of these when present in the transcript. Omitting any of them will cause a re-read loop. If a category does not apply, write "(none)".
-1. **Files read** — every file path the agent read, with the byte range or line range if the read was partial.
-2. **Files written / patched** — every path that was modified, plus a one-sentence description of what changed.
-3. **Commands run** — every shell command the agent executed and its exit status / key output line.
-4. **Errors and diagnostics** — exact error messages, stack traces, file paths, and line numbers from tool failures.
-5. **Symbols and identifiers** — exact function names, class names, type names, variable names, and config keys the agent is reasoning about.
-6. **User-visible decisions and preferences** — choices the user stated (style, library, naming) that constrain future work.
-
-Do NOT paraphrase identifiers or error messages. Quote them verbatim so the next turn can resume without re-reading the same files.`;
+Keep every section concise but precise. Quote identifiers, file paths, and error messages verbatim. The next turn depends on your summary to resume without re-reading files — missing details cause wasted work.`;
 
 export const UPDATE_SUMMARIZATION_PROMPT = `The transcript above contains NEW conversation history to incorporate into the existing summary provided in <previous-summary> tags.
 
 If a <custom-instructions> block is present, treat its contents as additional user-provided instructions for THIS compaction only — they override the structure below where they conflict.
 
-Preserve EVERY non-tool user message verbatim. Quote user instructions, preferences, and requests exactly so the next phase can honor them; do not paraphrase or drop any user message.
+Preserve EVERY non-tool user message verbatim in the ## User Messages section. Quote them exactly — do not paraphrase or drop any.
 
 Update the existing structured summary with new information. RULES:
-- PRESERVE all existing goals unless the user explicitly changed or cancelled them
-- PRESERVE all existing constraints, preferences, unresolved tasks, blockers, and critical context
-- ADD new progress, decisions, files, commands, errors, and context from the new transcript
+- PRESERVE all existing Primary Requests unless the user explicitly changed or cancelled them
+- PRESERVE all existing Key Concepts, constraints, preferences, unresolved tasks, blockers, and file lists
+- ADD new files, code snippets, commands, concepts, errors, and user messages from the new transcript
 - UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE "Current Work" to reflect what was happening right before this compaction
 - UPDATE "Next Steps" based on what was accomplished and what remains
+- In "Errors & Diagnostics", keep the introduced/pre-existing distinction. If a previously-listed error turns out to be pre-existing, reclassify it.
 - If something is no longer relevant, you may remove it
 
 Structure your response as: an <analysis>...</analysis> block where you reason about what must be preserved (scratch space, discarded), followed by a <summary>...</summary> block with the updated summary. Inside the <summary> block, use this EXACT format:
 
-## Goal
-[Preserve existing goals, add new ones if the task expanded]
+## Primary Request
+[Preserve existing, add new if the task expanded]
 
-## Constraints & Preferences
-- [Preserve existing, add new ones discovered]
+## Key Concepts
+[Preserve existing, add new terminology/decisions]
+
+## Files & Code
+[Preserve existing paths and snippets, add newly read/modified files]
+
+## User Messages
+[Preserve existing verbatim quotes, append new ones]
+
+## Errors & Diagnostics
+[Preserve existing, add new — maintain introduced vs pre-existing distinction]
 
 ## Progress
 ### Done
 - [x] [Include previously done items AND newly completed items]
 
 ### In Progress
-- [ ] [Current work - update based on progress]
+- [ ] [Update based on current state]
 
 ### Blocked
-- [Current blockers - remove if resolved]
+- [Update — remove if resolved, add new if discovered]
 
-## Key Decisions
-- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+## Current Work
+[Replace with the exact action in flight when this compaction hit]
 
 ## Next Steps
 1. [Update based on current state]
 
-## Critical Context
-- [Preserve important context, add new if needed]
-- [Preserve important facts: searched queries, candidate files, read ranges, modified files, and rejected paths]
-
-Keep each section concise. Preserve the current user goal, unresolved work, constraints, exact file paths, function names, commands, and error messages.
-
-## REQUIRED FACTS (HARD CONSTRAINTS)
-Carry forward AND extend the required-fact list. If a previously-listed file, command, or error is still relevant, keep it verbatim. When new entries appear, append them. Quote identifiers and error messages verbatim rather than paraphrasing. If a category becomes empty, write "(none)".`;
+Keep every section concise but precise. Quote identifiers, file paths, and error messages verbatim. The next turn depends on your summary to resume without re-reading files — missing details cause wasted work.`;
 
 export interface SummarizeArgs {
 	systemPrompt: string;

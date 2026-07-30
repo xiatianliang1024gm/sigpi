@@ -149,10 +149,10 @@ test("context summarization prompt preserves goals with structured checkpoint se
 		/ONLY output the structured summary/,
 	);
 	assert.match(promptMessage?.content ?? "", /<conversation>/);
-	assert.match(promptMessage?.content ?? "", /## Goal/);
+	assert.match(promptMessage?.content ?? "", /## Primary Request/);
 	assert.match(promptMessage?.content ?? "", /## Next Steps/);
-	assert.match(promptMessage?.content ?? "", /## Critical Context/);
-	assert.match(promptMessage?.content ?? "", /Preserve the current user goal/);
+	assert.match(promptMessage?.content ?? "", /## Files & Code/);
+	assert.match(promptMessage?.content ?? "", /resume without re-reading files/);
 });
 
 test("compactNow throws CompactionFailedError when the summary is truncated", async () => {
@@ -260,7 +260,10 @@ test("context summarization updates previous structured summary without dropping
 		promptMessage?.content ?? "",
 		/<previous-summary>\n## Goal\nKeep the agent focused on the original task\.\n<\/previous-summary>/,
 	);
-	assert.match(promptMessage?.content ?? "", /PRESERVE all existing goals/);
+	assert.match(
+		promptMessage?.content ?? "",
+		/PRESERVE all existing Primary Requests/,
+	);
 	assert.match(promptMessage?.content ?? "", /UPDATE "Next Steps"/);
 });
 
