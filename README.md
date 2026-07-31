@@ -41,9 +41,6 @@ pnpm dev chat
 That's it. You're talking to an agent that can see your code.
 
 ```bash
-# One-shot question
-pnpm dev ask "Explain how auth works in this project"
-
 # Resume a previous session
 pnpm dev chat --session <id>
 ```

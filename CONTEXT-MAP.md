@@ -19,12 +19,6 @@ The two line kinds in a turn summary. `Read <path>` for the `read` tool; `Modifi
 `edit`/`write`. When a path is both read and modified in a turn, only `Modified` is recorded
 (modified wins, one line per path).
 
-### Exploration ledger
-The in-context structured record injected into the model's working context
-(`src/agent/exploration-ledger.ts`): searched queries, candidate files, read ranges, rejected
-paths, key findings, modified files. Distinct from the turn summary — it tracks searches too and
-is consumed by the model, not shown as the turn handoff.
-
 ### Compaction
 Context compression that replaces old messages with a structured summary
 (`src/agent/summarizer.ts`, `src/agent/context.ts`). Produces the working-context checkpoint; the
