@@ -534,16 +534,7 @@ export interface RunTurnResult {
 	contextUpdated: ContextUpdateResult;
 	interruptSource: InterruptSource | null;
 	interruptStage: InterruptStage | null;
-	/**
-	 * True when the turn ended because it hit the `maxSteps` bound. Such a turn
-	 * produced a local summary but no final answer, so it is resumable: a later
-	 * `go on` / `continue` continues the same task from the persisted checkpoint
-	 * with a fresh `maxSteps` budget instead of a cold restart.
-	 */
-	resumable: boolean;
 }
-
-export type SessionStatus = "active" | "interrupted" | "completed";
 
 export type TurnStatus = "in_progress" | "completed" | "failed" | "interrupted";
 
@@ -597,7 +588,6 @@ export interface PersistedSession {
 	entries: SessionEntry[];
 	turnCount: number;
 	lastCompletedUserInput: string | null;
-	status: SessionStatus;
 	lastTurn: SessionTurnRecord | null;
 	turns: SessionTurnHistoryEntry[];
 }
@@ -607,7 +597,6 @@ export interface SessionSummary {
 	title: string | null;
 	lastCompletedUserInput: string | null;
 	updatedAt: string;
-	status: SessionStatus;
 	cwd: string;
 	turnCount: number;
 	lastTurnStatus: TurnStatus | null;

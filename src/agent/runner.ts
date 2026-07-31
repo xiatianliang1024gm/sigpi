@@ -305,7 +305,6 @@ export class AgentRunner {
 				contextUpdated,
 				interruptSource: "user_escape",
 				interruptStage: stage,
-				resumable: false,
 			};
 		};
 
@@ -650,7 +649,6 @@ export class AgentRunner {
 					contextUpdated,
 					interruptSource: null,
 					interruptStage: null,
-					resumable: false,
 				};
 			}
 
@@ -738,7 +736,6 @@ export class AgentRunner {
 				contextUpdated,
 				interruptSource: null,
 				interruptStage: null,
-				resumable: true,
 			};
 		} catch (error) {
 			if (

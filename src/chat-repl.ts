@@ -125,7 +125,6 @@ export function getActiveSessionSummary(
 		title: session.title,
 		lastCompletedUserInput: session.lastCompletedUserInput,
 		updatedAt: session.updatedAt,
-		status: session.status,
 		cwd: session.cwd,
 		turnCount: session.turnCount,
 		lastTurnStatus: session.lastTurn?.status ?? null,

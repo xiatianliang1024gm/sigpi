@@ -42,7 +42,6 @@ export class InMemorySessionStore implements SessionStore {
 			entries: [],
 			turnCount: 0,
 			lastCompletedUserInput: null,
-			status: "active",
 			lastTurn: null,
 			turns: [],
 		};
@@ -98,7 +97,6 @@ export class InMemorySessionStore implements SessionStore {
 		const updated: PersistedSession = {
 			...session,
 			updatedAt: startedAt,
-			status: "active",
 			lastTurn: {
 				startedAt,
 				finishedAt: null,
@@ -134,7 +132,6 @@ export class InMemorySessionStore implements SessionStore {
 			entries: args.contextState.entries ?? session.entries,
 			turnCount: session.turnCount + 1,
 			lastCompletedUserInput: args.userInput,
-			status: "active",
 			lastTurn: {
 				startedAt,
 				finishedAt,
@@ -189,7 +186,6 @@ export class InMemorySessionStore implements SessionStore {
 			...session,
 			updatedAt: finishedAt,
 			entries: args.contextState?.entries ?? session.entries,
-			status: "active",
 			lastTurn: session.lastTurn
 				? {
 						...session.lastTurn,
@@ -256,7 +252,6 @@ export class InMemorySessionStore implements SessionStore {
 			...session,
 			updatedAt: finishedAt,
 			entries: args.contextState?.entries ?? session.entries,
-			status: "interrupted",
 			lastTurn: {
 				startedAt,
 				finishedAt,
@@ -319,7 +314,6 @@ function toSessionSummary(session: PersistedSession): SessionSummary {
 		title: session.title,
 		lastCompletedUserInput: session.lastCompletedUserInput,
 		updatedAt: session.updatedAt,
-		status: session.status,
 		cwd: session.cwd,
 		turnCount: session.turnCount,
 		lastTurnStatus: session.lastTurn?.status ?? null,

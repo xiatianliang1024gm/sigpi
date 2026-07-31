@@ -85,7 +85,6 @@ const turnStatusSchema = z.enum([
 	"failed",
 	"interrupted",
 ]);
-const sessionStatusSchema = z.enum(["active", "interrupted", "completed"]);
 
 const sessionTurnRecordSchema = z.object({
 	startedAt: z.string().min(1),
@@ -199,7 +198,6 @@ const persistedSessionSchema = z.object({
 	entries: z.array(sessionEntrySchema),
 	turnCount: z.number().int().nonnegative(),
 	lastCompletedUserInput: z.string().nullable(),
-	status: sessionStatusSchema,
 	lastTurn: sessionTurnRecordSchema.nullable(),
 	turns: z.array(sessionTurnHistoryEntrySchema),
 });
@@ -213,7 +211,6 @@ const sessionSummarySchema = z.object({
 	title: z.string().nullable(),
 	lastCompletedUserInput: z.string().nullable().optional(),
 	updatedAt: z.string().min(1),
-	status: sessionStatusSchema,
 	cwd: z.string().min(1),
 	turnCount: z.number().int().nonnegative(),
 	lastTurnStatus: turnStatusSchema.nullable(),
@@ -324,7 +321,6 @@ export class DiskSessionStore implements SessionStore {
 			entries: [],
 			turnCount: 0,
 			lastCompletedUserInput: null,
-			status: "active",
 			lastTurn: null,
 			turns: [],
 		};
@@ -360,7 +356,6 @@ export class DiskSessionStore implements SessionStore {
 			normalized = {
 				...session,
 				updatedAt: interruptedAt,
-				status: "interrupted",
 				lastTurn: {
 					...session.lastTurn,
 					status: "interrupted",
@@ -490,7 +485,6 @@ export class DiskSessionStore implements SessionStore {
 		const updated: PersistedSession = {
 			...session,
 			updatedAt: startedAt,
-			status: "active",
 			lastTurn: {
 				startedAt,
 				finishedAt: null,
@@ -531,7 +525,6 @@ export class DiskSessionStore implements SessionStore {
 			entries,
 			turnCount: session.turnCount + 1,
 			lastCompletedUserInput: args.userInput,
-			status: "active",
 			lastTurn: {
 				startedAt,
 				finishedAt,
@@ -611,7 +604,6 @@ export class DiskSessionStore implements SessionStore {
 			...session,
 			updatedAt: finishedAt,
 			entries,
-			status: "active",
 			lastTurn: session.lastTurn
 				? {
 						...session.lastTurn,
@@ -683,7 +675,6 @@ export class DiskSessionStore implements SessionStore {
 			...session,
 			updatedAt: finishedAt,
 			entries,
-			status: "interrupted",
 			lastTurn: {
 				startedAt,
 				finishedAt,
@@ -1004,7 +995,6 @@ function toSessionSummary(session: PersistedSession): SessionSummary {
 		title: session.title,
 		lastCompletedUserInput: session.lastCompletedUserInput,
 		updatedAt: session.updatedAt,
-		status: session.status,
 		cwd: session.cwd,
 		turnCount: session.turnCount,
 		lastTurnStatus: session.lastTurn?.status ?? null,
