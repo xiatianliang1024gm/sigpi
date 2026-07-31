@@ -88,7 +88,7 @@ export interface CreateAgentRuntimeArgs {
 	 * loading project skills.
 	 */
 	includeProjectRoots?: boolean;
-	/** Override the session store (e.g. an in-memory store for `--no-session`). */
+	/** Override the session store (e.g. for tests). */
 	store?: SessionStore;
 }
 

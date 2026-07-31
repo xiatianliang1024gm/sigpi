@@ -535,7 +535,6 @@ function printSkillBootstrap(skillCount: number, warnings: string[]): void {
 function parseSessionArgs(args: string[]): {
 	sessionId?: string;
 	createSession: boolean;
-	noSession: boolean;
 	continueSession: boolean;
 	sessionTitle?: string;
 	approve: boolean;
@@ -545,7 +544,6 @@ function parseSessionArgs(args: string[]): {
 	const rest: string[] = [];
 	let sessionId: string | undefined;
 	let createSession = false;
-	let noSession = false;
 	let continueSession = false;
 	let sessionTitle: string | undefined;
 	let approve = false;
@@ -562,11 +560,6 @@ function parseSessionArgs(args: string[]): {
 
 		if (value === "--new") {
 			createSession = true;
-			continue;
-		}
-
-		if (value === "--no-session") {
-			noSession = true;
 			continue;
 		}
 
@@ -600,16 +593,6 @@ function parseSessionArgs(args: string[]): {
 		throw new Error("Use either --session or --new, not both.");
 	}
 
-	if (noSession && (sessionId || createSession)) {
-		throw new Error("--no-session cannot be combined with --session or --new.");
-	}
-
-	if (continueSession && (sessionId || createSession || noSession)) {
-		throw new Error(
-			"--continue cannot be combined with --session, --new, or --no-session.",
-		);
-	}
-
 	if (approve && noApprove) {
 		throw new Error("--approve and --no-approve cannot be combined.");
 	}
@@ -617,7 +600,6 @@ function parseSessionArgs(args: string[]): {
 	return {
 		sessionId,
 		createSession,
-		noSession,
 		continueSession,
 		sessionTitle,
 		approve,

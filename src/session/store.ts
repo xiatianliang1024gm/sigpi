@@ -223,8 +223,7 @@ const sessionIndexSchema = z.object({
 });
 
 /**
- * Persistence contract for a session. `DiskSessionStore` writes to disk;
- * `InMemorySessionStore` (used for `--no-session`) keeps everything in a Map.
+ * Persistence contract for a session. `DiskSessionStore` writes to disk.
  * `SessionRuntime` / `AgentTurn` depend on this interface, not the disk class.
  */
 export interface SessionStore {
