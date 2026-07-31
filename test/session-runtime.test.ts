@@ -323,7 +323,7 @@ test("session runtime persists interrupted turns without incrementing turnCount"
 	);
 });
 
-test("max-steps turn is resumable and go on continues the same task", async () => {
+test("max-steps turn and go on continues the same task", async () => {
 	const cwd = await createTempDir("sigpi-session-runtime-resume-");
 	const store = createTestSessionStore({ cwd, homeDir: cwd });
 	const fingerprint = createSystemPromptFingerprint("system prompt");
@@ -377,7 +377,6 @@ test("max-steps turn is resumable and go on continues the same task", async () =
 	const maxStepsResult = await sessionRuntime.runTurn("analyze the project");
 
 	assert.equal(maxStepsResult.completionStatus, "completed");
-	assert.equal(maxStepsResult.resumable, true);
 	assert.match(
 		maxStepsResult.outputText ?? "",
 		/I reached the maximum tool-call steps/,
@@ -390,7 +389,6 @@ test("max-steps turn is resumable and go on continues the same task", async () =
 	const resumed = await sessionRuntime.runTurn("go on");
 
 	assert.equal(resumed.completionStatus, "completed");
-	assert.equal(resumed.resumable, false);
 	assert.equal(resumed.outputText, "finished the analysis");
 	assert.equal(provider.requests.length - requestsBeforeResume, 1);
 

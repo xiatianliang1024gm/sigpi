@@ -268,7 +268,6 @@ test("session load marks in-progress turn as interrupted", async () => {
 		systemPromptFingerprint: fingerprint,
 	});
 
-	assert.equal(loaded.session.status, "interrupted");
 	assert.equal(loaded.session.lastTurn?.status, "interrupted");
 	assert.equal(loaded.session.turns.length, 1);
 	assert.equal(loaded.session.turns[0]?.status, "interrupted");
@@ -420,7 +419,6 @@ test("session store normalizes legacy UTC timestamps on read", async () => {
 				persistedEntryCount: 0,
 				turnCount: 1,
 				lastCompletedUserInput: "latest question",
-				status: "active",
 				lastTurn: {
 					startedAt: "2026-05-22T00:03:00.000Z",
 					finishedAt: "2026-05-22T00:04:00.000Z",
@@ -872,7 +870,6 @@ test("session store rejects old schema files", async () => {
 				recentMessages: [],
 				turnCount: 0,
 				lastCompletedUserInput: null,
-				status: "active",
 				lastTurn: null,
 			},
 			null,

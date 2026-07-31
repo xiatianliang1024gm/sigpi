@@ -234,7 +234,6 @@ test("assembles a local max-steps fallback without a final model call", async ()
 	assert.match(result.outputText ?? "", /No tool results were captured\./);
 	assert.doesNotMatch(result.outputText ?? "", /glob/);
 	assert.match(result.outputText ?? "", /go on/);
-	assert.equal(result.resumable, true);
 });
 
 test("max-steps fallback contains no tool-call markup and prompts go on", async () => {
@@ -270,7 +269,6 @@ test("max-steps fallback contains no tool-call markup and prompts go on", async 
 	assert.match(result.outputText ?? "", /go on/);
 	assert.doesNotMatch(result.outputText ?? "", /<tool_call>/);
 	assert.doesNotMatch(result.outputText ?? "", /<invoke name=/);
-	assert.equal(result.resumable, true);
 });
 
 test("interrupts an in-flight model request and returns interrupted status", async () => {

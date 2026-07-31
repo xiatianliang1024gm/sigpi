@@ -925,7 +925,6 @@ function createHistorySession(
 		entries: [],
 		turnCount,
 		lastCompletedUserInput: turnCount > 0 ? `user ${turnCount}` : null,
-		status: "active",
 		lastTurn: null,
 		turns: Array.from({ length: turnCount }, (_, index) => {
 			const turnId = index + 1;

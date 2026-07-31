@@ -229,7 +229,6 @@ export function formatSessionDetails(
 		createdAt: string;
 		updatedAt: string;
 		cwd: string;
-		status: PersistedSession["status"];
 	};
 	snapshot: {
 		summary: string | null;
@@ -260,7 +259,6 @@ export function formatSessionDetails(
 			createdAt: session.createdAt,
 			updatedAt: session.updatedAt,
 			cwd: session.cwd,
-			status: session.status,
 		},
 		snapshot: {
 			summary,

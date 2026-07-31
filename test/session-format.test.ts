@@ -29,7 +29,6 @@ test("session show formatting returns snapshot and recent history only", () => {
 		}),
 		turnCount: 4,
 		lastCompletedUserInput: "latest question",
-		status: "active",
 		lastTurn: {
 			startedAt: "2026-05-22T00:03:00.000Z",
 			finishedAt: "2026-05-22T00:04:00.000Z",

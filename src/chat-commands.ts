@@ -290,7 +290,6 @@ export function createChatCommandDefinitions(
 						{
 							sessionId: session.sessionId,
 							title: session.title,
-							status: session.status,
 							updatedAt: session.updatedAt,
 							turnCount: session.turnCount,
 							lastTurn: session.lastTurn,

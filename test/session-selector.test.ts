@@ -92,7 +92,6 @@ function createSessionSummary(
 				? "recent user input"
 				: overrides.lastCompletedUserInput,
 		updatedAt: overrides?.updatedAt ?? "2026-05-22T00:00:00.000Z",
-		status: overrides?.status ?? "active",
 		cwd: overrides?.cwd ?? "/tmp/project",
 		turnCount: overrides?.turnCount ?? 0,
 		lastTurnStatus: overrides?.lastTurnStatus ?? null,

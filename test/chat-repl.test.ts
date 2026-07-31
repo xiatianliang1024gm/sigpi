@@ -833,7 +833,7 @@ test("attachSessionById returns interrupted and system prompt warnings from sess
 		const attached = await attachSessionById(session.sessionId);
 
 		assert.equal(
-			attached.updatedState.runtime.turn.getCurrentSession().status,
+			attached.updatedState.runtime.turn.getCurrentSession().lastTurn?.status,
 			"interrupted",
 		);
 		assert.equal(attached.warnings.length, 2);
