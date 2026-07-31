@@ -80,14 +80,6 @@ export interface CreateAgentRuntimeArgs {
 	sessionTitle?: string;
 	createSession?: boolean;
 	config?: AppConfig;
-	/**
-	 * Whether to scan project skill roots (`.sigpi/skills`, `.agents/skills`
-	 * walked up from cwd). Gated by project trust (ADR 0022): the CLI passes
-	 * `false` when the project is not trusted and `true` once trust is granted.
-	 * Defaults to `true` so callers that don't gate (and existing tests) keep
-	 * loading project skills.
-	 */
-	includeProjectRoots?: boolean;
 	/** Override the session store (e.g. for tests). */
 	store?: SessionStore;
 }
@@ -122,7 +114,6 @@ export async function loadRuntimeSkillCatalog(args: {
 	cwd?: string;
 	homeDir?: string;
 	logger?: RuntimeLogger;
-	includeProjectRoots?: boolean;
 }): Promise<{
 	loadedSkills: LoadedSkill[];
 	warnings: SkillWarning[];
@@ -134,7 +125,6 @@ export async function loadRuntimeSkillCatalog(args: {
 	const catalog = await loadSkillCatalog({
 		cwd,
 		homeDir,
-		includeProjectRoots: args.includeProjectRoots ?? true,
 	});
 
 	args.logger?.info("skills_loaded", {
@@ -222,7 +212,6 @@ export async function createAgentRuntime(
 		cwd,
 		homeDir,
 		logger: runLogger,
-		includeProjectRoots: args.includeProjectRoots ?? true,
 	});
 	const systemPromptSections = buildSystemPromptSections(
 		shellRuntime,

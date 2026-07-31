@@ -16,14 +16,6 @@ export interface LoadSkillCatalogOptions {
 	cwd: string;
 	/** Home directory for global skill roots. Defaults to $HOME / os.homedir(). */
 	homeDir?: string;
-	/**
-	 * When false, only the global skill roots (`~/.sigpi/skills`,
-	 * `~/.agents/skills`) are scanned. When true (default), project roots
-	 * walked up from `cwd` are included. Project roots are gated by project
-	 * trust (ADR 0022): callers pass false for an untrusted project so its
-	 * skills are not auto-loaded.
-	 */
-	includeProjectRoots?: boolean;
 }
 
 /**
@@ -44,11 +36,7 @@ export async function loadSkillCatalog(
 ): Promise<SkillCatalogLoadResult> {
 	const cwd = options.cwd;
 	const homeDir = options.homeDir ?? process.env.HOME ?? os.homedir();
-	const roots = collectSkillRoots(
-		cwd,
-		homeDir,
-		options.includeProjectRoots ?? true,
-	);
+	const roots = collectSkillRoots(cwd, homeDir);
 
 	const allWarnings: SkillWarning[] = [];
 	const loadedSkills: LoadedSkill[] = [];
@@ -78,23 +66,17 @@ export async function loadSkillCatalog(
 	};
 }
 
-export function collectSkillRoots(
-	cwd: string,
-	homeDir: string,
-	includeProjectRoots = true,
-): string[] {
+export function collectSkillRoots(cwd: string, homeDir: string): string[] {
 	const projectRoots: string[] = [];
-	if (includeProjectRoots) {
-		let dir = path.resolve(cwd);
-		for (;;) {
-			projectRoots.push(path.join(dir, ".sigpi", "skills"));
-			projectRoots.push(path.join(dir, ".agents", "skills"));
-			const parent = path.dirname(dir);
-			if (parent === dir) {
-				break;
-			}
-			dir = parent;
+	let dir = path.resolve(cwd);
+	for (;;) {
+		projectRoots.push(path.join(dir, ".sigpi", "skills"));
+		projectRoots.push(path.join(dir, ".agents", "skills"));
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			break;
 		}
+		dir = parent;
 	}
 
 	// sigpi's own namespace precedes the agents namespace; within a namespace,
