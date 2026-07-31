@@ -26,13 +26,6 @@ import { TurnInterruptController } from "./interrupt.js";
 import { resolveDatedLogFilePath } from "./logger.js";
 import { configureHttpProxy } from "./model/http-dispatcher.js";
 import {
-	formatPlanProgressSummary,
-	formatUpdatePlanBody,
-	getCurrentPlan,
-	parsePlanArgs,
-	setCurrentPlan,
-} from "./plan-tracker.js";
-import {
 	type ProjectTrustResult,
 	resolveProjectTrust,
 	type TrustDecision,
@@ -158,7 +151,9 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		config.model.proxy,
 		config.model.timeoutMs,
 	);
-	const progressReporter = createCliProgressReporter();
+	const progressReporter = (event: TurnProgressEvent) => {
+		activeStatusBarProgressListener?.(event);
+	};
 	const cleanupStore = createRuntimeSessionStore({
 		cwd: process.cwd(),
 		config,
@@ -248,24 +243,9 @@ export interface RunChatReplLoopDependencies {
 	// tools?: ToolRegistry;
 }
 
-const compactState: CompactProgressRenderState = {
-	hasPrintedTurn: false,
-	groupActive: false,
-};
 let activeStatusBarProgressListener:
 	| ((event: TurnProgressEvent) => void)
 	| null = null;
-const ANSI_RESET = "\x1B[0m";
-const ANSI_DIM = "\x1B[2m";
-const ANSI_RED = "\x1B[31m";
-const ANSI_GREEN = "\x1B[32m";
-const ANSI_YELLOW = "\x1B[33m";
-const ANSI_BLUE = "\x1B[34m";
-const ANSI_CYAN = "\x1B[36m";
-interface CompactProgressRenderState {
-	hasPrintedTurn: boolean;
-	groupActive: boolean;
-}
 
 /**
  * Apply one turn-progress event to the persistent REPL view. Returns the
@@ -485,225 +465,6 @@ export async function runChatReplLoop(
 
 	view.stop();
 	return state;
-}
-
-export function createCliProgressReporter(): (
-	event: TurnProgressEvent,
-) => void {
-	compactState.hasPrintedTurn = false;
-	compactState.groupActive = false;
-
-	return (event) => {
-		// `update_plan` updates shared plan state regardless of render surface.
-		if (
-			event.type === "tool_execution_started" &&
-			event.toolName === "update_plan"
-		) {
-			setCurrentPlan(parsePlanArgs(event.toolArguments));
-		}
-		// When a persistent-TUI view is driving rendering (ADR 0025 A1), forward
-		// to it and skip the console output — `console.log` while the `TUI` is
-		// alive desyncs Pi-tui's viewport.
-		if (activeStatusBarProgressListener) {
-			activeStatusBarProgressListener(event);
-			return;
-		}
-		renderCompactProgressEvent(event, compactState);
-	};
-}
-
-// Quiet-mode rendering — Claude Code-style glyph vocabulary.
-const QUIET_GLYPH_CALL = "\u23FA\uFE0E";
-const QUIET_GLYPH_RESULT = "\u23BF\uFE0E";
-const QUIET_GLYPH_DONE = "\u2714\uFE0E";
-const QUIET_GLYPH_USER = ">";
-
-function quietColorEnabled(): boolean {
-	if (process.env.NO_COLOR) return false;
-	if (process.env.CLICOLOR === "0") return false;
-	return Boolean(process.stdout.isTTY);
-}
-
-const QUIET_COLOR_ON = quietColorEnabled();
-
-function qColor(code: string, value: string): string {
-	return QUIET_COLOR_ON ? `${code}${value}${ANSI_RESET}` : value;
-}
-
-const qBlue = (v: string) => qColor(ANSI_BLUE, v);
-const qCyan = (v: string) => qColor(ANSI_CYAN, v);
-const qGreen = (v: string) => qColor(ANSI_GREEN, v);
-const qRed = (v: string) => qColor(ANSI_RED, v);
-const qYellow = (v: string) => qColor(ANSI_YELLOW, v);
-const qDim = (v: string) => qColor(ANSI_DIM, v);
-
-function quietCapitalize(value: string): string {
-	return value.length > 0 ? value[0].toUpperCase() + value.slice(1) : value;
-}
-
-function quietStripInlineCode(value: string): string {
-	return value.replace(/`/g, "");
-}
-
-function quietTruncate(value: string, max: number): string {
-	if (value.length <= max) return value;
-	return `${value.slice(0, Math.max(0, max - 1)).trimEnd()}\u2026`;
-}
-
-function formatQuietElapsed(ms: number): string {
-	if (ms < 1000) return `${ms}ms`;
-	if (ms < 60000) {
-		return `${ms < 10000 ? (ms / 1000).toFixed(1) : Math.round(ms / 1000)}s`;
-	}
-	const minutes = Math.floor(ms / 60000);
-	const seconds = Math.round((ms % 60000) / 1000);
-	return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`;
-}
-
-function renderCompactProgressEvent(
-	event: TurnProgressEvent,
-	state: CompactProgressRenderState,
-): void {
-	const suffix =
-		event.elapsedMs !== undefined
-			? ` (${formatQuietElapsed(event.elapsedMs)})`
-			: "";
-	// A non-tool event ends an open parallel-tool-call group.
-	if (
-		event.type !== "tool_execution_started" &&
-		event.type !== "tool_execution_finished"
-	) {
-		state.groupActive = false;
-	}
-
-	switch (event.type) {
-		case "turn_started": {
-			if (state.hasPrintedTurn) {
-				console.log("");
-			}
-			state.hasPrintedTurn = true;
-			if (event.userInput) {
-				printPrefixedBlock(qBlue(`${QUIET_GLYPH_USER} `), event.userInput);
-			}
-			const plan = getCurrentPlan();
-			if (plan?.items.every((item) => item.status === "completed")) {
-				setCurrentPlan(null);
-			} else if (plan) {
-				console.log(
-					qBlue(`${QUIET_GLYPH_CALL} Plan: ${formatPlanProgressSummary(plan)}`),
-				);
-			}
-			return;
-		}
-		case "step_started":
-			return;
-		case "interrupt_requested":
-			console.log(
-				qYellow(
-					`${QUIET_GLYPH_CALL} ${
-						event.interruptStage === "model"
-							? "Cancelling current model request"
-							: "Interrupt requested; waiting for current tool to finish"
-					}`,
-				),
-			);
-			return;
-		case "model_request_started":
-			return;
-		case "model_request_finished":
-			return;
-		case "assistant_message": {
-			const trimmed = event.assistantText?.trim();
-			if (trimmed && !isAssistantTextNoise(trimmed)) {
-				console.log(
-					`${qBlue(QUIET_GLYPH_CALL)} Assistant: ${quietStripInlineCode(trimmed)}`,
-				);
-			}
-			return;
-		}
-		case "context_checkpoint":
-			console.log(
-				qBlue(
-					`${QUIET_GLYPH_CALL} Checkpoint${event.message ? `: ${event.message}` : ""}`,
-				),
-			);
-			return;
-		case "tool_calls_received":
-			if ((event.toolCallCount ?? 0) > 1) {
-				state.groupActive = true;
-			}
-			return;
-		case "tool_execution_started": {
-			const label = quietCapitalize(
-				quietStripInlineCode(event.message ?? `tool ${event.toolName}`),
-			);
-			const indent = state.groupActive ? "  " : "";
-			console.log(`${indent}${qCyan(`${QUIET_GLYPH_CALL} ${label}`)}`);
-			return;
-		}
-		case "tool_execution_finished": {
-			const ok = event.toolOk === true;
-			if (event.toolName === "update_plan") {
-				const body = formatUpdatePlanBody(getCurrentPlan(), ok);
-				const indent = state.groupActive ? "    " : "  ";
-				console.log(
-					`${indent}${
-						ok ? qDim(QUIET_GLYPH_RESULT) : qRed(QUIET_GLYPH_RESULT)
-					} ${ok ? qDim(body) : qRed(body)}${suffix}`,
-				);
-				return;
-			}
-			// On success, no extra output. On failure, show error summary.
-			if (ok) return;
-
-			const max =
-				typeof process.stdout.columns === "number" &&
-				process.stdout.columns > 20
-					? process.stdout.columns - 4
-					: 200;
-			const raw = event.toolResult ?? "";
-			const body = quietTruncate(raw.length > 0 ? raw : "error", max);
-			const indent = state.groupActive ? "    " : "  ";
-			console.log(
-				`${indent}${qRed(QUIET_GLYPH_RESULT)} ${qRed(body)}${suffix}`,
-			);
-			return;
-		}
-		case "turn_finished":
-			console.log(qGreen(`${QUIET_GLYPH_DONE} Done${suffix}`));
-			return;
-		case "turn_interrupted":
-			console.log(
-				qYellow(
-					`${QUIET_GLYPH_CALL} Interrupted${
-						event.interruptStage ? ` during ${event.interruptStage}` : ""
-					}${suffix}`,
-				),
-			);
-			return;
-		case "turn_max_steps_reached":
-			console.log(qYellow(`${QUIET_GLYPH_CALL} Stopped at max steps${suffix}`));
-			return;
-		case "turn_failed":
-			console.log(qRed(`${QUIET_GLYPH_CALL} Failed`));
-			return;
-	}
-}
-
-function printPrefixedBlock(firstLinePrefix: string, value: string): void {
-	const lines = value.split("\n");
-	for (const [index, line] of lines.entries()) {
-		console.log(`${index === 0 ? firstLinePrefix : "  "}${line}`);
-	}
-}
-
-const ASSISTANT_TEXT_NOISE_PATTERNS: RegExp[] = [
-	/^\]<\][\w-]+\[>$/, // minimax-style end-of-thinking markers, e.g. "]<]minimax[>"
-	/^<\/?[a-z_]+>$/i, // bare XML-ish tags like "<system>", "</think>"
-];
-
-function isAssistantTextNoise(text: string): boolean {
-	return ASSISTANT_TEXT_NOISE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 async function runSessionCommand(args: string[]): Promise<void> {
