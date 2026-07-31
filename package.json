@@ -13,7 +13,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.build.json",
+    "build": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && node scripts/copy-assets.mjs && tsc -p tsconfig.build.json",
     "dev": "pnpm run build && node dist/src/cli.js",
     "format": "biome format --write .",
     "format:check": "biome format .",
@@ -22,7 +22,7 @@
     "fix": "biome check --write .",
     "check": "biome check . && pnpm run test",
     "check:fix": "pnpm run fix && pnpm run test",
-    "test:compile": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json --outDir dist --rootDir .",
+    "test:compile": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && node scripts/copy-assets.mjs && tsc -p tsconfig.json --outDir dist --rootDir .",
     "test": "pnpm run test:compile && node --test dist/test/*.test.js",
     "test:provider": "pnpm run test:compile && node --test dist/test/openai-compatible.test.js",
     "bench": "node bench/run-bench.mjs",

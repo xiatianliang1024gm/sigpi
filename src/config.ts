@@ -2,11 +2,20 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse } from "smol-toml";
 import { z } from "zod";
 import type { ProjectTrustPreference } from "./project-trust.js";
 import { loadAgentStateSync } from "./state.js";
 import type { LogLevel, ShellKind } from "./types.js";
+
+// Default user config shipped as a static TOML file. Read once at module load
+// and cached — the file is part of the package and never changes at runtime.
+// `scripts/copy-assets.mjs` stages it into dist/src/ alongside the compiled JS.
+const DEFAULT_CONFIG_TOML = readFileSync(
+	fileURLToPath(new URL("./default-config.toml", import.meta.url)),
+	"utf8",
+);
 
 const modelConfigSchema = z.object({
 	baseURL: z.string().min(1),
@@ -475,72 +484,7 @@ export function getDefaultLogFilePath(homeDir: string = os.homedir()): string {
 }
 
 export function renderDefaultConfigToml(): string {
-	return [
-		"[models.local]",
-		'base_url = "http://localhost:8000/v1"',
-		'api_key = "your-api-key"',
-		'name = "your-model-name"',
-		'api_format = "chat_completions"',
-		"timeout_ms = 60000",
-		"max_retries = 2",
-		"retry_base_delay_ms = 250",
-		"# stream = true  # set false for providers that do not support streaming",
-		"# max_tokens = 8192  # model max output tokens; caps the /compact summary request",
-		"# hard_context_limit = 200000  # model's total token budget (physical ceiling)",
-		"# reserve_tokens = 16384  # headroom reserved for the model's response",
-		"# keep_recent_tokens = 20000  # recent tokens kept un-summarized",
-		"",
-		"# [models.remote]",
-		'# base_url = "https://api.example.com/v1"',
-		'# api_key = "your-api-key"',
-		'# name = "remote-model"',
-		'# api_format = "responses"',
-		"# hard_context_limit = 128000",
-		"# reserve_tokens = 16384",
-		"# keep_recent_tokens = 20000",
-		"",
-		"[agent]",
-		"# Token-based context management. The budget is model-bound: each model's",
-		"# hard_context_limit / reserve_tokens / keep_recent_tokens live under",
-		"# [models.<id>] (see above). The compact trigger fires when",
-		"# `tokens > hard_context_limit - reserve_tokens`.",
-		"max_steps = 20",
-		"",
-		"[logging]",
-		'level = "info"',
-		'file = "~/.sigpi/logs/agent.log"',
-		"to_console = false",
-		"# Max chars of a model response body captured in logs (file vs console).",
-		"# max_body_preview_chars = 16000",
-		"# max_console_body_preview_chars = 500",
-		"",
-		"[storage]",
-		'sessions_root = "~/.sigpi/projects"',
-		"",
-		"[shell]",
-		'# kind = "zsh"',
-		'# path = "/bin/zsh"',
-		"",
-		"[tools.bash]",
-		"# Command timeout bounds (milliseconds). default_timeout_ms must be <= max_timeout_ms.",
-		"# default_timeout_ms = 120000",
-		"# max_timeout_ms = 600000",
-		"# Inline output length (chars) before overflow is written to a session file.",
-		"# max_output_length = 30000",
-		"# When true, every command starts in the project directory (no cd carry-over).",
-		"# maintain_project_working_dir = false",
-		"# Optional shell script sourced before each command so env vars persist.",
-		'# env_file = "~/.sigpi/bash-env.sh"',
-		"",
-		"[trust]",
-		"# How SigPi treats project-local resources (skills + project .sigpi/config.toml).",
-		"#   ask (default): prompt in the REPL; headless one-shot skips them unless trusted.",
-		"#   always:        load project resources without prompting.",
-		"#   never:         ignore project resources (global config + global skills only).",
-		"# A per-run --approve / --no-approve overrides this for a single run.",
-		'default_project_trust = "ask"',
-		"",
-	].join("\n");
+	return DEFAULT_CONFIG_TOML;
 }
 
 export async function initializeUserConfig(
