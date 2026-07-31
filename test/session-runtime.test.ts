@@ -395,3 +395,126 @@ test("max-steps turn and go on continues the same task", async () => {
 	const persisted = await store.getSession(session.sessionId);
 	assert.equal(persisted.turnCount, 2);
 });
+
+test("session runtime persists compact summary and restores it after reload", async () => {
+	const cwd = await createTempDir("sigpi-session-runtime-compact-reload-");
+	const store = createTestSessionStore({ cwd, homeDir: cwd });
+	const fingerprint = createSystemPromptFingerprint("system prompt");
+	const session = await store.createSession({
+		cwd,
+		systemPromptFingerprint: fingerprint,
+		loadedSkillNames: [],
+		skillsFingerprint: null,
+	});
+
+	// Single provider that returns different responses per call:
+	//   index 0 -> first turn reply
+	//   index 1 -> second turn reply
+	//   index 2 -> compact summary
+	//   index 3 -> resumed turn reply
+	const provider = new MockProvider((_request, index) => {
+		if (index === 0) {
+			return {
+				assistantText: "first reply",
+				toolCalls: [],
+				finishReason: "stop",
+			};
+		}
+		if (index === 1) {
+			return {
+				assistantText: "second reply",
+				toolCalls: [],
+				finishReason: "stop",
+			};
+		}
+		if (index === 2) {
+			return {
+				assistantText: "compacted summary text",
+				toolCalls: [],
+				finishReason: "stop",
+			};
+		}
+		return {
+			assistantText: "resumed reply",
+			toolCalls: [],
+			finishReason: "stop",
+		};
+	});
+	const context = new ConversationContext({
+		summaryEnabled: true,
+	});
+	const runner = new AgentRunner({
+		provider,
+		tools: createDefaultToolRegistry(),
+		context,
+		systemPrompt: "system prompt",
+		options: {
+			workingDirectory: cwd,
+		},
+	});
+	const sessionRuntime = new SessionRuntime(runner, context, store, session);
+
+	await sessionRuntime.runTurn("first user input");
+	await sessionRuntime.runTurn("second user input");
+
+	const compactResult = await sessionRuntime.compactContext();
+	assert.equal(compactResult.summarized, true);
+	assert.equal(compactResult.summary, "compacted summary text");
+
+	// Simulate exit: drop the in-memory runtime, then reload from disk.
+	const persisted = await store.getSession(session.sessionId);
+	const persistedDerived = deriveContextStateFromEntries(persisted.entries);
+	assert.equal(persistedDerived.summary, "compacted summary text");
+
+	const loaded = await store.loadSession({
+		sessionId: session.sessionId,
+		cwd,
+		systemPromptFingerprint: fingerprint,
+	});
+	const reloadedContext = new ConversationContext();
+	const reloadedSession = await hydrateRuntimeFromSession({
+		context: reloadedContext,
+		store,
+		loadedSession: loaded,
+	});
+
+	// The reloaded context must carry the compacted summary.
+	assert.equal(reloadedContext.getSummary(), "compacted summary text");
+
+	// And the next model request must include the summary as a system message.
+	const resumedProvider = new MockProvider((request) => {
+		const summarySystem = request.messages.find(
+			(message) =>
+				message.role === "system" &&
+				typeof message.content === "string" &&
+				message.content.includes("compacted summary text"),
+		);
+		assert.ok(
+			summarySystem,
+			"resumed turn must include the compacted summary as a system message",
+		);
+		return {
+			assistantText: "resumed reply",
+			toolCalls: [],
+			finishReason: "stop",
+		};
+	});
+	const resumedRunner = new AgentRunner({
+		provider: resumedProvider,
+		tools: createDefaultToolRegistry(),
+		context: reloadedContext,
+		systemPrompt: "system prompt",
+		options: {
+			workingDirectory: cwd,
+		},
+	});
+	const resumedRuntime = new SessionRuntime(
+		resumedRunner,
+		reloadedContext,
+		store,
+		reloadedSession,
+	);
+
+	const result = await resumedRuntime.runTurn("continue after compact");
+	assert.equal(result.outputText, "resumed reply");
+});

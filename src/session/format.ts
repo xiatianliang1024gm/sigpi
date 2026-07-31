@@ -13,21 +13,25 @@ import type {
 /**
  * Convert a persisted `entries` stream back into the legacy
  * `{summary, recentMessages}` pair used by `ConversationContext`. The last
- * `compaction` entry (if any) provides `summary`; everything after its
- * `firstKeptEntryId` is the live `recentMessages` window. When there is no
- * compaction entry, every message entry is live and `summary` is null.
+ * `compaction` entry (if any) provides `summary`; everything from its
+ * `firstKeptEntryId` onward is the live `recentMessages` window. When there
+ * is no compaction entry, every message entry is live and `summary` is null.
+ *
+ * Note: `firstKeptEntryId` points to a message entry that already exists in
+ * the stream *before* the compaction entry was appended (the compactor
+ * records the id of the first message it kept, then appends the compaction
+ * entry). We therefore scan the whole stream for that id rather than only
+ * the entries that follow the compaction entry.
  */
 export function deriveContextStateFromEntries(entries: SessionEntry[]): {
 	summary: string | null;
 	recentMessages: Message[];
 } {
 	let lastCompaction: CompactionEntry | null = null;
-	let lastCompactionIndex = -1;
 	for (let i = 0; i < entries.length; i += 1) {
 		const entry = entries[i];
 		if (entry && entry.kind === "compaction") {
 			lastCompaction = entry;
-			lastCompactionIndex = i;
 		}
 	}
 
@@ -42,10 +46,18 @@ export function deriveContextStateFromEntries(entries: SessionEntry[]): {
 	}
 
 	const recentMessages: Message[] = [];
-	let firstKeptSeen = lastCompaction.firstKeptEntryId === null;
-	for (let i = lastCompactionIndex + 1; i < entries.length; i += 1) {
+	if (lastCompaction.firstKeptEntryId === null) {
+		// No kept window — only the summary survives.
+		return {
+			summary: lastCompaction.summary,
+			recentMessages,
+		};
+	}
+
+	let firstKeptSeen = false;
+	for (let i = 0; i < entries.length; i += 1) {
 		const entry = entries[i];
-		if (entry?.kind !== "message") {
+		if (!entry || entry.kind !== "message") {
 			continue;
 		}
 		if (!firstKeptSeen) {

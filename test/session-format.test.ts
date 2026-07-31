@@ -6,7 +6,7 @@ import {
 	formatSessionDetails,
 	resolveEntriesForPersist,
 } from "../src/session/format.js";
-import type { PersistedSession } from "../src/types.js";
+import type { PersistedSession, SessionEntry } from "../src/types.js";
 import { createTestToolExecution } from "./helpers.js";
 
 test("session show formatting returns snapshot and recent history only", () => {
@@ -115,6 +115,58 @@ test("deriveContextStateFromEntries returns the summary and live messages after 
 	assert.deepEqual(
 		state.recentMessages.map((m) => m.content),
 		["first", "second"],
+	);
+});
+
+test("deriveContextStateFromEntries finds firstKeptEntryId even when it precedes the compaction entry", () => {
+	// The compactor records the id of the first kept message *before*
+	// appending the compaction entry, so the compaction entry's
+	// `firstKeptEntryId` points to a message that lives earlier in the
+	// stream. The derivation must scan the whole stream for that id, not
+	// only the entries that follow the compaction entry.
+	const entries: SessionEntry[] = [
+		{
+			kind: "message",
+			id: "kept-1",
+			turnId: null,
+			timestamp: "2026-07-31T10:00:00.000Z",
+			message: { role: "user", content: "first kept", id: "kept-1" },
+		},
+		{
+			kind: "message",
+			id: "kept-2",
+			turnId: null,
+			timestamp: "2026-07-31T10:00:01.000Z",
+			message: { role: "assistant", content: "second kept", id: "kept-2" },
+		},
+		{
+			kind: "compaction",
+			id: "compaction-1",
+			parentId: null,
+			timestamp: "2026-07-31T10:00:02.000Z",
+			summary: "compacted summary",
+			firstKeptEntryId: "kept-1",
+			tokensBefore: 1000,
+			details: {
+				trigger: "token",
+				keptMessages: 2,
+				summarizedMessages: 5,
+				triggeredBy: "token_estimate",
+			},
+		},
+		{
+			kind: "message",
+			id: "after-1",
+			turnId: null,
+			timestamp: "2026-07-31T10:00:03.000Z",
+			message: { role: "user", content: "after compact", id: "after-1" },
+		},
+	];
+	const state = deriveContextStateFromEntries(entries);
+	assert.equal(state.summary, "compacted summary");
+	assert.deepEqual(
+		state.recentMessages.map((m) => m.content),
+		["first kept", "second kept", "after compact"],
 	);
 });
 

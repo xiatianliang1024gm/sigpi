@@ -351,6 +351,15 @@ export class Compactor {
 			}
 			return alignSplitIndex(messages, Math.max(1, messages.length - 1));
 		}
+		// For force trigger the user explicitly asked to compact, so we must
+		// always summarize at least `floor` messages worth — even when the
+		// recent window already exceeds `keepRecentTokens` (in which case
+		// `tokenCutIndex` collapses to 0 and `Math.min` would skip the
+		// summary entirely). For token trigger we keep the conservative
+		// `Math.min` so we never summarize more than either limit demands.
+		if (args.trigger === "force") {
+			return messageFloorIndex;
+		}
 		return Math.min(tokenCutIndex, messageFloorIndex);
 	}
 
