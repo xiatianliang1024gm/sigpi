@@ -1,6 +1,5 @@
 import type { ModelConfig } from "./config.js";
 import { getGitBranch } from "./git.js";
-import { setCurrentPlan } from "./plan-tracker.js";
 import { type AgentRuntime, createAgentRuntime } from "./runtime.js";
 import type { SessionStore } from "./session/store.js";
 import {
@@ -95,11 +94,6 @@ export async function attachNewSession(
 }
 
 export function runtimeToChatReplState(runtime: AgentRuntime): ChatReplState {
-	// A new or resumed session starts with no active plan; clear any plan
-	// left over from a previous session so the footer does not show stale
-	// steps from another conversation.
-	setCurrentPlan(null);
-
 	return {
 		runtime,
 		shellRuntime: runtime.shellRuntime,

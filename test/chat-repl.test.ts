@@ -9,7 +9,6 @@ import {
 	getResumeAvailability,
 	runtimeToChatReplState,
 } from "../src/chat-repl.js";
-import { getCurrentPlan, setCurrentPlan } from "../src/plan-tracker.js";
 import { createAgentRuntime } from "../src/runtime.js";
 import {
 	composeStatusBar,
@@ -45,35 +44,6 @@ function setTestHome(homeDir: string): () => void {
 		process.env.HOME = previousHome;
 	};
 }
-
-test("runtimeToChatReplState clears a plan left over from a previous session", async () => {
-	const cwd = await realpath(
-		await createTempDir("sigpi-chat-repl-plan-clear-"),
-	);
-	const homeDir = await createTempDir("sigpi-chat-repl-plan-clear-home-");
-	const previousCwd = process.cwd();
-	const restoreHome = setTestHome(homeDir);
-	process.chdir(cwd);
-
-	try {
-		await writeTestConfig(cwd);
-		setCurrentPlan({
-			explanation: null,
-			items: [{ step: "Old step", status: "in_progress" }],
-			updatedAt: new Date().toISOString(),
-		});
-		assert.ok(getCurrentPlan());
-
-		const runtime = await createAgentRuntime({ createSession: true });
-		runtimeToChatReplState(runtime);
-
-		assert.equal(getCurrentPlan(), null);
-	} finally {
-		setCurrentPlan(null);
-		process.chdir(previousCwd);
-		restoreHome();
-	}
-});
 
 test("formatStatusBar includes tokens and cwd", async () => {
 	const cwd = await realpath(await createTempDir("sigpi-chat-repl-status-"));
