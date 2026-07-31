@@ -118,6 +118,57 @@ test("manual compaction can summarize older messages before soft limit is reache
 	assert.equal(provider.requests[0]?.context?.purpose, "summary");
 });
 
+test("manual compaction summarizes even when recent messages already exceed keepRecentTokens", async () => {
+	// Regression: when the recent-message window is just over `keepRecentTokens`,
+	// `findCompactSplitIndex` used to return 0 (because the token-budget loop
+	// walked all the way back to index 0 before hitting the threshold), and
+	// `Math.min(0, messageFloorIndex)` collapsed to 0 — so `/compact` reported
+	// "Nothing to compact" even though the user explicitly asked for one.
+	const provider = new MockProvider(() => ({
+		assistantText: "compressed summary",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	const context = new ConversationContext({
+		summaryEnabled: true,
+		getContextBudget: () => ({
+			hardContextLimit: 200_000,
+			reserveTokens: 16_384,
+			keepRecentTokens: 20_000,
+		}),
+		keepRecentMessagesFloor: 4,
+	});
+
+	// 65 messages × ~1232 chars each ≈ 20_280 tokens — just over the 20_000
+	// keepRecentTokens budget. With the old code this returned
+	// `summarized: false`; with the fix it must summarize down to the floor.
+	const messages: Message[] = [];
+	for (let i = 0; i < 65; i += 1) {
+		messages.push({
+			role: i % 2 === 0 ? "user" : "assistant",
+			content: "x".repeat(1232),
+		});
+	}
+
+	context.hydrateState({
+		summary: "x".repeat(20194),
+		recentMessages: messages,
+	});
+
+	const result = await context.compactNow(
+		provider,
+		"You are a test agent.",
+		[],
+	);
+
+	assert.equal(result.summarized, true);
+	assert.equal(result.trimmed, false);
+	assert.equal(result.previousRecentMessageCount, 65);
+	assert.equal(result.recentMessageCount, 4);
+	assert.equal(context.getSummary(), "compressed summary");
+	assert.equal(context.getRecentMessages().length, 4);
+});
+
 test("context summarization prompt preserves goals with structured checkpoint sections", async () => {
 	const provider = new MockProvider(() => ({
 		assistantText: "structured summary",
