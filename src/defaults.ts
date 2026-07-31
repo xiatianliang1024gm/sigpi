@@ -88,6 +88,6 @@ export function buildSystemPrompt(
 	loadedSkills: LoadedSkill[] = [],
 ): string {
 	return buildSystemPromptSections(shellRuntime, loadedSkills)
-		.map((section) => section.content)
-		.join(" ");
+		.map((section) => `## ${section.label}\n\n${section.content}`)
+		.join("\n\n");
 }
