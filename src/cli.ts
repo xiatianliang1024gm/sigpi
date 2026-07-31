@@ -240,7 +240,6 @@ export interface RunChatReplLoopOptions {
 
 export interface RunChatReplLoopDependencies {
 	commands: readonly ChatCommandDefinition[];
-	// tools?: ToolRegistry;
 }
 
 let activeStatusBarProgressListener:
