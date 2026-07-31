@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "smol-toml";
 import { z } from "zod";
-import type { ProjectTrustPreference } from "./project-trust.js";
+
 import { loadAgentStateSync } from "./state.js";
 import type { LogLevel, ShellKind } from "./types.js";
 
@@ -83,10 +83,6 @@ const shellConfigSchema = z.object({
 	path: z.string().min(1).optional(),
 });
 
-const trustConfigSchema = z.object({
-	defaultProjectTrust: z.enum(["ask", "always", "never"]).default("ask"),
-});
-
 const bashConfigSchema = z.object({
 	defaultTimeoutMs: z.number().int().positive().default(120_000),
 	maxTimeoutMs: z.number().int().positive().default(600_000),
@@ -108,7 +104,6 @@ const appConfigSchema = z.object({
 			bash: bashConfigSchema.default({}),
 		})
 		.default({}),
-	trust: trustConfigSchema.default({}),
 });
 
 /**
@@ -157,9 +152,6 @@ const BASH_ALIASES: Record<string, string> = {
 	maintainProjectWorkingDir: "maintain_project_working_dir",
 	envFile: "env_file",
 };
-const TRUST_ALIASES: Record<string, string> = {
-	defaultProjectTrust: "default_project_trust",
-};
 
 /**
  * The six section alias maps, grouped as the canonical camelCase ↔ snake_case
@@ -174,7 +166,6 @@ export const CONFIG_ALIASES = {
 	storage: STORAGE_ALIASES,
 	shell: SHELL_ALIASES,
 	bash: BASH_ALIASES,
-	trust: TRUST_ALIASES,
 };
 
 /**
@@ -220,7 +211,6 @@ const tomlRootSchema = z.object({
 	logging: snakeFields(loggingConfigSchema, LOGGING_ALIASES).optional(),
 	storage: snakeFields(storageConfigSchema, STORAGE_ALIASES).optional(),
 	shell: snakeFields(shellConfigSchema, SHELL_ALIASES).optional(),
-	trust: snakeFields(trustConfigSchema, TRUST_ALIASES).optional(),
 	tools: z
 		.object({
 			bash: snakeFields(bashConfigSchema, BASH_ALIASES, true).optional(),
@@ -268,10 +258,6 @@ export interface StorageConfig {
 	sessionsRoot: string;
 }
 
-export interface TrustConfig {
-	defaultProjectTrust: ProjectTrustPreference;
-}
-
 export interface ShellConfig {
 	kind?: ShellKind;
 	path?: string;
@@ -303,15 +289,10 @@ export interface AppConfig {
 	storage: StorageConfig;
 	shell: ShellConfig;
 	tools: ToolsConfig;
-	trust: TrustConfig;
 }
 
 interface PartialToolsConfig {
 	bash?: Partial<RunShellConfig>;
-}
-
-interface PartialTrustConfig {
-	defaultProjectTrust?: ProjectTrustPreference;
 }
 
 interface PartialConfig {
@@ -323,21 +304,11 @@ interface PartialConfig {
 	storage?: Partial<StorageConfig>;
 	shell?: Partial<ShellConfig>;
 	tools?: PartialToolsConfig;
-	trust?: PartialTrustConfig;
 }
 
 export interface LoadAppConfigOptions {
-	cwd?: string;
 	env?: NodeJS.ProcessEnv;
 	homeDir?: string;
-	/**
-	 * Whether to merge the project's `.sigpi/config.toml` override. Project
-	 * config is trust-gated (ADR 0022): callers pass `false` when the project
-	 * is not trusted (headless default, or a saved/per-run decline) and `true`
-	 * once trust is granted. Defaults to `true` so callers that don't gate
-	 * (and existing tests) keep merging project overrides.
-	 */
-	readProjectConfig?: boolean;
 }
 
 export interface InitializeUserConfigOptions {
@@ -345,42 +316,13 @@ export interface InitializeUserConfigOptions {
 	overwrite?: boolean;
 }
 
-/**
- * Reads the global `default_project_trust` preference without validating the
- * full config. Used by the pre-trust load in `resolveConfigAndTrust`: the only
- * configuration source may be the still-gated project config, which must not be
- * validated (and would fail model validation) before trust is resolved.
- */
-export function readDefaultProjectTrust(
-	homeDir: string = os.homedir(),
-): ProjectTrustPreference {
-	try {
-		const userConfigPath = path.join(homeDir, ".sigpi", "config.toml");
-		const fileConfig = readConfigFile(userConfigPath);
-		return fileConfig.trust?.defaultProjectTrust ?? "ask";
-	} catch {
-		return "ask";
-	}
-}
-
 export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
-	const cwd = options.cwd ?? process.cwd();
 	const env = options.env ?? process.env;
 	const homeDir = options.homeDir ?? os.homedir();
 
 	const userConfigPath = path.join(homeDir, ".sigpi", "config.toml");
-	const projectConfigPath = path.join(cwd, ".sigpi", "config.toml");
 
-	// Project config is trust-gated (ADR 0022): only merged once the project
-	// is trusted. Callers pass `readProjectConfig: false` for the pre-trust
-	// load (to read the global `defaultProjectTrust`) and `true` once trust
-	// is granted. Defaults to `true` for backward compatibility.
-	const readProjectConfig = options.readProjectConfig ?? true;
-
-	const fileConfig = mergeConfigs(
-		readConfigFile(userConfigPath),
-		readProjectConfig ? readConfigFile(projectConfigPath) : {},
-	);
+	const fileConfig = readConfigFile(userConfigPath);
 	const envConfig = readEnvConfig(env);
 	const merged = mergeConfigs(fileConfig, envConfig);
 	if (!merged.models || Object.keys(merged.models).length <= 0) {
@@ -429,9 +371,6 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
 					? expandHomePath(merged.shell.path, homeDir)
 					: undefined,
 			},
-			trust: {
-				defaultProjectTrust: merged.trust?.defaultProjectTrust ?? "ask",
-			},
 			tools: {
 				...merged.tools,
 			},
@@ -444,7 +383,7 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
 				(issue) => `${issue.path.join(".")}: ${issue.message}`,
 			);
 			throw new Error(
-				`Invalid configuration in ${userConfigPath} or ${projectConfigPath}: ${messages.join("; ")}`,
+				`Invalid configuration in ${userConfigPath}: ${messages.join("; ")}`,
 			);
 		}
 		throw error;
@@ -455,12 +394,6 @@ export function getDefaultUserConfigPath(
 	homeDir: string = os.homedir(),
 ): string {
 	return path.join(homeDir, ".sigpi", "config.toml");
-}
-
-export function getDefaultProjectConfigPath(
-	cwd: string = process.cwd(),
-): string {
-	return path.join(cwd, ".sigpi", "config.toml");
 }
 
 export function getDefaultSessionsRoot(homeDir: string = os.homedir()): string {
@@ -534,9 +467,11 @@ const REMOVED_BASH_KEYS = new Set(["mode", "allowed_roots"]);
  * Validate parsed TOML against `tomlRootSchema`, which is `.strict()` on the
  * `tools` section and its `bash` subsection. On an unrecognized-key error,
  * rewrite the message so removed execution guards point the user at the
- * replacement (`[trust] default_project_trust`) instead of a bare Zod error.
+ * replacement instead of a bare Zod error.
  */
-function parseTrustedSchema(parsed: unknown): z.infer<typeof tomlRootSchema> {
+function parseTomlConfigSchema(
+	parsed: unknown,
+): z.infer<typeof tomlRootSchema> {
 	try {
 		return tomlRootSchema.parse(parsed);
 	} catch (error) {
@@ -567,8 +502,7 @@ function describeConfigSchemaError(error: z.ZodError): string {
 	const parts: string[] = [];
 	if (removed.length > 0) {
 		parts.push(
-			`Config contains removed execution-guard keys that can no longer be loaded: ${removed.join(", ")}. These guards were removed (ADR 0023); SigPi now runs with the account's own permissions. ` +
-				'Control project-resource loading with [trust] default_project_trust = "ask" | "always" | "never" instead.',
+			`Config contains removed execution-guard keys that can no longer be loaded: ${removed.join(", ")}. These guards were removed (ADR 0023); SigPi now runs with the account's own permissions.`,
 		);
 	}
 	if (others.length > 0) {
@@ -579,7 +513,7 @@ function describeConfigSchemaError(error: z.ZodError): string {
 
 export function parseTomlConfig(content: string): PartialConfig {
 	const parsed = parse(content);
-	const validated = parseTrustedSchema(parsed);
+	const validated = parseTomlConfigSchema(parsed);
 
 	return {
 		models: validated.models
@@ -594,9 +528,6 @@ export function parseTomlConfig(content: string): PartialConfig {
 		logging: mapSection<LoggingConfig>(validated.logging, LOGGING_ALIASES),
 		storage: mapSection<StorageConfig>(validated.storage, STORAGE_ALIASES),
 		shell: mapSection<ShellConfig>(validated.shell, SHELL_ALIASES),
-		...(validated.trust
-			? { trust: mapSection<TrustConfig>(validated.trust, TRUST_ALIASES) }
-			: {}),
 		tools: validated.tools
 			? {
 					bash: validated.tools.bash

@@ -5,7 +5,6 @@ import test from "node:test";
 import {
 	CONFIG_ALIASES,
 	getDefaultLogFilePath,
-	getDefaultProjectConfigPath,
 	getDefaultSessionsRoot,
 	getDefaultUserConfigPath,
 	loadAppConfig,
@@ -42,7 +41,6 @@ test("alias maps drive parseTomlConfig for every section", () => {
 		},
 		storage: { sessions_root: "sr" },
 		shell: { kind: "bash", path: "p" },
-		trust: { default_project_trust: "ask" },
 		bash: {
 			default_timeout_ms: 1,
 			max_timeout_ms: 1,
@@ -57,7 +55,6 @@ test("alias maps drive parseTomlConfig for every section", () => {
 		logging: "logging",
 		storage: "storage",
 		shell: "shell",
-		trust: "trust",
 		bash: "tools.bash",
 	};
 
@@ -166,14 +163,11 @@ path = "/bin/bash"
 	});
 });
 
-test("loadAppConfig merges user config, project config, and env overrides", async () => {
-	const cwd = await createTempDir("sigpi-config-project-");
+test("loadAppConfig merges user config and env overrides", async () => {
 	const homeDir = await createTempDir("sigpi-config-home-");
 	const userConfigDir = path.join(homeDir, ".sigpi");
-	const projectConfigDir = path.join(cwd, ".sigpi");
 
 	await mkdir(userConfigDir, { recursive: true });
-	await mkdir(projectConfigDir, { recursive: true });
 
 	await writeFile(
 		path.join(userConfigDir, "config.toml"),
@@ -187,10 +181,11 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 			"[models.project]",
 			'base_url = "https://project.example/v1"',
 			'api_key = "project-key"',
-			'name = "user-project-placeholder"',
+			'name = "project-model"',
 			"timeout_ms = 19000",
 			"max_tokens = 4096",
 			"hard_context_limit = 100000",
+			"keep_recent_tokens = 3000",
 			"",
 			"[agent]",
 			"max_steps = 7",
@@ -201,18 +196,6 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 			"",
 			"[storage]",
 			'sessions_root = "~/sessions"',
-		].join("\n"),
-		"utf8",
-	);
-
-	await writeFile(
-		path.join(projectConfigDir, "config.toml"),
-		[
-			"[models.project]",
-			'name = "project-model"',
-			"keep_recent_tokens = 3000",
-			"",
-			"[agent]",
 			"",
 			"[shell]",
 			'kind = "bash"',
@@ -221,7 +204,6 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 	);
 
 	const config = loadAppConfig({
-		cwd,
 		homeDir,
 		env: {
 			MODEL_API_KEY: "env-key",
@@ -248,7 +230,6 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 });
 
 test("loadAppConfig parses [tools.bash] keys", async () => {
-	const cwd = await createTempDir("sigpi-config-bash-project-");
 	const homeDir = await createTempDir("sigpi-config-bash-home-");
 	const userConfigDir = path.join(homeDir, ".sigpi");
 	await mkdir(userConfigDir, { recursive: true });
@@ -271,7 +252,7 @@ test("loadAppConfig parses [tools.bash] keys", async () => {
 		"utf8",
 	);
 
-	const config = loadAppConfig({ cwd, homeDir, env: {} });
+	const config = loadAppConfig({ homeDir, env: {} });
 	assert.equal(config.tools.bash.defaultTimeoutMs, 90000);
 	assert.equal(config.tools.bash.maxTimeoutMs, 300000);
 	assert.equal(config.tools.bash.maxOutputLength, 20000);
@@ -280,7 +261,6 @@ test("loadAppConfig parses [tools.bash] keys", async () => {
 });
 
 test("loadAppConfig applies Bash env-var overrides (BASH_*/CLAUDE_*)", async () => {
-	const cwd = await createTempDir("sigpi-config-bashenv-project-");
 	const homeDir = await createTempDir("sigpi-config-bashenv-home-");
 	await mkdir(path.join(homeDir, ".sigpi"), { recursive: true });
 	await writeFile(
@@ -297,7 +277,6 @@ test("loadAppConfig applies Bash env-var overrides (BASH_*/CLAUDE_*)", async () 
 	);
 
 	const config = loadAppConfig({
-		cwd,
 		homeDir,
 		env: {
 			BASH_DEFAULT_TIMEOUT_MS: "130000",
@@ -315,7 +294,6 @@ test("loadAppConfig applies Bash env-var overrides (BASH_*/CLAUDE_*)", async () 
 });
 
 test("loadAppConfig rejects a model whose max_tokens exceeds hard_context_limit", async () => {
-	const cwd = await createTempDir("sigpi-config-budget-overflow-");
 	const homeDir = await createTempDir("sigpi-config-budget-overflow-home-");
 	await mkdir(path.join(homeDir, ".sigpi"), { recursive: true });
 	await writeFile(
@@ -334,13 +312,12 @@ test("loadAppConfig rejects a model whose max_tokens exceeds hard_context_limit"
 	);
 
 	assert.throws(
-		() => loadAppConfig({ cwd, homeDir, env: {} }),
+		() => loadAppConfig({ homeDir, env: {} }),
 		/hard_context_limit/,
 	);
 });
 
 test("loadAppConfig accepts a model whose max_tokens fits within hard_context_limit", async () => {
-	const cwd = await createTempDir("sigpi-config-budget-ok-");
 	const homeDir = await createTempDir("sigpi-config-budget-ok-home-");
 	await mkdir(path.join(homeDir, ".sigpi"), { recursive: true });
 	await writeFile(
@@ -358,13 +335,12 @@ test("loadAppConfig accepts a model whose max_tokens fits within hard_context_li
 		"utf8",
 	);
 
-	const config = loadAppConfig({ cwd, homeDir, env: {} });
+	const config = loadAppConfig({ homeDir, env: {} });
 	assert.equal(config.models.m.hardContextLimit, 100000);
 	assert.equal(config.models.m.maxTokens, 4096);
 });
 
 test("loadAppConfig defaults [tools.bash] bounds when unset", async () => {
-	const cwd = await createTempDir("sigpi-config-bashdefault-project-");
 	const homeDir = await createTempDir("sigpi-config-bashdefault-home-");
 	await mkdir(path.join(homeDir, ".sigpi"), { recursive: true });
 	await writeFile(
@@ -380,7 +356,7 @@ test("loadAppConfig defaults [tools.bash] bounds when unset", async () => {
 		"utf8",
 	);
 
-	const config = loadAppConfig({ cwd, homeDir, env: {} });
+	const config = loadAppConfig({ homeDir, env: {} });
 	assert.equal(config.tools.bash.defaultTimeoutMs, 120000);
 	assert.equal(config.tools.bash.maxTimeoutMs, 600000);
 	assert.equal(config.tools.bash.maxOutputLength, 30000);
@@ -389,7 +365,6 @@ test("loadAppConfig defaults [tools.bash] bounds when unset", async () => {
 });
 
 test("loadAppConfig remembers the last selected configured model", async () => {
-	const cwd = await createTempDir("sigpi-config-remember-project-");
 	const homeDir = await createTempDir("sigpi-config-remember-home-");
 	const configDir = path.join(homeDir, ".sigpi");
 
@@ -419,7 +394,6 @@ test("loadAppConfig remembers the last selected configured model", async () => {
 	);
 
 	const config = loadAppConfig({
-		cwd,
 		homeDir,
 		env: {},
 	});
@@ -429,7 +403,6 @@ test("loadAppConfig remembers the last selected configured model", async () => {
 });
 
 test("loadAppConfig lets MODEL_ID override the remembered model", async () => {
-	const cwd = await createTempDir("sigpi-config-env-model-project-");
 	const homeDir = await createTempDir("sigpi-config-env-model-home-");
 	const configDir = path.join(homeDir, ".sigpi");
 
@@ -459,7 +432,6 @@ test("loadAppConfig lets MODEL_ID override the remembered model", async () => {
 	);
 
 	const config = loadAppConfig({
-		cwd,
 		homeDir,
 		env: {
 			MODEL_ID: "fast",
@@ -471,7 +443,6 @@ test("loadAppConfig lets MODEL_ID override the remembered model", async () => {
 });
 
 test("loadAppConfig ignores a remembered model missing from current config", async () => {
-	const cwd = await createTempDir("sigpi-config-stale-model-project-");
 	const homeDir = await createTempDir("sigpi-config-stale-model-home-");
 	const configDir = path.join(homeDir, ".sigpi");
 
@@ -496,7 +467,6 @@ test("loadAppConfig ignores a remembered model missing from current config", asy
 	);
 
 	const config = loadAppConfig({
-		cwd,
 		homeDir,
 		env: {},
 	});
@@ -505,14 +475,10 @@ test("loadAppConfig ignores a remembered model missing from current config", asy
 	assert.equal(config.model.name, "fast-model");
 });
 
-test("default config paths target ~/.sigpi and project .sigpi", () => {
+test("default config paths target ~/.sigpi", () => {
 	assert.equal(
 		getDefaultUserConfigPath("/tmp/home"),
 		path.join("/tmp/home", ".sigpi", "config.toml"),
-	);
-	assert.equal(
-		getDefaultProjectConfigPath("/tmp/project"),
-		path.join("/tmp/project", ".sigpi", "config.toml"),
 	);
 	assert.equal(
 		getDefaultSessionsRoot("/tmp/home"),
@@ -525,9 +491,8 @@ test("default config paths target ~/.sigpi and project .sigpi", () => {
 });
 
 test("default model config uses a 60 second timeout with 2 retries", async () => {
-	const cwd = await createTempDir("sigpi-config-default-model-");
 	const homeDir = await createTempDir("sigpi-config-default-model-home-");
-	const configDir = path.join(cwd, ".sigpi");
+	const configDir = path.join(homeDir, ".sigpi");
 	await mkdir(configDir, { recursive: true });
 	await writeFile(
 		path.join(configDir, "config.toml"),
@@ -540,7 +505,6 @@ test("default model config uses a 60 second timeout with 2 retries", async () =>
 		"utf8",
 	);
 	const config = loadAppConfig({
-		cwd,
 		homeDir,
 		env: {
 			MODEL_BASE_URL: "https://example.test/v1",
@@ -562,9 +526,8 @@ test("default model config uses a 60 second timeout with 2 retries", async () =>
 });
 
 test("loadAppConfig rejects removed verbose agent key", async () => {
-	const cwd = await createTempDir("sigpi-config-removed-verbose-");
 	const homeDir = await createTempDir("sigpi-config-removed-verbose-home-");
-	const configDir = path.join(cwd, ".sigpi");
+	const configDir = path.join(homeDir, ".sigpi");
 	await mkdir(configDir, { recursive: true });
 	await writeFile(
 		path.join(configDir, "config.toml"),
@@ -580,7 +543,7 @@ test("loadAppConfig rejects removed verbose agent key", async () => {
 		"utf8",
 	);
 
-	assert.throws(() => loadAppConfig({ cwd, homeDir, env: {} }), /verbose/);
+	assert.throws(() => loadAppConfig({ homeDir, env: {} }), /verbose/);
 });
 
 test("parseTomlConfig rejects removed execution-guard keys under [tools.bash]", () => {
@@ -602,7 +565,6 @@ test("parseTomlConfig rejects removed execution-guard keys under [tools.bash]", 
 });
 
 test("loadAppConfig fails to load a config file carrying removed [tools.bash] guards", async () => {
-	const cwd = await createTempDir("sigpi-config-removed-guards-project-");
 	const homeDir = await createTempDir("sigpi-config-removed-guards-home-");
 	await mkdir(path.join(homeDir, ".sigpi"), { recursive: true });
 	await writeFile(
@@ -619,7 +581,7 @@ test("loadAppConfig fails to load a config file carrying removed [tools.bash] gu
 	);
 
 	assert.throws(
-		() => loadAppConfig({ cwd, homeDir, env: {} }),
+		() => loadAppConfig({ homeDir, env: {} }),
 		/Failed to load config file|removed execution-guard/i,
 		"config file with removed mode key should fail to load",
 	);

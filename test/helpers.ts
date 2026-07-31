@@ -142,7 +142,7 @@ export async function writeWorkspaceFile(
 }
 
 export async function writeTestConfig(
-	cwd: string,
+	homeDir: string,
 	overrides?: {
 		modelBaseURL?: string;
 		modelApiKey?: string;
@@ -151,7 +151,7 @@ export async function writeTestConfig(
 		reserveTokens?: number;
 	},
 ): Promise<string> {
-	const configDir = path.join(cwd, ".sigpi");
+	const configDir = path.join(homeDir, ".sigpi");
 	const configPath = path.join(configDir, "config.toml");
 
 	await mkdir(configDir, { recursive: true });

@@ -53,7 +53,7 @@ test("formatStatusBar includes tokens and cwd", async () => {
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 		const status = statusLine(await formatStatusBar(state));
@@ -79,7 +79,7 @@ test("formatStatusBarForEvent appends progress state", async () => {
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 		const status = statusLine(
@@ -108,7 +108,7 @@ test("formatStatusBarForEvent uses live context token estimate (default unit)", 
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 		const status = statusLine(
@@ -135,7 +135,7 @@ test("formatStatusBar shows tokens and (contextWindow-reserveTokens) limit", asy
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 		const status = statusLine(await formatStatusBar(state));
@@ -158,7 +158,7 @@ test("formatStatusBarForEvent uses event token estimate when available", async (
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 		const status = statusLine(
@@ -187,7 +187,7 @@ test("formatStatusBarForEvent recomputes from state when event has no token esti
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 		const status = statusLine(
@@ -216,7 +216,7 @@ test("formatStatusBar appends git branch when cwd is a repo", async () => {
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		gitIn(cwd, "init -q -b main");
 		gitIn(cwd, "config user.email test@test.local");
 		gitIn(cwd, "config user.name Test");
@@ -243,7 +243,7 @@ test("formatStatusBar omits git branch when cwd is not a repo", async () => {
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 		const status = statusLine(await formatStatusBar(state));
@@ -265,7 +265,7 @@ test("formatStatusBar appends cache hit rate when lastUsage is available", async
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 
@@ -314,7 +314,7 @@ test("formatStatusBar omits cache hit rate when no usage has been recorded", asy
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 		const status = statusLine(await formatStatusBar(state));
@@ -337,7 +337,7 @@ test("formatStatusBar shows the provider's totalTokens from the last response", 
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 
@@ -385,7 +385,7 @@ test("formatStatusBar keeps the last response's count while a follow-up is typed
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 
@@ -441,7 +441,7 @@ test("formatStatusBar resets to ? after in-memory state is cleared", async () =>
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 
@@ -492,7 +492,7 @@ test("formatStatusBar hides cache hit rate when there is no cacheable input", as
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 
@@ -541,7 +541,7 @@ test("formatStatusBar shows Hit(0.0%) for a cold cache with real input", async (
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 
@@ -589,7 +589,7 @@ test("formatStatusBar shows @shortSha for a detached HEAD", async () => {
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		gitIn(cwd, "init -q -b main");
 		gitIn(cwd, "config user.email test@test.local");
 		gitIn(cwd, "config user.name Test");
@@ -618,7 +618,7 @@ test("formatStatusBar includes a model segment at the start", async () => {
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 
@@ -669,7 +669,7 @@ test("formatStatusBar restores token count from a resumed session with usage", a
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 
@@ -724,7 +724,7 @@ test("formatStatusBar shows ? for a resumed session without usage", async () => 
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 
@@ -753,7 +753,7 @@ test("attachSessionById hydrates context from the selected session snapshot", as
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const bootstrapRuntime = await createAgentRuntime();
 		const store = createTestSessionStore({ cwd, homeDir });
 		const session = await store.createSession({
@@ -816,7 +816,7 @@ test("attachSessionById returns interrupted and system prompt warnings from sess
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const store = createTestSessionStore({ cwd, homeDir });
 		const session = await store.createSession({
 			cwd,
@@ -856,7 +856,7 @@ test("resume remains available when chat is already attached to a session", asyn
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const bootstrapRuntime = await createAgentRuntime();
 		const store = createTestSessionStore({ cwd, homeDir });
 		const session = await store.createSession({
@@ -888,7 +888,7 @@ test("createAgentRuntime creates a session when requested without a session id",
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const runtime = await createAgentRuntime({
 			createSession: true,
 		});
@@ -920,7 +920,7 @@ test("attachSessionById can switch from one bound session to another", async () 
 	process.chdir(cwd);
 
 	try {
-		await writeTestConfig(cwd);
+		await writeTestConfig(homeDir);
 		const bootstrapRuntime = await createAgentRuntime();
 		const store = createTestSessionStore({ cwd, homeDir });
 		const first = await store.createSession({
