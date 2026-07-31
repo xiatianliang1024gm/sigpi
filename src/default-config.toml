@@ -22,19 +22,14 @@ retry_base_delay_ms = 250
 # keep_recent_tokens = 20000
 
 [agent]
-# Token-based context management. The budget is model-bound: each model's
-# hard_context_limit / reserve_tokens / keep_recent_tokens live under
-# [models.<id>] (see above). The compact trigger fires when
-# `tokens > hard_context_limit - reserve_tokens`.
-max_steps = 20
+# max step in a turn, prevent infinite loop
+max_steps = 100
 
 [logging]
 level = "info"
 file = "~/.sigpi/logs/agent.log"
-to_console = false
-# Max chars of a model response body captured in logs (file vs console).
+# Max chars of a model response body captured in logs.
 # max_body_preview_chars = 16000
-# max_console_body_preview_chars = 500
 
 [storage]
 sessions_root = "~/.sigpi/projects"

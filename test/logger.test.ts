@@ -12,7 +12,6 @@ test("structured logger writes local timestamps with timezone offset", async () 
 	const logger = new StructuredLogger({
 		level: "info",
 		filePath: baseLogPath,
-		consoleEnabled: false,
 		now: () => now,
 	});
 
@@ -42,7 +41,6 @@ test("structured logger rolls over to a new file when the date changes", async (
 	const logger = new StructuredLogger({
 		level: "info",
 		filePath: baseLogPath,
-		consoleEnabled: false,
 		now: () => now,
 	});
 
@@ -72,7 +70,6 @@ test("structured logger redacts sensitive fields recursively", async () => {
 	const logger = new StructuredLogger({
 		level: "info",
 		filePath: baseLogPath,
-		consoleEnabled: false,
 		now: () => now,
 	});
 
@@ -94,45 +91,4 @@ test("structured logger redacts sensitive fields recursively", async () => {
 	assert.equal(record.apiKey, "[REDACTED]");
 	assert.equal(record.nested.authorization, "[REDACTED]");
 	assert.doesNotMatch(line, /sk-test-secret|raw-token|inline-secret/);
-});
-
-test("structured logger truncates bodyPreview differently for file vs console", async () => {
-	const cwd = await createTempDir("sigpi-logger-preview-");
-	const baseLogPath = path.join(cwd, "agent.log");
-	const now = new Date(2026, 4, 27, 12, 0, 0);
-	const longBody = "x".repeat(1000);
-	const consoleLines: string[] = [];
-	const originalError = console.error;
-	console.error = (line: string) => {
-		consoleLines.push(String(line));
-	};
-
-	try {
-		const logger = new StructuredLogger({
-			level: "info",
-			filePath: baseLogPath,
-			consoleEnabled: true,
-			now: () => now,
-			maxBodyPreviewChars: 16_000,
-			maxConsoleBodyPreviewChars: 50,
-		});
-		logger.error("model_request_failed", {
-			failureType: "invalid_json",
-			bodyPreview: longBody,
-		});
-	} finally {
-		console.error = originalError;
-	}
-
-	const logPath = resolveDatedLogFilePath(baseLogPath, now);
-	const fileLine = (await readFile(logPath, "utf8")).trim();
-	const fileRecord = JSON.parse(fileLine) as { bodyPreview: string };
-	assert.equal(fileRecord.bodyPreview.length, 1000);
-
-	assert.equal(consoleLines.length, 1);
-	const consoleRecord = JSON.parse(
-		consoleLines[0].replace("[error] model_request_failed ", ""),
-	) as { bodyPreview: string };
-	assert.ok(consoleRecord.bodyPreview.length < 1000);
-	assert.match(consoleRecord.bodyPreview, /\.\.\.\[truncated\]$/);
 });

@@ -19,10 +19,8 @@ export class StructuredLogger implements RuntimeLogger {
 		private readonly options: {
 			level: LogLevel;
 			filePath: string;
-			consoleEnabled: boolean;
 			now?: () => Date;
 			maxBodyPreviewChars?: number;
-			maxConsoleBodyPreviewChars?: number;
 		},
 	) {
 		const dir = path.dirname(options.filePath);
@@ -31,11 +29,9 @@ export class StructuredLogger implements RuntimeLogger {
 		}
 
 		this.maxBodyPreviewChars = options.maxBodyPreviewChars ?? 16_000;
-		this.maxConsoleBodyPreviewChars = options.maxConsoleBodyPreviewChars ?? 500;
 	}
 
 	private readonly maxBodyPreviewChars: number;
-	private readonly maxConsoleBodyPreviewChars: number;
 
 	debug(event: string, fields?: Record<string, JsonValue | undefined>): void {
 		this.write("debug", event, fields);
@@ -77,35 +73,18 @@ export class StructuredLogger implements RuntimeLogger {
 			`${record}\n`,
 			"utf8",
 		);
-
-		if (this.options.consoleEnabled) {
-			const consoleFields = capBodyPreview(
-				sanitized,
-				this.maxConsoleBodyPreviewChars,
-			);
-			const line = `[${level}] ${event}${consoleFields ? ` ${JSON.stringify(consoleFields)}` : ""}`;
-			if (level === "warn" || level === "error") {
-				console.error(line);
-			} else {
-				console.log(line);
-			}
-		}
 	}
 }
 
 export function createLogger(config: LoggingConfig): RuntimeLogger {
 	const level = normalizeLevel(config.level);
 	const filePath = path.resolve(process.cwd(), config.filePath);
-	const consoleEnabled = config.toConsole;
 	const maxBodyPreviewChars = config.maxBodyPreviewChars ?? 16_000;
-	const maxConsoleBodyPreviewChars = config.maxConsoleBodyPreviewChars ?? 500;
 
 	return new StructuredLogger({
 		level,
 		filePath,
-		consoleEnabled,
 		maxBodyPreviewChars,
-		maxConsoleBodyPreviewChars,
 	});
 }
 
