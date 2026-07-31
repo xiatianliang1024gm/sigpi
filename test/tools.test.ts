@@ -1014,6 +1014,151 @@ test("grep applies head_limit and offset through ripgrep", async () => {
 	);
 });
 
+test("grep passes asymmetric -B/-A flags to ripgrep", async () => {
+	const captured: { args: string[] } = { args: [] };
+	const tools = new ToolRegistry([
+		createGrepTool((async (_cmd: string, args: readonly string[]) => {
+			captured.args = [...args];
+			return { stdout: "", stderr: "" };
+		}) as never),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_search_asym_1",
+			name: "grep",
+			arguments: {
+				pattern: "needle",
+				output_mode: "content",
+				before: 5,
+				after: 2,
+			},
+			rawArguments:
+				'{"pattern":"needle","output_mode":"content","before":5,"after":2}',
+		},
+		{ cwd: process.cwd() },
+	);
+
+	assert.equal(result.ok, true);
+	assert.ok(captured.args.includes("-B"));
+	assert.ok(captured.args.includes("5"));
+	assert.ok(captured.args.includes("-A"));
+	assert.ok(captured.args.includes("2"));
+	// -B 5 must come before -A 2 in the arg list.
+	assert.ok(
+		captured.args.indexOf("-B") < captured.args.indexOf("-A"),
+		`expected -B before -A, got ${JSON.stringify(captured.args)}`,
+	);
+});
+
+test("grep before/after override context on their respective sides", async () => {
+	const captured: { args: string[] } = { args: [] };
+	const tools = new ToolRegistry([
+		createGrepTool((async (_cmd: string, args: readonly string[]) => {
+			captured.args = [...args];
+			return { stdout: "", stderr: "" };
+		}) as never),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_search_override_1",
+			name: "grep",
+			arguments: {
+				pattern: "needle",
+				output_mode: "content",
+				context: 3,
+				before: 7,
+			},
+			rawArguments:
+				'{"pattern":"needle","output_mode":"content","context":3,"before":7}',
+		},
+		{ cwd: process.cwd() },
+	);
+
+	assert.equal(result.ok, true);
+	// before=7 wins on the before side; after falls back to context=3.
+	assert.ok(captured.args.includes("-B"));
+	assert.ok(captured.args.includes("7"));
+	assert.ok(captured.args.includes("-A"));
+	assert.ok(captured.args.includes("3"));
+	assert.ok(!captured.args.includes("-C"));
+});
+
+test("grep context alone still emits -C", async () => {
+	const captured: { args: string[] } = { args: [] };
+	const tools = new ToolRegistry([
+		createGrepTool((async (_cmd: string, args: readonly string[]) => {
+			captured.args = [...args];
+			return { stdout: "", stderr: "" };
+		}) as never),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_search_ctx_1",
+			name: "grep",
+			arguments: {
+				pattern: "needle",
+				output_mode: "content",
+				context: 4,
+			},
+			rawArguments: '{"pattern":"needle","output_mode":"content","context":4}',
+		},
+		{ cwd: process.cwd() },
+	);
+
+	assert.equal(result.ok, true);
+	assert.ok(captured.args.includes("-C"));
+	assert.ok(captured.args.includes("4"));
+	assert.ok(!captured.args.includes("-B"));
+	assert.ok(!captured.args.includes("-A"));
+});
+
+test("grep fallback applies asymmetric before/after", async () => {
+	const tools = new ToolRegistry([
+		createGrepTool((async () => {
+			const error = Object.assign(new Error("spawn rg ENOENT"), {
+				code: "ENOENT",
+			});
+			throw error;
+		}) as never),
+	]);
+
+	const dir = await createTempDir("sigpi-grep-asym-");
+	await writeWorkspaceFile(
+		dir,
+		"sample.ts",
+		["line1", "line2", "line3", "NEEDLE", "line5", "line6", "line7"].join("\n"),
+	);
+
+	const result = await tools.execute(
+		{
+			id: "call_search_fallback_asym_1",
+			name: "grep",
+			arguments: {
+				pattern: "NEEDLE",
+				path: dir,
+				output_mode: "content",
+				before: 2,
+				after: 1,
+			},
+			rawArguments: `{"pattern":"NEEDLE","path":"${dir}","output_mode":"content","before":2,"after":1}`,
+		},
+		{ cwd: dir },
+	);
+
+	assert.equal(result.ok, true);
+	const matches = (result.data as { matches: string }).matches;
+	// before=2 → lines 2,3; match → line 4; after=1 → line 5.
+	assert.match(matches, /sample\.ts-2:line2/);
+	assert.match(matches, /sample\.ts-3:line3/);
+	assert.match(matches, /sample\.ts:4:NEEDLE/);
+	assert.match(matches, /sample\.ts-5:line5/);
+	assert.doesNotMatch(matches, /sample\.ts-1:line1/);
+	assert.doesNotMatch(matches, /sample\.ts-6:line6/);
+});
+
 test("glob falls back when ripgrep is unavailable", async () => {
 	const tools = new ToolRegistry([
 		createGlobTool((async () => {
