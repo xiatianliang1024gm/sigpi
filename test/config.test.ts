@@ -38,9 +38,7 @@ test("alias maps drive parseTomlConfig for every section", () => {
 		logging: {
 			level: "info",
 			file: "f",
-			to_console: true,
 			max_body_preview_chars: 1,
-			max_console_body_preview_chars: 1,
 		},
 		storage: { sessions_root: "sr" },
 		shell: { kind: "bash", path: "p" },
@@ -119,7 +117,6 @@ max_steps = 9
 [logging]
 level = "debug"
 file = "custom/agent.log"
-to_console = true
 
 [storage]
 sessions_root = "~/agent-projects"
@@ -155,7 +152,6 @@ path = "/bin/bash"
 		logging: {
 			level: "debug",
 			filePath: "custom/agent.log",
-			toConsole: true,
 		},
 		storage: {
 			sessionsRoot: "~/agent-projects",
@@ -229,7 +225,6 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 		homeDir,
 		env: {
 			MODEL_API_KEY: "env-key",
-			AGENT_LOG_TO_CONSOLE: "true",
 			AGENT_SHELL_PATH: "/bin/custom-bash",
 		},
 	});
@@ -247,7 +242,6 @@ test("loadAppConfig merges user config, project config, and env overrides", asyn
 	assert.equal(config.models.project.keepRecentTokens, 3000);
 	assert.equal(config.logging.level, "warn");
 	assert.equal(config.logging.filePath, "user.log");
-	assert.equal(config.logging.toConsole, true);
 	assert.equal(config.storage.sessionsRoot, path.join(homeDir, "sessions"));
 	assert.equal(config.shell.kind, "bash");
 	assert.equal(config.shell.path, "/bin/custom-bash");

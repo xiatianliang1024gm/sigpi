@@ -62,9 +62,7 @@ const agentConfigSchema = z.object({
 const loggingConfigSchema = z.object({
 	level: z.enum(["debug", "info", "warn", "error"]).default("info"),
 	filePath: z.string().min(1),
-	toConsole: z.boolean().default(false),
 	maxBodyPreviewChars: z.number().int().positive().default(16_000),
-	maxConsoleBodyPreviewChars: z.number().int().positive().default(500),
 });
 
 const storageConfigSchema = z.object({
@@ -143,9 +141,7 @@ const AGENT_ALIASES: Record<string, string> = {
 const LOGGING_ALIASES: Record<string, string> = {
 	level: "level",
 	filePath: "file",
-	toConsole: "to_console",
 	maxBodyPreviewChars: "max_body_preview_chars",
-	maxConsoleBodyPreviewChars: "max_console_body_preview_chars",
 };
 const STORAGE_ALIASES: Record<string, string> = {
 	sessionsRoot: "sessions_root",
@@ -265,9 +261,7 @@ export interface AgentConfig {
 export interface LoggingConfig {
 	level: LogLevel;
 	filePath: string;
-	toConsole: boolean;
 	maxBodyPreviewChars: number;
-	maxConsoleBodyPreviewChars: number;
 }
 
 export interface StorageConfig {
@@ -652,7 +646,6 @@ function readEnvConfig(env: NodeJS.ProcessEnv): PartialConfig {
 		logging: {
 			level: parseOptionalLevel(env.AGENT_LOG_LEVEL),
 			filePath: env.AGENT_LOG_FILE,
-			toConsole: parseOptionalBoolean(env.AGENT_LOG_TO_CONSOLE),
 		},
 		storage: {
 			sessionsRoot: env.AGENT_SESSIONS_ROOT,
