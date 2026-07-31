@@ -45,6 +45,8 @@ export async function grepWorkspaceContentFallback(args: {
 	case_sensitive: boolean;
 	multiline: boolean;
 	context: number;
+	before: number;
+	after: number;
 	output_mode: "content" | "files_with_matches" | "count";
 	head_limit: number;
 	offset: number;
@@ -114,8 +116,11 @@ export async function grepWorkspaceContentFallback(args: {
 				return;
 			}
 
-			const start = Math.max(0, i - args.context);
-			const end = Math.min(fileLines.length - 1, i + args.context);
+			// Explicit before/after override context on their respective sides.
+			const before = args.before > 0 ? args.before : args.context;
+			const after = args.after > 0 ? args.after : args.context;
+			const start = Math.max(0, i - before);
+			const end = Math.min(fileLines.length - 1, i + after);
 			for (let j = start; j <= end; j += 1) {
 				const marker = j === i ? ":" : "-";
 				acc.contentLines.push(

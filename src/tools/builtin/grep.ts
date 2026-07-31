@@ -26,6 +26,8 @@ type GrepArgs = {
 	case_sensitive?: boolean;
 	multiline?: boolean;
 	context?: number;
+	before?: number;
+	after?: number;
 	head_limit?: number;
 	offset?: number;
 };
@@ -41,6 +43,8 @@ const grepSchema: ZodType<GrepArgs> = z.object({
 	case_sensitive: z.boolean().optional(),
 	multiline: z.boolean().optional(),
 	context: z.number().int().min(0).max(10).optional(),
+	before: z.number().int().min(0).max(10).optional(),
+	after: z.number().int().min(0).max(10).optional(),
 	head_limit: z.number().int().positive().max(500).optional(),
 	offset: z.number().int().min(0).optional(),
 });
@@ -98,7 +102,17 @@ export function createGrepTool(
 				context: {
 					type: "integer",
 					description:
-						"Number of context lines to include around each match when output_mode is content. Defaults to 0.",
+						"Number of context lines to include before AND after each match when output_mode is content (rg -C). Defaults to 0. Overridden on either side by `before`/`after` if those are set.",
+				},
+				before: {
+					type: "integer",
+					description:
+						'Number of context lines to show before each match (rg -B). Requires output_mode: "content", ignored otherwise. Overrides `context` for the before side.',
+				},
+				after: {
+					type: "integer",
+					description:
+						'Number of context lines to show after each match (rg -A). Requires output_mode: "content", ignored otherwise. Overrides `context` for the after side.',
 				},
 				head_limit: {
 					type: "integer",
@@ -124,6 +138,8 @@ export function createGrepTool(
 				case_sensitive = false,
 				multiline = false,
 				context: contextLines = 0,
+				before = 0,
+				after = 0,
 				head_limit = DEFAULT_HEAD_LIMIT,
 				offset = 0,
 			},
@@ -141,6 +157,8 @@ export function createGrepTool(
 				case_sensitive,
 				multiline,
 				context: contextLines,
+				before,
+				after,
 				head_limit,
 				offset,
 			});
@@ -181,6 +199,8 @@ export function createGrepTool(
 						case_sensitive,
 						multiline,
 						context: contextLines,
+						before,
+						after,
 						output_mode,
 						head_limit,
 						offset,
@@ -297,6 +317,8 @@ function buildRipgrepArgs(args: {
 	case_sensitive: boolean;
 	multiline: boolean;
 	context: number;
+	before: number;
+	after: number;
 	head_limit: number;
 	offset: number;
 }): string[] {
@@ -327,7 +349,17 @@ function buildRipgrepArgs(args: {
 		rgArgs.push("--count");
 	} else {
 		rgArgs.push("--line-number", "--with-filename");
-		if (args.context > 0) {
+		if (args.before > 0 || args.after > 0) {
+			// Explicit asymmetric context: emit -B/-A, falling back to context on the unset side.
+			const before = args.before > 0 ? args.before : args.context;
+			const after = args.after > 0 ? args.after : args.context;
+			if (before > 0) {
+				rgArgs.push("-B", String(before));
+			}
+			if (after > 0) {
+				rgArgs.push("-A", String(after));
+			}
+		} else if (args.context > 0) {
 			rgArgs.push("-C", String(args.context));
 		}
 		rgArgs.push("--max-count", String(args.head_limit + args.offset));
@@ -409,7 +441,10 @@ function normalizeSearchOutput(args: {
 	let truncated = false;
 
 	for (const line of rawLines) {
-		const isContext = /^\S.*:\d+-:/u.test(line);
+		// Context lines look like `path-linenum-content` (ripgrep) or
+		// `path-linenum:content` (Node fallback). Match lines look like
+		// `path:linenum:content` in both.
+		const isContext = /^\S.*-\d+[-:]/u.test(line);
 		const isMatch = /^\S.*:\d+:/u.test(line) && !isContext;
 
 		if (isMatch) {
