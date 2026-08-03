@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { TUI } from "@earendil-works/pi-tui";
+import { type Component, TUI } from "@earendil-works/pi-tui";
 import { applyTurnProgress } from "../src/cli.js";
 import type {
 	AssistantMessageView,
@@ -84,6 +84,9 @@ class RecordingReplView implements ReplView {
 	endTurn(): void {}
 	appendSystem(text: string, tone: "error" | "info" = "info"): void {
 		this.ops.push(`system:${tone}:${text}`);
+	}
+	replaceTranscript(components: Component[]): void {
+		this.ops.push(`transcript:${components.length}`);
 	}
 	setStatusBarModel(): void {}
 	getStatusBarModel(): StatusBarModel | null {

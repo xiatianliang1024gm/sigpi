@@ -104,6 +104,19 @@ test("compact appends a CompactionEntry whose firstKeptEntryId matches the new r
 		"firstKeptEntryId must reference a real message entry",
 	);
 
+	// The persisted entry carries the post-compaction token snapshot so
+	// replayed history can show the context-window change.
+	assert.ok(
+		typeof compaction.tokensBefore === "number" && compaction.tokensBefore > 0,
+		"tokensBefore should be persisted",
+	);
+	assert.ok(
+		typeof compaction.tokensAfter === "number" &&
+			compaction.tokensAfter >= 0 &&
+			compaction.tokensAfter < (compaction.tokensBefore ?? 0),
+		"tokensAfter should be persisted and smaller than tokensBefore",
+	);
+
 	const firstKeptMessage = state.entries?.find(
 		(entry) => entry.kind === "message" && entry.id === firstKeptId,
 	);

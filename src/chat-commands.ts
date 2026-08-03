@@ -15,12 +15,9 @@ import { createModelProvider } from "./model/provider.js";
 import type { SessionStore } from "./session/store.js";
 import { setLastModelId } from "./state.js";
 import type { BackgroundTaskManager } from "./tools/background.js";
-import {
-	formatSessionHistory,
-	showHistoryOverlay,
-} from "./tui/history-component.js";
 import { formatCompactNumber } from "./tui/status-bar.js";
 import { defaultSelectListTheme } from "./tui/themes.js";
+import { replaySessionIntoView } from "./tui/transcript-replay.js";
 import type {
 	ContextUpdateResult,
 	LoadedSkill,
@@ -114,7 +111,6 @@ export const DOCUMENTED_CHAT_COMMAND_NAMES = [
 	"/compact",
 	"/model",
 	"/session",
-	"/history",
 	"/resume",
 	"/new",
 	"/tasks",
@@ -285,34 +281,6 @@ export function createChatCommandDefinitions(
 			},
 		},
 		{
-			name: "/history",
-			description: "Show saved turn history for the active session",
-			handler: async (context, args) => {
-				const limit = parseHistoryLimit(args);
-				if (limit === "invalid") {
-					context.writeLine("Usage: /history [all|<count>]");
-					return { action: "continue" };
-				}
-
-				const session = context.getState().runtime.turn.getCurrentSession();
-				if (!session) {
-					context.writeLine("(no active session)");
-					return { action: "continue" };
-				}
-
-				const tui = context.getState().view?.getTuiInstance();
-				if (!tui) {
-					// Non-TTY fallback: keep the old behaviour of dumping to the
-					// output stream so scripted callers still get the history.
-					context.writeLine(formatSessionHistory(session, limit));
-					return { action: "continue" };
-				}
-
-				await showHistoryOverlay(tui, session, limit);
-				return { action: "continue" };
-			},
-		},
-		{
 			name: "/resume",
 			description: "Switch to another saved session",
 			handler: async (context) => {
@@ -340,6 +308,13 @@ export function createChatCommandDefinitions(
 				}
 
 				context.setState(attached.updatedState);
+				// Replace the terminal transcript with the attached session's
+				// messages so the conversation history is visible in place
+				// (the editor and status bar are kept).
+				replaySessionIntoView(
+					context.getState().view,
+					attached.updatedState.runtime.session,
+				);
 				context.writeLine(`Attached session: ${attached.selectedSessionId}`);
 				for (const warning of attached.warnings) {
 					context.writeLine(`[session-warning] ${warning}`);
@@ -353,6 +328,12 @@ export function createChatCommandDefinitions(
 			handler: async (context) => {
 				const attached = await attachNewSession(context.progressReporter);
 				context.setState(attached.updatedState);
+				// A fresh session has no messages: clear the previous session's
+				// transcript from the terminal (editor and status bar are kept).
+				replaySessionIntoView(
+					context.getState().view,
+					attached.updatedState.runtime.session,
+				);
 				context.writeLine(`Started new session: ${attached.selectedSessionId}`);
 				for (const warning of attached.warnings) {
 					context.writeLine(`[session-warning] ${warning}`);
@@ -588,22 +569,6 @@ function formatModelList(state: ChatReplState): string {
 	}
 
 	return lines.join("\n");
-}
-
-function parseHistoryLimit(args: string[]): number | "all" | "invalid" {
-	if (args.length === 0) {
-		return 5;
-	}
-
-	if (args.length === 1 && args[0]?.toLowerCase() === "all") {
-		return "all";
-	}
-
-	if (args.length === 1 && /^[1-9]\d*$/.test(args[0] ?? "")) {
-		return Number(args[0]);
-	}
-
-	return "invalid";
 }
 
 export function parseChatCommand(

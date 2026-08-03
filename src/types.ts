@@ -452,7 +452,7 @@ export interface ConversationContextState {
  * One of the persisted entry kinds in a session. v4 sessions store a flat
  * stream of `MessageEntry` and `CompactionEntry` (and, optionally, future
  * `BranchSummaryEntry`) entries. `turnId` on `MessageEntry` links it back to
- * the matching `SessionTurnHistoryEntry` for audit / `/history` purposes.
+ * the matching `SessionTurnHistoryEntry` for audit purposes.
  */
 export type SessionEntry = MessageEntry | CompactionEntry;
 
@@ -484,7 +484,15 @@ export interface CompactionEntry {
 	 * `parentId` references this entry's id, forming a linked list.
 	 */
 	firstKeptEntryId: string | null;
+	/**
+	 * Token-based context window snapshot around this compaction. `tokensBefore`
+	 * is the pre-compaction estimate; `tokensAfter` is the estimate of the
+	 * post-compaction context (new summary + kept messages), matching the
+	 * `tokensAfter` reported by the live `context_compacted` event so replayed
+	 * history shows the same window change.
+	 */
 	tokensBefore?: number;
+	tokensAfter?: number;
 	details?: {
 		trigger: ContextUpdateResult["trigger"];
 		keptMessages: number;

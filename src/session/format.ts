@@ -139,6 +139,7 @@ export function appendCompactionEntry(args: {
 	summary: string;
 	firstKeptEntryId: string | null;
 	tokensBefore?: number;
+	tokensAfter?: number;
 	timestamp?: string;
 	trigger?: ContextUpdateResult["trigger"];
 	keptMessages: number;
@@ -155,6 +156,7 @@ export function appendCompactionEntry(args: {
 		summary: args.summary,
 		firstKeptEntryId: args.firstKeptEntryId,
 		tokensBefore: args.tokensBefore,
+		tokensAfter: args.tokensAfter,
 		details: {
 			trigger: args.trigger ?? null,
 			keptMessages: args.keptMessages,

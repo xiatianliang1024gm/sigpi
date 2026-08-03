@@ -8,8 +8,7 @@ import {
 	parseChatCommand,
 } from "../src/chat-commands.js";
 import { BackgroundTaskManager } from "../src/tools/background.js";
-import type { PersistedSession } from "../src/types.js";
-import { createTempDir, createTestToolExecution, waitFor } from "./helpers.js";
+import { createTempDir, waitFor } from "./helpers.js";
 
 test("parseChatCommand matches supported slash commands", () => {
 	const commands = createChatCommandDefinitions();
@@ -19,7 +18,6 @@ test("parseChatCommand matches supported slash commands", () => {
 		"/compact",
 		"/model",
 		"/session",
-		"/history",
 		"/resume",
 		"/new",
 		"/exit",
@@ -28,157 +26,6 @@ test("parseChatCommand matches supported slash commands", () => {
 		assert.equal(parsed.kind, "command");
 		assert.equal(parsed.command.name, value);
 	}
-});
-
-test("/history defaults to the latest 5 saved turns", async () => {
-	const outputs: string[] = [];
-	await executeChatCommand("/history", createChatCommandDefinitions(), {
-		getState: () =>
-			({
-				runtime: {
-					turn: {
-						getCurrentSession: () => createHistorySession(6),
-					},
-				},
-			}) as never,
-		setState: () => {},
-		store: {} as never,
-		writeLine: (line: string) => outputs.push(line),
-	});
-
-	assert.equal(outputs.length, 1);
-	assert.equal(outputs[0]?.includes("Turn 1 [completed]"), false);
-	assert.equal(outputs[0]?.includes("Turn 2 [completed]"), true);
-	assert.equal(outputs[0]?.includes("Turn 6 [completed]"), true);
-	assert.equal(outputs[0]?.includes("User: user 2"), true);
-	assert.equal(outputs[0]?.includes("Assistant: assistant 6"), true);
-	assert.equal(outputs[0]?.includes("Tools: 1"), true);
-});
-
-test("/history count limits output to the latest requested turns", async () => {
-	const outputs: string[] = [];
-	await executeChatCommand("/history 1", createChatCommandDefinitions(), {
-		getState: () =>
-			({
-				runtime: {
-					turn: {
-						getCurrentSession: () => createHistorySession(3),
-					},
-				},
-			}) as never,
-		setState: () => {},
-		store: {} as never,
-		writeLine: (line: string) => outputs.push(line),
-	});
-
-	assert.equal(outputs.length, 1);
-	assert.equal(outputs[0]?.includes("Turn 2 [completed]"), false);
-	assert.equal(outputs[0]?.includes("Turn 3 [completed]"), true);
-	assert.equal(outputs[0]?.includes("User: user 3"), true);
-});
-
-test("/history all includes every saved turn", async () => {
-	const outputs: string[] = [];
-	await executeChatCommand("/history all", createChatCommandDefinitions(), {
-		getState: () =>
-			({
-				runtime: {
-					turn: {
-						getCurrentSession: () => createHistorySession(6),
-					},
-				},
-			}) as never,
-		setState: () => {},
-		store: {} as never,
-		writeLine: (line: string) => outputs.push(line),
-	});
-
-	assert.equal(outputs.length, 1);
-	assert.equal(outputs[0]?.includes("Turn 1 [completed]"), true);
-	assert.equal(outputs[0]?.includes("Turn 6 [completed]"), true);
-});
-
-test("/history reports failed turns and missing assistant output", async () => {
-	const outputs: string[] = [];
-	await executeChatCommand("/history all", createChatCommandDefinitions(), {
-		getState: () =>
-			({
-				runtime: {
-					turn: {
-						getCurrentSession: () =>
-							createHistorySession(1, {
-								status: "failed",
-								assistantOutput: null,
-								toolExecutions: [],
-								errorMessage: "model failed",
-							}),
-					},
-				},
-			}) as never,
-		setState: () => {},
-		store: {} as never,
-		writeLine: (line: string) => outputs.push(line),
-	});
-
-	assert.deepEqual(outputs, [
-		[
-			"Turn 1 [failed] 2026-05-22T00:01:00.000Z -> 2026-05-22T00:01:30.000Z",
-			"User: user 1",
-			"Assistant: (no assistant output)",
-			"Error: model failed",
-		].join("\n"),
-	]);
-});
-
-test("/history reports when there is no active session", async () => {
-	const outputs: string[] = [];
-	await executeChatCommand("/history", createChatCommandDefinitions(), {
-		getState: () =>
-			({ runtime: { turn: { getCurrentSession: () => null } } }) as never,
-		setState: () => {},
-		store: {} as never,
-		writeLine: (line: string) => outputs.push(line),
-	});
-
-	assert.deepEqual(outputs, ["(no active session)"]);
-});
-
-test("/history reports when the active session has no saved turns", async () => {
-	const outputs: string[] = [];
-	await executeChatCommand("/history", createChatCommandDefinitions(), {
-		getState: () =>
-			({
-				runtime: {
-					turn: {
-						getCurrentSession: () => createHistorySession(0),
-					},
-				},
-			}) as never,
-		setState: () => {},
-		store: {} as never,
-		writeLine: (line: string) => outputs.push(line),
-	});
-
-	assert.deepEqual(outputs, ["(no saved turns)"]);
-});
-
-test("/history rejects invalid arguments", async () => {
-	const outputs: string[] = [];
-	await executeChatCommand("/history newest", createChatCommandDefinitions(), {
-		getState: () =>
-			({
-				runtime: {
-					turn: {
-						getCurrentSession: () => createHistorySession(1),
-					},
-				},
-			}) as never,
-		setState: () => {},
-		store: {} as never,
-		writeLine: (line: string) => outputs.push(line),
-	});
-
-	assert.deepEqual(outputs, ["Usage: /history [all|<count>]"]);
 });
 
 test("parseChatCommand accepts legacy exit aliases for local quit", () => {
@@ -734,6 +581,78 @@ test("/new starts a fresh session and replaces the active state", async () => {
 	assert.equal(updatedState, freshState);
 });
 
+test("/resume replays the attached session's messages into the view", async () => {
+	const replayed: unknown[][] = [];
+	const view = {
+		replaceTranscript: (components: unknown[]) => replayed.push(components),
+	};
+	const session = {
+		entries: [
+			{
+				kind: "message",
+				id: "m1",
+				turnId: 1,
+				timestamp: "2026-05-22T00:01:00.000Z",
+				message: { role: "user", content: "hello", id: "m1" },
+			},
+		],
+	};
+
+	await executeChatCommand(
+		"/resume",
+		createChatCommandDefinitions({
+			attachSessionFromSelector: async () => ({
+				updatedState: { runtime: { session } } as never,
+				selectedSessionId: "resumed-session",
+				warnings: [],
+			}),
+		}),
+		{
+			getState: () => ({ view }) as never,
+			setState: () => {},
+			store: {
+				listSessions: async () => [{ sessionId: "resumed-session" }],
+			} as never,
+			writeLine: () => {},
+		},
+	);
+
+	// The terminal transcript is replaced with the attached session's
+	// messages (the user line here) instead of leaving the old session on
+	// screen or requiring a separate /history view.
+	assert.equal(replayed.length, 1);
+	assert.equal(replayed[0]?.length, 1);
+});
+
+test("/new clears the previous transcript in the view", async () => {
+	const replayed: unknown[][] = [];
+	const view = {
+		replaceTranscript: (components: unknown[]) => replayed.push(components),
+	};
+
+	await executeChatCommand(
+		"/new",
+		createChatCommandDefinitions({
+			attachNewSession: async () => ({
+				updatedState: { runtime: { session: { entries: [] } } } as never,
+				selectedSessionId: "fresh-session",
+				warnings: [],
+			}),
+		}),
+		{
+			getState: () => ({ view }) as never,
+			setState: () => {},
+			store: {} as never,
+			writeLine: () => {},
+		},
+	);
+
+	// A fresh session has no messages, so the previous session's transcript
+	// is replaced with an empty component list.
+	assert.equal(replayed.length, 1);
+	assert.deepEqual(replayed[0], []);
+});
+
 test("/exit prints the active session title and id before quitting", async () => {
 	const outputs: string[] = [];
 	const result = await executeChatCommand(
@@ -886,7 +805,6 @@ test("getChatCommandSuggestions narrows matches by prefix", () => {
 			"/compact",
 			"/model",
 			"/session",
-			"/history",
 			"/resume",
 			"/new",
 			"/exit",
@@ -901,42 +819,6 @@ test("getChatCommandSuggestions narrows matches by prefix", () => {
 	assert.deepEqual(getChatCommandSuggestions("/re more", commands), []);
 	assert.deepEqual(getChatCommandSuggestions("plain text", commands), []);
 });
-
-function createHistorySession(
-	turnCount: number,
-	overrides: Partial<PersistedSession["turns"][number]> = {},
-): PersistedSession {
-	return {
-		version: 4,
-		sessionId: "11111111-1111-4111-8111-111111111111",
-		title: "history test",
-		createdAt: "2026-05-22T00:00:00.000Z",
-		updatedAt: "2026-05-22T00:06:00.000Z",
-		cwd: "/tmp/history",
-		systemPromptFingerprint: "fingerprint",
-		loadedSkillNames: [],
-		skillsFingerprint: null,
-		entries: [],
-		turnCount,
-		lastCompletedUserInput: turnCount > 0 ? `user ${turnCount}` : null,
-		lastTurn: null,
-		turns: Array.from({ length: turnCount }, (_, index) => {
-			const turnId = index + 1;
-			return {
-				turnId,
-				startedAt: `2026-05-22T00:0${turnId}:00.000Z`,
-				finishedAt: `2026-05-22T00:0${turnId}:30.000Z`,
-				status: "completed",
-				userInput: `user ${turnId}`,
-				assistantOutput: `assistant ${turnId}`,
-				steps: 1,
-				toolExecutions: turnId === turnCount ? [createTestToolExecution()] : [],
-				errorMessage: null,
-				...overrides,
-			};
-		}),
-	};
-}
 
 test("/tasks lists running background tasks", async () => {
 	const manager = new BackgroundTaskManager();
