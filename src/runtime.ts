@@ -287,12 +287,6 @@ export async function createAgentRuntime(
 		writeFileSync(rcDefinitionsFile, rcDefinitions);
 	}
 	const bashToolContext = {
-		workingDir: {
-			current: cwd,
-			projectDir: cwd,
-			maintainProjectWorkingDir:
-				config.tools.bash.maintainProjectWorkingDir ?? false,
-		},
 		outputDir: bashOutputDir,
 		rcDefinitionsFile,
 		tasks: backgroundTaskManager,

@@ -10,6 +10,7 @@ import {
 	createShellRuntime,
 	detectShellRuntime,
 	resolvePosixDefaultShell,
+	sanitizeWorkingDirectory,
 	sourceScript,
 	supportsRcCapture,
 } from "../src/shell.js";
@@ -90,16 +91,11 @@ for (const shell of POSIX_SHELLS) {
 		);
 	});
 
-	test(`bash carries the working directory across calls under ${shell}`, {
+	test(`bash resets to the project directory on every call under ${shell}`, {
 		skip: !present,
 	}, async () => {
 		const shellRuntime = createShellRuntime(shell, "linux");
 		const startDir = process.cwd();
-		const workingDir = {
-			current: startDir,
-			projectDir: startDir,
-			maintainProjectWorkingDir: false,
-		};
 		const outputDir = path.join(
 			tmpdir(),
 			`sigpi-shell-seam-${shell}-${Date.now()}`,
@@ -110,7 +106,7 @@ for (const shell of POSIX_SHELLS) {
 		]);
 		const ctx = {
 			cwd: startDir,
-			bash: { workingDir, outputDir },
+			bash: { outputDir },
 		};
 		const subDir = path.join(startDir, `shell-seam-cd-${shell}`);
 		await mkdir(subDir, { recursive: true });
@@ -124,7 +120,8 @@ for (const shell of POSIX_SHELLS) {
 				},
 				ctx,
 			);
-			assert.equal(workingDir.current, subDir);
+			// The `cd` only affected that command's own process; the next
+			// call must start in the project directory again.
 			const pwd = await tools.execute(
 				{
 					id: `pwd_${shell}`,
@@ -134,7 +131,7 @@ for (const shell of POSIX_SHELLS) {
 				},
 				ctx,
 			);
-			assert.equal((pwd.data as { stdout: string }).stdout.trim(), subDir);
+			assert.equal((pwd.data as { stdout: string }).stdout.trim(), startDir);
 		} finally {
 			await rm(subDir, { recursive: true, force: true }).catch(() => {});
 			await rm(outputDir, { recursive: true, force: true }).catch(() => {});
@@ -171,6 +168,67 @@ test("sourceScript uses the portable '.' form for POSIX shells", () => {
 	const bash = createShellRuntime("bash", "linux");
 	assert.equal(sourceScript(sh, "/tmp/x.sh"), ". '/tmp/x.sh'");
 	assert.equal(sourceScript(bash, "/tmp/x.sh"), ". '/tmp/x.sh'");
+});
+
+test("sanitizeWorkingDirectory strips NUL bytes instead of discarding the path", () => {
+	// UTF-16LE read back as UTF-8 leaves a NUL after every ASCII char;
+	// stripping recovers the original path.
+	assert.equal(
+		sanitizeWorkingDirectory(
+			"C:\\Users\\l008005\u0000\\repos\u0000\\csh",
+			"/fallback",
+		),
+		"C:\\Users\\l008005\\repos\\csh",
+	);
+});
+
+test("sanitizeWorkingDirectory drops lone surrogates and trims", () => {
+	assert.equal(
+		sanitizeWorkingDirectory(" C:\\a\uD800b ", "/fallback"),
+		"C:\\ab",
+	);
+});
+
+test("sanitizeWorkingDirectory falls back when nothing usable remains", () => {
+	assert.equal(
+		sanitizeWorkingDirectory("\u0000\u0000", "/fallback"),
+		"/fallback",
+	);
+	assert.equal(sanitizeWorkingDirectory("", "/fallback"), "/fallback");
+	assert.equal(sanitizeWorkingDirectory(undefined, "/fallback"), "/fallback");
+});
+
+test("bash tool sanitizes a NUL-laden cwd instead of failing with the spawn NUL-byte error", async () => {
+	// Regression: a project cwd containing NUL bytes (a Windows session can
+	// carry such a path into the tool context) previously made child_process
+	// throw "The property 'options.cwd' must be a string, uint8Array, or URL
+	// without null bytes" on every call. The sanitizer must run before spawn,
+	// so the tool executes (here powershell.exe is absent on Linux and the
+	// spawn fails cleanly with ENOENT) instead of rejecting with the encoding
+	// error.
+	const shellRuntime = createShellRuntime("powershell", "win32");
+	const tools = new ToolRegistry([
+		createBashTool(shellRuntime, {}, new ReadTracker()),
+	]);
+	const result = await tools.execute(
+		{
+			id: "nul_cwd_1",
+			name: "bash",
+			arguments: { command: "echo hi" },
+			rawArguments: '{"command":"echo hi"}',
+		},
+		{ cwd: "C:\\Users\\l008005\u0000\\repos\u0000\\csh" },
+	);
+
+	assert.equal(
+		result.ok,
+		true,
+		"tool must not reject with a spawn validation error",
+	);
+	const data = result.data as { ok: boolean; stderr: string };
+	assert.equal(data.ok, false); // powershell.exe is not present on this runner
+	assert.doesNotMatch(data.stderr, /null bytes/);
+	assert.doesNotMatch(data.stderr, /options\.cwd/);
 });
 
 test("sourceScript uses '.' for PowerShell (unchanged)", () => {

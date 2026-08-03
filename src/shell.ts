@@ -167,12 +167,6 @@ export interface ShellInvocationOptions {
 	 * aliases/functions are available to it.
 	 */
 	preamble?: string;
-	/**
-	 * When set, the command's resulting working directory is written to this
-	 * file (robust against the command redirecting stdout). The caller reads
-	 * it back to carry `cd` across commands.
-	 */
-	cwdCaptureFile?: string;
 }
 
 export function buildShellInvocation(
@@ -190,9 +184,6 @@ export function buildShellInvocation(
 		segments.push(options.preamble);
 	}
 	segments.push(command);
-	if (options.cwdCaptureFile) {
-		segments.push(captureCwdSegment(shellRuntime, options.cwdCaptureFile));
-	}
 	const full = segments.join("\n");
 
 	if (shellRuntime.shell === "powershell" || shellRuntime.shell === "pwsh") {
@@ -215,15 +206,25 @@ export function buildShellInvocation(
 	};
 }
 
-function captureCwdSegment(shellRuntime: ShellRuntime, file: string): string {
-	if (shellRuntime.shell === "powershell" || shellRuntime.shell === "pwsh") {
-		return `$__sigpi_rc = $LASTEXITCODE
-(Get-Location).Path > '${file}'
-exit $__sigpi_rc`;
-	}
-	return `__sigpi_rc=$?
-pwd > '${file}'
-exit $__sigpi_rc`;
+/**
+ * Remove characters that can never appear in a real filesystem path but that
+ * sneak in when a path crosses an encoding boundary on Windows — most
+ * commonly a UTF-16LE capture file read back as UTF-8, which leaves a NUL
+ * byte after every ASCII char, and misdecoded lone surrogates that break the
+ * UTF-8 handoff when spawning. NUL bytes are *stripped* rather than treated
+ * as invalid because stripping usually recovers the correct path
+ * (`C:\u0000U\u0000s\u0000e...` → `C:\Users\...`). Falls back to `fallback`
+ * when nothing usable remains.
+ */
+export function sanitizeWorkingDirectory(
+	value: string | undefined,
+	fallback: string,
+): string {
+	const clean = (value ?? "")
+		.replace(/\u0000/gu, "")
+		.replace(/[\uD800-\uDFFF]/gu, "")
+		.trim();
+	return clean || fallback;
 }
 
 /**

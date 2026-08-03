@@ -87,18 +87,7 @@ export interface SystemPromptSection {
 	content: string;
 }
 
-export interface BashWorkingDir {
-	/** Current working directory, mutated by `cd` across commands in a session. */
-	current: string;
-	/** Project (launch) directory; the only allowed `cd` boundary. */
-	readonly projectDir: string;
-	/** When true, ignore carry-over and always run in `projectDir`. */
-	readonly maintainProjectWorkingDir: boolean;
-}
-
 export interface BashToolContext {
-	/** Mutable working directory shared across `bash` calls in this session. */
-	workingDir: BashWorkingDir;
 	/** Directory where overflow output / background logs are written. */
 	outputDir: string;
 	/** Captured rc alias/function definitions written to this file (sourced as a preamble). */

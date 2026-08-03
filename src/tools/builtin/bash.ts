@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -14,6 +14,7 @@ import { compactWhitespace, getString, truncate } from "../../progress.js";
 import {
 	buildShellInvocation,
 	detectShellRuntime,
+	sanitizeWorkingDirectory,
 	sourceScript,
 } from "../../shell.js";
 import type { ShellRuntime, ToolDefinition } from "../../types.js";
@@ -81,9 +82,10 @@ export function createBashTool(
 		name: "bash",
 		description:
 			`Run a command in a shell (${shellRuntime.displayName}). ` +
-			"The working directory carries across " +
-			"commands in this session (like a terminal): use `cd` to change it, " +
-			"and it resets to the project directory if a command leaves it. " +
+			"Every command starts in the project directory; a `cd` inside a " +
+			"command affects only that command's process and never carries " +
+			"into later commands, so write paths relative to the project " +
+			"directory (or use absolute paths). " +
 			"Returns stdout, stderr, and exit status. For long output it writes " +
 			"the full output to a session file and returns the path plus a preview.",
 		inputSchema: bashSchema as z.ZodType<BashArgs>,
@@ -136,11 +138,14 @@ export function createBashTool(
 			}
 
 			const bash = context.bash;
-			const workingDir = bash?.workingDir ?? {
-				current: context.cwd,
-				projectDir: context.cwd,
-				maintainProjectWorkingDir: false,
-			};
+			// Every command runs in the project directory: `cd` inside a
+			// command affects only that command's own process, so there is no
+			// working-directory state to carry or reset between calls. The
+			// cwd is sanitized anyway because a Windows session can carry a
+			// NUL-laden path into `context.cwd`, which would make
+			// child_process throw "options.cwd must be a string ... without
+			// null bytes" on every spawn.
+			const projectDir = sanitizeWorkingDirectory(context.cwd, process.cwd());
 			const outputDir =
 				bash?.outputDir ?? path.join(os.tmpdir(), "sigpi-bash-outputs");
 			const defaultTimeout = config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -181,7 +186,7 @@ export function createBashTool(
 						executable: bgInvocation.executable,
 						args: bgInvocation.args,
 					},
-					cwd: workingDir.current,
+					cwd: projectDir,
 					logPath,
 					description: description ?? null,
 					env: { ...process.env, TERM: process.env.TERM ?? "dumb" },
@@ -206,20 +211,15 @@ export function createBashTool(
 				);
 			}
 
-			const cwdCaptureFile = path.join(
-				os.tmpdir(),
-				`sigpi-cwd-${randomUUID()}.txt`,
-			);
 			const invocation = buildShellInvocation(shellRuntime, command, {
 				preamble,
-				cwdCaptureFile,
 			});
 
 			const result = await execFileAsync(
 				invocation.executable,
 				invocation.args,
 				{
-					cwd: workingDir.current,
+					cwd: projectDir,
 					timeout: timeoutMs,
 					maxBuffer: Math.max(limit * 4, 64 * 1024, 32 * 1024 * 1024),
 					signal: context.abortSignal,
@@ -272,46 +272,18 @@ export function createBashTool(
 					},
 				)
 				.finally(() => {
-					void rm(cwdCaptureFile, { force: true });
 					if (invocation.scriptPath) {
 						void rm(invocation.scriptPath, { force: true });
 					}
 				});
 
-			// Capture the resulting working directory from the throwaway file.
-			let newCwd = workingDir.current;
-			try {
-				const captured = (await readFile(cwdCaptureFile, "utf8")).trim();
-				if (captured) {
-					newCwd = captured;
-				}
-			} catch {
-				// If we couldn't read it, keep the current directory.
-			}
-
-			// Apply carry-over / reset semantics.
-			let cwdReset = false;
-			if (workingDir.maintainProjectWorkingDir) {
-				workingDir.current = workingDir.projectDir;
-			} else {
-				const relative = path.relative(workingDir.projectDir, newCwd);
-				const inside =
-					relative === "" ||
-					(!relative.startsWith("..") && !path.isAbsolute(relative));
-				if (inside) {
-					workingDir.current = newCwd;
-				} else {
-					workingDir.current = workingDir.projectDir;
-					cwdReset = true;
-				}
-			}
-
 			// Record recognized single-file reads so the edit tool's
-			// read-before-edit check passes (resolved against the command's cwd).
+			// read-before-edit check passes (resolved against the project
+			// directory the command ran in).
 			if (result.ok) {
 				const readFile0 = detectSingleFileRead(command);
 				if (readFile0) {
-					await tracker.recordRead(newCwd, readFile0);
+					await tracker.recordRead(projectDir, readFile0);
 				}
 			}
 
@@ -324,7 +296,7 @@ export function createBashTool(
 				overflowPath = path.join(outputDir, `${randomUUID()}.txt`);
 				const fileContent = [
 					`Command: ${command}`,
-					`Cwd: ${newCwd}`,
+					`Cwd: ${projectDir}`,
 					`Exit code: ${result.exitCode ?? "(none)"}`,
 					formatRawBlock("STDOUT", result.stdout || "(empty)", {
 						omitLabel: true,
@@ -360,8 +332,7 @@ export function createBashTool(
 					exitCode: result.exitCode,
 					signal: result.signal,
 					timedOut: result.timedOut,
-					cwd: workingDir.current,
-					cwdReset,
+					cwd: projectDir,
 					overflowPath: overflowPath ?? null,
 					stdout: dataStdout,
 					stderr: dataStderr,

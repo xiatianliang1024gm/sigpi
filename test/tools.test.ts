@@ -143,27 +143,19 @@ test("bash truncates long output and marks truncation flags", async () => {
 	assert.match(overflow, /x{200}/);
 });
 
-test("bash carries the working directory across calls within the project", async () => {
+test("bash starts every command in the project directory (no cd carry-over)", async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const startDir = process.cwd();
-	const workingDir = {
-		current: startDir,
-		projectDir: startDir,
-		maintainProjectWorkingDir: false,
-	};
 	const outputDir = await createTempDir("sigpi-bash-test-");
 	const tools = new ToolRegistry([
 		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
-	const ctx = {
-		cwd: startDir,
-		bash: { workingDir, outputDir },
-	};
+	const ctx = { cwd: startDir, bash: { outputDir } };
 
 	const subDir = path.join(startDir, `bash-cd-${randomUUID()}`);
 	await mkdir(subDir, { recursive: true });
 	try {
-		await tools.execute(
+		const cd = await tools.execute(
 			{
 				id: "cd_1",
 				name: "bash",
@@ -172,7 +164,8 @@ test("bash carries the working directory across calls within the project", async
 			},
 			ctx,
 		);
-		assert.equal(workingDir.current, subDir);
+		// The tool reports the project directory as the command's cwd.
+		assert.equal((cd.data as { cwd: string }).cwd, startDir);
 
 		const pwd = await tools.execute(
 			{
@@ -183,53 +176,52 @@ test("bash carries the working directory across calls within the project", async
 			},
 			ctx,
 		);
-		assert.equal((pwd.data as { stdout: string }).stdout.trim(), subDir);
+		assert.equal((pwd.data as { stdout: string }).stdout.trim(), startDir);
 	} finally {
 		await rm(subDir, { recursive: true, force: true }).catch(() => {});
 	}
 });
 
-test("bash resets the working directory to the project dir when a command escapes it", async () => {
+test("bash ignores a cd outside the project on subsequent calls", async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const startDir = process.cwd();
-	const workingDir = {
-		current: startDir,
-		projectDir: startDir,
-		maintainProjectWorkingDir: false,
-	};
 	const outputDir = await createTempDir("sigpi-bash-test-");
 	const tools = new ToolRegistry([
 		createBashTool(shellRuntime, {}, new ReadTracker()),
 	]);
-	const ctx = {
-		cwd: startDir,
-		bash: { workingDir, outputDir },
-	};
+	const ctx = { cwd: startDir, bash: { outputDir } };
 
-	await tools.execute(
+	const escaped = await tools.execute(
 		{
 			id: "cd_esc",
 			name: "bash",
-			arguments: { command: "cd /tmp" },
-			rawArguments: '{"command":"cd /tmp"}',
+			arguments: { command: "cd /tmp && pwd" },
+			rawArguments: '{"command":"cd /tmp && pwd"}',
 		},
 		ctx,
 	);
+	assert.equal((escaped.data as { ok: boolean }).ok, true);
 	assert.equal(
-		workingDir.current,
+		(escaped.data as { cwd: string }).cwd,
 		startDir,
-		"cwd outside the project should reset to the project dir",
+		"the reported cwd is the project directory, not the escaped one",
 	);
+
+	const pwd = await tools.execute(
+		{
+			id: "pwd_esc",
+			name: "bash",
+			arguments: { command: "pwd" },
+			rawArguments: '{"command":"pwd"}',
+		},
+		ctx,
+	);
+	assert.equal((pwd.data as { stdout: string }).stdout.trim(), startDir);
 });
 
 test("bash runs a command in the background and tracks it", async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const startDir = process.cwd();
-	const workingDir = {
-		current: startDir,
-		projectDir: startDir,
-		maintainProjectWorkingDir: false,
-	};
 	const outputDir = await createTempDir("sigpi-bash-test-");
 	const manager = new BackgroundTaskManager();
 	const tools = new ToolRegistry([
@@ -238,7 +230,6 @@ test("bash runs a command in the background and tracks it", async () => {
 	const ctx = {
 		cwd: startDir,
 		bash: {
-			workingDir,
 			outputDir,
 			tasks: manager,
 		},
