@@ -5,9 +5,34 @@ import type {
 	SystemPromptSection,
 } from "./types.js";
 
+export interface SystemEnvironmentInfo {
+	/**
+	 * Absolute path of the project (launch) directory — where the agent's file
+	 * tools and shell start.
+	 */
+	cwd: string;
+}
+
+function buildEnvironmentSection(
+	shellRuntime: ShellRuntime,
+	environment: SystemEnvironmentInfo,
+): SystemPromptSection {
+	return {
+		id: "environment",
+		label: "Environment",
+		content: [
+			`Current project directory: ${environment.cwd}`,
+			`Shell executable: ${shellRuntime.executable}`,
+		].join("\n"),
+	};
+}
+
 export function buildSystemPromptSections(
 	shellRuntime: ShellRuntime,
 	loadedSkills: LoadedSkill[] = [],
+	environment: SystemEnvironmentInfo = {
+		cwd: process.cwd(),
+	},
 ): SystemPromptSection[] {
 	const skillSection =
 		loadedSkills.length > 0
@@ -55,6 +80,7 @@ ${buildSkillCatalogSummary(loadedSkills)}`,
 				"The tool safety mode is a guardrail against accidental writes and dangerous commands; full OS-level isolation is not provided.",
 			].join(" "),
 		},
+		buildEnvironmentSection(shellRuntime, environment),
 		{
 			id: "skills",
 			label: "Skill guidance",
@@ -86,8 +112,11 @@ ${buildSkillCatalogSummary(loadedSkills)}`,
 export function buildSystemPrompt(
 	shellRuntime: ShellRuntime,
 	loadedSkills: LoadedSkill[] = [],
+	environment: SystemEnvironmentInfo = {
+		cwd: process.cwd(),
+	},
 ): string {
-	return buildSystemPromptSections(shellRuntime, loadedSkills)
+	return buildSystemPromptSections(shellRuntime, loadedSkills, environment)
 		.map((section) => `## ${section.label}\n\n${section.content}`)
 		.join("\n\n");
 }

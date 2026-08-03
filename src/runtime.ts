@@ -216,10 +216,12 @@ export async function createAgentRuntime(
 	const systemPromptSections = buildSystemPromptSections(
 		shellRuntime,
 		skillCatalog.loadedSkills,
+		{ cwd },
 	);
 	const systemPrompt = buildSystemPrompt(
 		shellRuntime,
 		skillCatalog.loadedSkills,
+		{ cwd },
 	);
 	const systemPromptFingerprint = createSystemPromptFingerprint(systemPrompt);
 	const store =
