@@ -307,7 +307,14 @@ export async function runChatReplLoop(
 		const commandResult = await executeChatCommand(line, commands, {
 			getState: () => state,
 			setState: (updatedState) => {
-				state = updatedState;
+				// The live ChatRenderer is owned by this loop. Commands that
+				// replace the state (e.g. /new, /resume) build it via
+				// `runtimeToChatReplState`, which starts with `view: null`;
+				// pinning the live view here keeps `/resume` and `/model`
+				// reusing this TUI instead of spawning a second
+				// ProcessTerminal on process.stdin (whose stop() pauses
+				// stdin and freezes the REPL).
+				state = { ...updatedState, view };
 				latestProgressEvent = null;
 			},
 			store: options.store,
