@@ -54,6 +54,21 @@ Use this EXACT format:
 1. [What the assistant should do next]
 
 Preserve the user's current goal even if later tool results are large or distracting.`;
+const CONTEXT_COMPACTED_PREFIX =
+	"The conversation was compacted mid-task because it approached the model's token limit.";
+const CONTEXT_COMPACTED_NOTE = [
+	"The summary at the top of the conversation preserves the task state, work done, and next steps.",
+	"Continue the user's original request. If it is already fully satisfied, briefly confirm completion instead of repeating work.",
+].join(" ");
+const EMPTY_RESPONSE_NOTE =
+	"Your previous response was empty (no text and no tool calls). Continue the user's request with a real answer or tool call.";
+/**
+ * A model response with no text and no tool calls is not a valid final answer.
+ * It is usually a transient provider hiccup or a request the model could not
+ * handle, so we persist the turn and re-prompt — but bounded, so a broken
+ * provider cannot spin the loop forever.
+ */
+const EMPTY_RESPONSE_MAX_RETRIES = 2;
 const DEFAULT_RUNNER_OPTIONS: AgentRunnerOptions = {
 	maxSteps: 40,
 	temperature: 0.2,
@@ -132,6 +147,7 @@ export class AgentRunner {
 		let lastStep = 0;
 		let turnCheckpoint: string | null = null;
 		let lastCheckpointedTurnMessageCount = 0;
+		let emptyResponseRetries = 0;
 
 		interruptController?.beginTurn();
 
@@ -544,8 +560,8 @@ export class AgentRunner {
 				}
 
 				interruptController?.throwIfInterrupted();
-				const outputText =
-					response.assistantText?.trim() || "No response generated.";
+				const assistantText = response.assistantText?.trim() ?? "";
+				const outputText = assistantText || "No response generated.";
 
 				if (
 					needsVerification &&
@@ -599,6 +615,72 @@ export class AgentRunner {
 				turnMessagesPersisted = true;
 				summaryCount += Number(contextUpdated.summarized);
 				trimCount += Number(contextUpdated.trimmed);
+
+				// A model response with no text and no tool calls is not a valid
+				// final answer — ending the turn here surfaces as "No response
+				// generated." and makes the agent look like it stopped for no
+				// reason. Recover instead:
+				if (!assistantText) {
+					// If the token-triggered compaction ran, the summary above
+					// preserves the task state ("Current Work" / "Next Steps"),
+					// so rebuild the working context from it and let the model
+					// continue the task instead of stopping dead at the limit.
+					if (contextUpdated.summarized) {
+						workingMessages.length = 0;
+						workingMessages.push(
+							...this.context.buildMessages(this.systemPrompt),
+							createSystemMessage(
+								`${CONTEXT_COMPACTED_PREFIX}\n${CONTEXT_COMPACTED_NOTE}`,
+							),
+						);
+						turnMessages.length = 0;
+						turnMessagesPersisted = false;
+						lastCheckpointedTurnMessageCount = 0;
+						logger?.info("turn_continued_after_compaction", {
+							runId: this.options.runId,
+							sessionId: this.options.sessionId ?? null,
+							turnId,
+							step,
+							summaryCount,
+							trimCount,
+							recentMessageCount: this.context.getRecentMessages().length,
+						});
+						reportProgress({
+							type: "context_checkpoint",
+							step,
+							turnId,
+							message: "Context compacted; continuing task",
+							detail: `kept ${this.context.getRecentMessages().length} recent messages; continuing from the summary`,
+							summaryCount,
+							trimCount,
+						});
+						continue;
+					}
+
+					// No compaction ran, so the context had room — this was a
+					// transient provider hiccup. Re-prompt, bounded.
+					if (emptyResponseRetries < EMPTY_RESPONSE_MAX_RETRIES) {
+						emptyResponseRetries += 1;
+						workingMessages.push(createSystemMessage(EMPTY_RESPONSE_NOTE));
+						turnMessages.length = 0;
+						turnMessagesPersisted = false;
+						logger?.warn("turn_empty_response_retry", {
+							runId: this.options.runId,
+							sessionId: this.options.sessionId ?? null,
+							turnId,
+							step,
+							retry: emptyResponseRetries,
+							maxRetries: EMPTY_RESPONSE_MAX_RETRIES,
+						});
+						reportProgress({
+							type: "context_checkpoint",
+							step,
+							turnId,
+							message: "Model returned an empty response; retrying",
+						});
+						continue;
+					}
+				}
 
 				logger?.info("turn_finished", {
 					runId: this.options.runId,
