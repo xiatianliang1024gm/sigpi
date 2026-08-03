@@ -578,12 +578,9 @@ function switchActiveModel(
 		modelId: requestedModelId,
 		modelName: model.name,
 	});
-	const statusModel = state.view?.getStatusBarModel();
-	if (statusModel) {
-		statusModel.modelName = model.name;
-		// statusModel.limit = model.hardContextLimit;
-	}
-	state.view?.getTuiInstance()?.requestRender();
+	// The REPL loop's setState callback rebuilds the whole status bar from
+	// the fresh state (model name, context limit, usage, cwd, branch), so no
+	// in-place mutation of the rendered model is needed here.
 	context.writeLine(`Switched model to ${requestedModelId} (${model.name}).`);
 	return rememberModelSelection(requestedModelId)
 		.then(() => true)

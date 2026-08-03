@@ -167,6 +167,16 @@ export interface RunChatReplLoopDependencies {
 	commands: readonly ChatCommandDefinition[];
 }
 
+/**
+ * While the REPL is running, periodically rebuild the status bar from the
+ * current state even when nothing else is happening. This keeps
+ * externally-driven changes (e.g. `git checkout` in another terminal) from
+ * freezing the bar at the last turn's values until the user next talks.
+ * The git branch lookup inside the rebuild is TTL-cached, so this costs at
+ * most one short-lived `git` spawn per interval.
+ */
+const STATUS_BAR_REFRESH_INTERVAL_MS = 5_000;
+
 let activeStatusBarProgressListener:
 	| ((event: TurnProgressEvent) => void)
 	| null = null;
@@ -291,6 +301,12 @@ export async function runChatReplLoop(
 	};
 	activeStatusBarProgressListener = viewProgressListener;
 
+	// Idle refresh: keep the bar honest between turns (see the constant's
+	// doc comment). Cleared on the loop's single exit path below.
+	const statusBarRefreshTimer = setInterval(() => {
+		void refreshStatusBar();
+	}, STATUS_BAR_REFRESH_INTERVAL_MS);
+
 	while (true) {
 		const queuedLine = queuedLines.shift();
 		const line = queuedLine ?? (await readInput());
@@ -316,6 +332,11 @@ export async function runChatReplLoop(
 				// stdin and freezes the REPL).
 				state = { ...updatedState, view };
 				latestProgressEvent = null;
+				// The state changed (e.g. /model, /new, /resume): rebuild the
+				// status bar immediately from the fresh state instead of
+				// letting it show the previous session/model until the next
+				// turn-progress event.
+				void refreshStatusBar();
 			},
 			store: options.store,
 			progressReporter: viewProgressListener,
@@ -387,6 +408,7 @@ export async function runChatReplLoop(
 	}
 
 	view.stop();
+	clearInterval(statusBarRefreshTimer);
 	return state;
 }
 

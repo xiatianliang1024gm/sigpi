@@ -54,16 +54,31 @@ test("getGitBranch returns null for a non-repo directory", async () => {
 	}
 });
 
-test("getGitBranch caches results per cwd", async () => {
+test("getGitBranch caches results per cwd within the TTL", async () => {
 	_resetGitBranchCacheForTests();
 	const dir = makeRepo();
 	try {
 		const first = await getGitBranch(dir);
 		assert.equal(first, "main");
-		// Switch branches on disk; the cached value must still be returned.
+		// Switch branches on disk; an immediate lookup must still return the
+		// cached value (the entry has not aged past the TTL).
 		gitIn(dir, "checkout -q -b feature");
 		const second = await getGitBranch(dir);
 		assert.equal(second, "main");
+	} finally {
+		cleanup(dir);
+	}
+});
+
+test("getGitBranch re-queries git once the cached entry is stale", async () => {
+	_resetGitBranchCacheForTests();
+	const dir = makeRepo();
+	try {
+		assert.equal(await getGitBranch(dir), "main");
+		gitIn(dir, "checkout -q -b feature");
+		// ttlMs: 0 forces every lookup to treat the entry as stale, so the
+		// branch change on disk is picked up instead of the stale cache.
+		assert.equal(await getGitBranch(dir, 0), "feature");
 	} finally {
 		cleanup(dir);
 	}

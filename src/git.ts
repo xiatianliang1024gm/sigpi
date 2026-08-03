@@ -1,7 +1,15 @@
 import { spawn } from "node:child_process";
 
 const GIT_TIMEOUT_MS = 50;
-const branchCache = new Map<string, string | null>();
+/** How long a cached branch stays fresh before `getGitBranch` re-queries git. */
+const BRANCH_CACHE_TTL_MS = 2000;
+
+interface BranchCacheEntry {
+	value: string | null;
+	at: number;
+}
+
+const branchCache = new Map<string, BranchCacheEntry>();
 
 interface GitResult {
 	ok: boolean;
@@ -77,18 +85,24 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
  * - Detached HEAD: returns `"@{shortSha}"` (e.g. `"@a1b2c3d"`).
  * - Not a repo / timeout / error: returns `null`.
  *
- * Results are cached per `cwd` (no TTL) so repeated status-bar redraws do
- * not spawn a subprocess storm.
+ * Results are cached per `cwd` for a short TTL so repeated status-bar redraws
+ * do not spawn a subprocess storm, while a branch change (`git checkout`, by
+ * the agent or in another terminal) is still picked up on the next refresh
+ * once the entry has aged out. Pass `ttlMs` to override the freshness window
+ * (tests use `0` to force a re-query).
  */
-export async function getGitBranch(cwd: string): Promise<string | null> {
+export async function getGitBranch(
+	cwd: string,
+	ttlMs: number = BRANCH_CACHE_TTL_MS,
+): Promise<string | null> {
 	const cached = branchCache.get(cwd);
-	if (cached !== undefined) {
-		return cached;
+	if (cached !== undefined && Date.now() - cached.at < ttlMs) {
+		return cached.value;
 	}
 
 	const result = await runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
 	if (!result.ok || !result.value) {
-		branchCache.set(cwd, null);
+		branchCache.set(cwd, { value: null, at: Date.now() });
 		return null;
 	}
 
@@ -99,7 +113,7 @@ export async function getGitBranch(cwd: string): Promise<string | null> {
 		branch = sha.ok && sha.value ? `@${sha.value}` : null;
 	}
 
-	branchCache.set(cwd, branch);
+	branchCache.set(cwd, { value: branch, at: Date.now() });
 	return branch;
 }
 
