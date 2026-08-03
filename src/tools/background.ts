@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createWriteStream, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { sanitizeWorkingDirectory } from "../shell.js";
 
 export type BackgroundTaskStatus = "running" | "done";
 
@@ -41,11 +42,15 @@ export class BackgroundTaskManager {
 	private readonly tasks = new Map<string, BackgroundTask>();
 
 	spawn(options: SpawnBackgroundOptions): BackgroundTask {
+		// Defense in depth: the bash tool sanitizes cwd before calling us, but
+		// a NUL-laden cwd would otherwise fail spawn with the opaque
+		// "options.cwd must be ... without null bytes" error.
+		const cwd = sanitizeWorkingDirectory(options.cwd, process.cwd());
 		const task: BackgroundTask = {
 			id: options.id,
 			pid: null,
 			command: options.command,
-			cwd: options.cwd,
+			cwd,
 			description: options.description,
 			startedAt: Date.now(),
 			status: "running",
@@ -61,7 +66,7 @@ export class BackgroundTaskManager {
 		writeFileSync(
 			options.logPath,
 			`Command: ${options.command}\n` +
-				`Cwd: ${options.cwd}\n` +
+				`Cwd: ${cwd}\n` +
 				`Started: ${new Date(task.startedAt).toISOString()}\n\n`,
 		);
 		const log = createWriteStream(options.logPath, { flags: "a" });
@@ -69,7 +74,7 @@ export class BackgroundTaskManager {
 		let proc: ChildProcess;
 		try {
 			proc = spawn(options.invocation.executable, options.invocation.args, {
-				cwd: options.cwd,
+				cwd,
 				env: options.env ?? process.env,
 				// Detach so the task survives the parent and forms its own process
 				// group that we can signal as a whole on POSIX.

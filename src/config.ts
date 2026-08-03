@@ -87,7 +87,6 @@ const bashConfigSchema = z.object({
 	defaultTimeoutMs: z.number().int().positive().default(120_000),
 	maxTimeoutMs: z.number().int().positive().default(600_000),
 	maxOutputLength: z.number().int().positive().default(30_000),
-	maintainProjectWorkingDir: z.boolean().default(false),
 	envFile: z.string().min(1).optional(),
 });
 
@@ -149,7 +148,6 @@ const BASH_ALIASES: Record<string, string> = {
 	defaultTimeoutMs: "default_timeout_ms",
 	maxTimeoutMs: "max_timeout_ms",
 	maxOutputLength: "max_output_length",
-	maintainProjectWorkingDir: "maintain_project_working_dir",
 	envFile: "env_file",
 };
 
@@ -270,8 +268,6 @@ export interface RunShellConfig {
 	maxTimeoutMs?: number;
 	/** Inline output length before overflow is written to a session file. */
 	maxOutputLength?: number;
-	/** When true, every command starts in the project directory (no cd carry-over). */
-	maintainProjectWorkingDir?: boolean;
 	/** Optional shell script sourced before each command (env persistence). */
 	envFile?: string;
 }
@@ -590,9 +586,6 @@ function readEnvConfig(env: NodeJS.ProcessEnv): PartialConfig {
 				defaultTimeoutMs: parseOptionalInt(env.BASH_DEFAULT_TIMEOUT_MS),
 				maxTimeoutMs: parseOptionalInt(env.BASH_MAX_TIMEOUT_MS),
 				maxOutputLength: parseOptionalInt(env.BASH_MAX_OUTPUT_LENGTH),
-				maintainProjectWorkingDir: parseOptionalBoolean(
-					env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR,
-				),
 				envFile: env.CLAUDE_ENV_FILE,
 			}),
 		},

@@ -45,7 +45,6 @@ test("alias maps drive parseTomlConfig for every section", () => {
 			default_timeout_ms: 1,
 			max_timeout_ms: 1,
 			max_output_length: 1,
-			maintain_project_working_dir: true,
 			env_file: "e",
 		},
 	};
@@ -246,7 +245,6 @@ test("loadAppConfig parses [tools.bash] keys", async () => {
 			"default_timeout_ms = 90000",
 			"max_timeout_ms = 300000",
 			"max_output_length = 20000",
-			"maintain_project_working_dir = true",
 			'env_file = "~/.sigpi/bash-env.sh"',
 		].join("\n"),
 		"utf8",
@@ -256,7 +254,6 @@ test("loadAppConfig parses [tools.bash] keys", async () => {
 	assert.equal(config.tools.bash.defaultTimeoutMs, 90000);
 	assert.equal(config.tools.bash.maxTimeoutMs, 300000);
 	assert.equal(config.tools.bash.maxOutputLength, 20000);
-	assert.equal(config.tools.bash.maintainProjectWorkingDir, true);
 	assert.equal(config.tools.bash.envFile, "~/.sigpi/bash-env.sh");
 });
 
@@ -282,14 +279,12 @@ test("loadAppConfig applies Bash env-var overrides (BASH_*/CLAUDE_*)", async () 
 			BASH_DEFAULT_TIMEOUT_MS: "130000",
 			BASH_MAX_TIMEOUT_MS: "540000",
 			BASH_MAX_OUTPUT_LENGTH: "40000",
-			CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1",
 			CLAUDE_ENV_FILE: "~/.sigpi/env.sh",
 		},
 	});
 	assert.equal(config.tools.bash.defaultTimeoutMs, 130000);
 	assert.equal(config.tools.bash.maxTimeoutMs, 540000);
 	assert.equal(config.tools.bash.maxOutputLength, 40000);
-	assert.equal(config.tools.bash.maintainProjectWorkingDir, true);
 	assert.equal(config.tools.bash.envFile, "~/.sigpi/env.sh");
 });
 
@@ -360,7 +355,6 @@ test("loadAppConfig defaults [tools.bash] bounds when unset", async () => {
 	assert.equal(config.tools.bash.defaultTimeoutMs, 120000);
 	assert.equal(config.tools.bash.maxTimeoutMs, 600000);
 	assert.equal(config.tools.bash.maxOutputLength, 30000);
-	assert.equal(config.tools.bash.maintainProjectWorkingDir, false);
 	assert.equal(config.tools.bash.envFile, undefined);
 });
 
