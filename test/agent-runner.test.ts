@@ -1176,3 +1176,66 @@ test("summarizeToolExecutions caps at 20 lines", () => {
 
 	assert.equal(summary.length, 20);
 });
+
+test("turn_finished estimate uses provider usage, not the chars/4 fallback", async () => {
+	// Regression: the final assistant message of a direct-answer turn used to
+	// be missing from `workingMessages`, so `lastUsage.messageIndex` pointed
+	// one past the working list. The usage ground-truth path was skipped and
+	// `turn_finished` reported the inflated chars/4 estimate (~5.2K vs the
+	// provider's ~2.3K on the real minimax session), making the status bar
+	// jump between turns.
+	const provider = new MockProvider((_request, index) => {
+		if (index === 0) {
+			return {
+				assistantText: "first answer",
+				toolCalls: [],
+				finishReason: "stop",
+				usage: {
+					input: 900,
+					output: 100,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 1_000,
+				},
+			};
+		}
+		return {
+			assistantText: "second answer",
+			toolCalls: [],
+			finishReason: "stop",
+			usage: {
+				input: 1_100,
+				output: 100,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1_200,
+			},
+		};
+	});
+
+	const progressEvents: TurnProgressEvent[] = [];
+	const runner = new AgentRunner({
+		provider,
+		tools: createDefaultToolRegistry(),
+		context: new ConversationContext(),
+		systemPrompt: "You are a test agent.",
+		options: {
+			progressReporter: (event) => {
+				progressEvents.push(event);
+			},
+		},
+	});
+
+	await runner.runTurn("first question");
+	await runner.runTurn("second question");
+
+	const finished = progressEvents.filter(
+		(event) => event.type === "turn_finished",
+	);
+	assert.equal(finished.length, 2);
+	const estimate = finished[1]?.estimatedContextTokens;
+	assert.ok(
+		estimate !== undefined && estimate >= 1_200 && estimate < 1_500,
+		`expected the provider-reported 1.2K ground truth, got ${estimate}`,
+	);
+});
