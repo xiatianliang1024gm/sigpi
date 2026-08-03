@@ -118,7 +118,7 @@ test("truncated file reads expose continuation metadata for the next tool call",
 			assert.match(toolMessage.content, /Line 1/);
 
 			return {
-				assistantText: null,
+				assistantText: "Read complete.",
 				toolCalls: [],
 				finishReason: "stop",
 			};
@@ -450,6 +450,123 @@ test("summarizes older context when the token threshold is exceeded", async () =
 		"User asked for a long explanation; keep the key facts only.",
 	);
 	assert.ok(context.getRecentMessages().length <= 2);
+});
+
+test("continues the turn after a token-triggered compaction instead of stopping", async () => {
+	const provider = new MockProvider((request, index) => {
+		if (request.context?.purpose === "summary") {
+			return {
+				assistantText:
+					"The user wants a long task; the agent was mid-investigation; continue from the summary.",
+				toolCalls: [],
+				finishReason: "stop",
+			};
+		}
+		if (index === 1) {
+			// The model returned nothing usable (provider glitch), which is
+			// what makes the turn look like it "stopped" after compaction.
+			return {
+				assistantText: null,
+				toolCalls: [],
+				finishReason: "stop",
+			};
+		}
+		return {
+			assistantText: "final continuation answer",
+			toolCalls: [],
+			finishReason: "stop",
+		};
+	});
+
+	const context = new ConversationContext({
+		summaryEnabled: true,
+		getContextBudget: () => ({
+			hardContextLimit: 400,
+			reserveTokens: 100,
+			keepRecentTokens: 5,
+		}),
+		keepRecentMessagesFloor: 2,
+	});
+
+	const runner = new AgentRunner({
+		provider,
+		tools: new ToolRegistry([]),
+		context,
+		systemPrompt: "You are a test agent.",
+	});
+
+	const longUserMessage =
+		"A very long message that should trigger summarization when combined with the system prompt and tool definitions. ".repeat(
+			6,
+		);
+	// Seed one turn so the token threshold is crossed by the second turn.
+	await runner.runTurn(longUserMessage);
+
+	const result = await runner.runTurn(longUserMessage);
+
+	// The compaction happened, but the turn continued and produced a real
+	// answer instead of ending with "No response generated.".
+	assert.equal(result.outputText, "final continuation answer");
+	assert.equal(result.steps, 2);
+	assert.equal(
+		context.getSummary(),
+		"The user wants a long task; the agent was mid-investigation; continue from the summary.",
+	);
+	// The continuation's append is below the threshold again, so the final
+	// append does not re-trigger a compaction.
+	assert.equal(result.contextUpdated.summarized, false);
+	// Requests: seed turn, empty response, summarization, continuation turn.
+	assert.equal(provider.requests.length, 4);
+	const continuationRequest = provider.requests[3];
+	assert.ok(continuationRequest);
+	assert.match(
+		JSON.stringify(continuationRequest.messages),
+		/compacted mid-task/,
+	);
+});
+
+test("retries an empty model response when the context has room", async () => {
+	const provider = new MockProvider((_request, index) => {
+		if (index < 2) {
+			return {
+				assistantText: null,
+				toolCalls: [],
+				finishReason: "stop",
+			};
+		}
+		return {
+			assistantText: "real answer after the glitch",
+			toolCalls: [],
+			finishReason: "stop",
+		};
+	});
+
+	const runner = new AgentRunner({
+		provider,
+		tools: new ToolRegistry([]),
+		context: new ConversationContext(),
+		systemPrompt: "You are a test agent.",
+	});
+
+	const result = await runner.runTurn("hello");
+
+	assert.equal(result.outputText, "real answer after the glitch");
+	assert.equal(result.steps, 3);
+	// Two retries are bounded: a third empty response must end the turn.
+	const alwaysEmpty = new MockProvider(() => ({
+		assistantText: null,
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	const boundedRunner = new AgentRunner({
+		provider: alwaysEmpty,
+		tools: new ToolRegistry([]),
+		context: new ConversationContext(),
+		systemPrompt: "You are a test agent.",
+	});
+	const bounded = await boundedRunner.runTurn("hello");
+	assert.equal(bounded.outputText, "No response generated.");
+	assert.equal(bounded.steps, 3);
 });
 
 test("compacts oversized in-turn tool context while preserving current goal", async () => {
