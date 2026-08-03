@@ -15,8 +15,6 @@ import type {
 	ModelProvider,
 	ModelUsage,
 	SessionEntry,
-	ToolCall,
-	ToolExecutionResult,
 	ToolSchema,
 } from "../types.js";
 import type { CompactionHookRegistry } from "./compaction-hook.js";

@@ -335,6 +335,58 @@ test("interactive selector handles raw arrow navigation and cancel", async () =>
 	assert.equal(await cancelPromise, null);
 });
 
+test("parent-TUI selector cancels on Esc and leaves the parent TUI interactive", async () => {
+	const terminal = new FakeTerminal();
+	const tui = new TUI(terminal);
+	tui.addChild(new BaseTextComponent(["BASE"]));
+	tui.start();
+
+	const firstId = "11111111-1111-4111-8111-111111111111";
+	const selectionPromise = selectSessionInteractive(
+		[
+			createSessionSummary({
+				sessionId: firstId,
+				updatedAt: "2026-05-22T00:00:00.000Z",
+			}),
+		],
+		{ parentTui: tui },
+	);
+
+	// Let Pi-tui move focus to the overlay component before sending Esc.
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	terminal.inputHandler?.("\x1B");
+
+	assert.equal(await selectionPromise, null);
+
+	// The parent TUI must survive the cancel: it must still show overlays
+	// and route input (a second ProcessTerminal would pause stdin here and
+	// freeze the REPL that owns this TUI).
+	const probe = new SessionSelectorComponent(
+		createSessionSelectorState([
+			createSessionSummary({
+				sessionId: firstId,
+				updatedAt: "2026-05-22T00:00:00.000Z",
+			}),
+		]),
+	);
+	let probeResult: string | null | undefined;
+	probe.onResolve = (result) => {
+		probeResult = result;
+	};
+	tui.showOverlay(probe, {
+		anchor: "center",
+		width: "90%",
+		maxHeight: "90%",
+	});
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	terminal.inputHandler?.("\r");
+	await new Promise((resolve) => setTimeout(resolve, 20));
+
+	assert.equal(probeResult, firstId);
+
+	tui.stop();
+});
+
 test("overlay composite preserves base content under the selector (Terminal seam)", async () => {
 	const terminal = new FakeTerminal();
 	terminal.columns = 60;
