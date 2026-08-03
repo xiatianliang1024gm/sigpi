@@ -4,6 +4,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import type { ChatCommandMetadata } from "./chat-commands.js";
+import { withAtFileFallback } from "./file-autocomplete-fallback.js";
 import { defaultEditorTheme } from "./tui/themes.js";
 
 export function buildEditor(
@@ -21,6 +22,6 @@ export function buildEditor(
 		})),
 		process.cwd(),
 	);
-	editor.setAutocompleteProvider(provider);
+	editor.setAutocompleteProvider(withAtFileFallback(provider));
 	return editor;
 }
