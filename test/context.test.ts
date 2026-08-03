@@ -564,6 +564,192 @@ test("appendMessages records provider usage for the most recent assistant messag
 	assert.ok((result.tokensBefore ?? 0) >= 1_000);
 });
 
+test("compaction invalidates provider usage so the status bar shows the shrunken window", async () => {
+	// Regression: after /compact (34.3k -> 8.4k) the status bar kept showing
+	// the pre-compaction provider total because lastUsage survived — the old
+	// invalidation compared the pre-slice messageIndex against the new array
+	// length, which kept it whenever the measured message was inside the
+	// retained tail.
+	const provider = new MockProvider(() => ({
+		assistantText: "summary",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	const context = new ConversationContext({
+		summaryEnabled: true,
+		getContextBudget: () => ({
+			hardContextLimit: 200_000,
+			reserveTokens: 16_384,
+			keepRecentTokens: 100_000,
+		}),
+	});
+
+	await context.appendMessages(
+		[
+			{ role: "user", content: "u0" },
+			{ role: "assistant", content: "a0" },
+			{ role: "user", content: "u1" },
+			{ role: "assistant", content: "a1" },
+			{ role: "user", content: "u2" },
+			{ role: "assistant", content: "a2" },
+		],
+		provider,
+		"You are a test agent.",
+		[],
+	);
+	// The runner recorded provider usage on an assistant message well inside
+	// the kept tail (a force compact keeps the last `floor` = 4 messages, so
+	// the measured index 3 is still < 4 after the slice).
+	context.recordUsage(
+		{
+			input: 34_000,
+			output: 300,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 34_300,
+		},
+		3,
+	);
+
+	const result = await context.compactNow(
+		provider,
+		"You are a test agent.",
+		[],
+	);
+	assert.ok(result.summarized);
+	assert.ok((result.tokensBefore ?? 0) >= 34_000);
+
+	// After compact the bar must fall back to the ~8k estimate instead of
+	// the stale pre-compaction 34.3k provider total.
+	assert.equal(context.getLastUsage(), null);
+});
+
+test("resuming a compacted session does not resurrect pre-compaction usage", async () => {
+	// The kept messages' entries persist their pre-compaction `usage` into
+	// the session stream; hydrateState scans recentMessages and would restore
+	// it, so compaction must scrub it off the entries.
+	const provider = new MockProvider(() => ({
+		assistantText: "summary",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	const context = new ConversationContext({
+		summaryEnabled: true,
+		getContextBudget: () => ({
+			hardContextLimit: 200_000,
+			reserveTokens: 16_384,
+			keepRecentTokens: 100_000,
+		}),
+	});
+
+	await context.appendMessages(
+		[
+			{ role: "user", content: "u0" },
+			{ role: "assistant", content: "a0" },
+			{ role: "user", content: "u1" },
+			{ role: "assistant", content: "a1" },
+			{ role: "user", content: "u2" },
+			{ role: "assistant", content: "a2" },
+		],
+		provider,
+		"You are a test agent.",
+		[],
+		undefined,
+		{
+			usage: {
+				input: 34_000,
+				output: 300,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 34_300,
+			},
+		},
+	);
+	const compactResult = await context.compactNow(
+		provider,
+		"You are a test agent.",
+		[],
+	);
+	assert.ok(compactResult.summarized);
+
+	// Compact-then-quit: the newest surviving assistant message still has a
+	// pre-compaction usage entry. Resuming must not restore the 34.3k total.
+	const restored = new ConversationContext({ summaryEnabled: true });
+	restored.hydrateState(context.exportState());
+	assert.equal(restored.getLastUsage(), null);
+});
+
+test("usage recorded after a compaction survives a resume", async () => {
+	// Only the pre-compaction usage is stale; a fresh turn after the compact
+	// re-records ground truth on a new assistant message and resuming must
+	// restore that value.
+	const provider = new MockProvider(() => ({
+		assistantText: "summary",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	const context = new ConversationContext({
+		summaryEnabled: true,
+		getContextBudget: () => ({
+			hardContextLimit: 200_000,
+			reserveTokens: 16_384,
+			keepRecentTokens: 100_000,
+		}),
+	});
+
+	await context.appendMessages(
+		[
+			{ role: "user", content: "u0" },
+			{ role: "assistant", content: "a0" },
+			{ role: "user", content: "u1" },
+			{ role: "assistant", content: "a1" },
+			{ role: "user", content: "u2" },
+			{ role: "assistant", content: "a2" },
+		],
+		provider,
+		"You are a test agent.",
+		[],
+		undefined,
+		{
+			usage: {
+				input: 34_000,
+				output: 300,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 34_300,
+			},
+		},
+	);
+	assert.ok(
+		(await context.compactNow(provider, "You are a test agent.", []))
+			.summarized,
+	);
+
+	await context.appendMessages(
+		[
+			{ role: "user", content: "u3" },
+			{ role: "assistant", content: "a3" },
+		],
+		provider,
+		"You are a test agent.",
+		[],
+		undefined,
+		{
+			usage: {
+				input: 8_000,
+				output: 400,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 8_400,
+			},
+		},
+	);
+
+	const restored = new ConversationContext({ summaryEnabled: true });
+	restored.hydrateState(context.exportState());
+	assert.equal(restored.getLastUsage()?.usage.totalTokens, 8_400);
+});
+
 test("hydrated session forgets provider usage until next model response", async () => {
 	const provider = new MockProvider(() => ({
 		assistantText: "summary",
