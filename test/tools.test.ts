@@ -487,6 +487,22 @@ test("buildSystemPrompt includes platform, shell, and tool safety details", () =
 	assert.doesNotMatch(prompt, /apply_unified_patch/i);
 });
 
+test("buildSystemPrompt surfaces the project directory and shell, but no env vars", () => {
+	const prompt = buildSystemPrompt(createShellRuntime("zsh", "linux"), [], {
+		cwd: "/work/example",
+	});
+
+	assert.match(prompt, /Current project directory: \/work\/example/);
+	assert.match(prompt, /Shell executable: zsh/);
+	// Env vars are deliberately omitted: the agent can fetch them itself, and
+	// dumping them risks leaking secrets into the prompt.
+	assert.doesNotMatch(prompt, /Environment variables:/);
+	assert.doesNotMatch(prompt, /HOME=/);
+	assert.doesNotMatch(prompt, /SHELL=\//);
+	assert.doesNotMatch(prompt, /PATH=/);
+	assert.doesNotMatch(prompt, /API_KEY/);
+});
+
 test("glob schema describes pattern-based file search", () => {
 	const parameters = globTool.parameters as {
 		properties?: {
