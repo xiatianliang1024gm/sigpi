@@ -428,11 +428,17 @@ test("summarizes older context when the token threshold is exceeded", async () =
 		keepRecentMessagesFloor: 2,
 	});
 
+	const progressEvents: TurnProgressEvent[] = [];
 	const runner = new AgentRunner({
 		provider,
 		tools: createDefaultToolRegistry(),
 		context,
 		systemPrompt: "You are a test agent.",
+		options: {
+			progressReporter: (event) => {
+				progressEvents.push(event);
+			},
+		},
 	});
 
 	const longUserMessage =
@@ -442,6 +448,7 @@ test("summarizes older context when the token threshold is exceeded", async () =
 	const longSecondMessage =
 		"Another long message that should keep pressure on context. ".repeat(6);
 	await runner.runTurn(longUserMessage);
+	progressEvents.length = 0;
 	const second = await runner.runTurn(longSecondMessage);
 
 	assert.equal(second.contextUpdated.summarized, true);
@@ -450,6 +457,19 @@ test("summarizes older context when the token threshold is exceeded", async () =
 		"User asked for a long explanation; keep the key facts only.",
 	);
 	assert.ok(context.getRecentMessages().length <= 2);
+
+	const compactedEvent = progressEvents.find(
+		(event) => event.type === "context_compacted",
+	);
+	assert.ok(
+		compactedEvent,
+		"token-triggered compaction must emit context_compacted",
+	);
+	assert.equal(compactedEvent?.trigger, "token");
+	assert.ok(
+		(compactedEvent?.tokensAfter ?? 0) < (compactedEvent?.tokensBefore ?? 0),
+		"auto compaction must shrink the context window",
+	);
 });
 
 test("continues the turn after a token-triggered compaction instead of stopping", async () => {
@@ -724,6 +744,19 @@ test("compacts oversized in-turn tool context while preserving current goal", as
 	assert.match(
 		checkpointEvent?.detail ?? "",
 		/estimated context before checkpoint/,
+	);
+	const compactedEvent = progressEvents.find(
+		(event) => event.type === "context_compacted",
+	);
+	assert.match(
+		compactedEvent?.message ?? "",
+		/Checkpoint compacted current turn/,
+	);
+	assert.equal(typeof compactedEvent?.tokensBefore, "number");
+	assert.equal(typeof compactedEvent?.tokensAfter, "number");
+	assert.ok(
+		(compactedEvent?.tokensAfter ?? 0) < (compactedEvent?.tokensBefore ?? 0),
+		"checkpoint compaction must shrink the context window",
 	);
 });
 

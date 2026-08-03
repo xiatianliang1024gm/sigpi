@@ -19,6 +19,7 @@ import {
 	formatSessionHistory,
 	showHistoryOverlay,
 } from "./tui/history-component.js";
+import { formatCompactNumber } from "./tui/status-bar.js";
 import { defaultSelectListTheme } from "./tui/themes.js";
 import type {
 	ContextUpdateResult,
@@ -191,36 +192,18 @@ export function createChatCommandDefinitions(
 				}
 
 				if (!result.summarized && !result.trimmed) {
-					context.writeLine("Nothing to compact.");
 					context.writeLine(
-						`Recent messages: ${result.recentMessageCount}. Summary chars: ${result.summaryChars}. Estimated context size: ${result.tokensAfter} tokens.`,
+						`Nothing to compact. Context window: ${formatCompactNumber(result.tokensAfter)} tokens.`,
 					);
 					return { action: "continue" };
 				}
 
-				const changes = [];
-				if (result.summarized) {
-					changes.push("summary updated");
-				}
-				if (result.trimmed) {
-					changes.push("recent messages trimmed");
-				}
-
 				context.writeLine(
-					`Context compacted: ${changes.join(", ")}. Snapshot saved.`,
+					`Context compacted: context window ${formatCompactNumber(result.tokensBefore)} → ${formatCompactNumber(result.tokensAfter)} tokens.`,
 				);
 				if (instructions) {
-					context.writeLine(`Custom instructions applied to summary.`);
+					context.writeLine("Custom instructions applied to summary.");
 				}
-				context.writeLine(
-					`Recent messages: ${result.previousRecentMessageCount} -> ${result.recentMessageCount}.`,
-				);
-				context.writeLine(
-					`Summary chars: ${result.previousSummaryChars} -> ${result.summaryChars}.`,
-				);
-				context.writeLine(
-					`Estimated context size: ${result.tokensBefore} -> ${result.tokensAfter} tokens.`,
-				);
 				return { action: "continue" };
 			},
 		},

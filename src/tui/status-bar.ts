@@ -204,6 +204,8 @@ export function getStatusEventLabel(
 			return "thinking";
 		case "context_checkpoint":
 			return "checkpoint";
+		case "context_compacted":
+			return "compacted";
 		case "turn_finished":
 			return "done";
 		case "turn_interrupted":
@@ -215,7 +217,7 @@ export function getStatusEventLabel(
 	}
 }
 
-function formatCompactNumber(value: number): string {
+export function formatCompactNumber(value: number): string {
 	if (!Number.isFinite(value)) {
 		return "0";
 	}

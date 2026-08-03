@@ -281,6 +281,16 @@ export class AgentRunner {
 				detail: `estimated context before checkpoint: ${estimatedTokens} tokens; kept recent messages: ${keptTurnMessages.length}`,
 				summaryCount,
 			});
+			reportProgress({
+				type: "context_compacted",
+				step: lastStep,
+				turnId,
+				message: "Checkpoint compacted current turn",
+				tokensBefore: estimatedTokens,
+				tokensAfter: estimateWorkingMessageTokens(),
+				trigger: "token",
+				summaryCount,
+			});
 		};
 
 		const finishInterruptedTurn = (stage: "model" | "tool"): RunTurnResult => {
@@ -615,6 +625,20 @@ export class AgentRunner {
 				turnMessagesPersisted = true;
 				summaryCount += Number(contextUpdated.summarized);
 				trimCount += Number(contextUpdated.trimmed);
+
+				if (contextUpdated.summarized || contextUpdated.trimmed) {
+					reportProgress({
+						type: "context_compacted",
+						step,
+						turnId,
+						message: "Context compacted",
+						tokensBefore: contextUpdated.tokensBefore,
+						tokensAfter: contextUpdated.tokensAfter,
+						trigger: contextUpdated.trigger ?? null,
+						summaryCount,
+						trimCount,
+					});
+				}
 
 				// A model response with no text and no tool calls is not a valid
 				// final answer — ending the turn here surfaces as "No response

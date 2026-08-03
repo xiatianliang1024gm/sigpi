@@ -19,6 +19,13 @@ const inTurnEvents: TurnProgressEvent[] = [
 	{ type: "model_delta", step: 1, turnId: "t", contentDelta: "x" },
 	{ type: "model_request_finished", step: 1, turnId: "t", elapsedMs: 1 },
 	{ type: "assistant_message", step: 1, turnId: "t", assistantText: "note" },
+	{
+		type: "context_compacted",
+		step: 1,
+		turnId: "t",
+		tokensBefore: 100,
+		tokensAfter: 50,
+	},
 	{ type: "tool_calls_received", step: 1, turnId: "t" },
 	{
 		type: "tool_execution_started",
@@ -101,6 +108,10 @@ test("terminal states keep their explicit labels", () => {
 	assert.equal(
 		getStatusEventLabel({ type: "turn_failed", turnId: "t" }),
 		"failed",
+	);
+	assert.equal(
+		getStatusEventLabel({ type: "context_compacted", turnId: "t" }),
+		"compacted",
 	);
 	assert.equal(
 		getStatusEventLabel({
