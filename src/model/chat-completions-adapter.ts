@@ -100,7 +100,18 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 			tools: request.tools.length > 0 ? request.tools : undefined,
 			temperature: request.temperature,
 			max_tokens: request.maxTokens,
-			...(this.config.stream ? { stream: true } : {}),
+			...(this.config.stream
+				? {
+						stream: true,
+						// OpenAI's chat/completions API (and most OpenAI-compatible
+						// providers, e.g. the internal h800 MiniMax deployment) only
+						// emit a `usage` chunk when the request opts in. Without this,
+						// streaming responses carry no token counts, the adapter drops
+						// the usage, and the status bar is stuck at `?` for the whole
+						// session.
+						stream_options: { include_usage: true },
+					}
+				: {}),
 		};
 	}
 
