@@ -169,7 +169,16 @@ export function computeCacheHitRate(usage: ModelUsage): string | null {
 	return percent.toFixed(1);
 }
 
-/** Map a turn progress event to the short label suffixed on the status bar. */
+/**
+ * Map a turn progress event to the short label suffixed on the status bar.
+ *
+ * Every in-turn event resolves to a visible label so the bar always tells the
+ * user the agent is still busy: "thinking" while the model is generating,
+ * "working" in every other active phase (between steps, dispatching and
+ * running tools), and a terminal label only when the turn has actually ended.
+ * A missing label would leave the bar looking idle while the agent is working,
+ * and reporting "done" on `tool_execution_*` made a running tool look finished.
+ */
 export function getStatusEventLabel(
 	event: TurnProgressEvent | null,
 ): string | null {
@@ -179,27 +188,22 @@ export function getStatusEventLabel(
 
 	switch (event.type) {
 		case "turn_started":
-			return "working";
 		case "step_started":
-			return null;
+		case "model_request_finished":
+		case "assistant_message":
+		case "tool_calls_received":
+		case "tool_execution_started":
+		case "tool_execution_finished":
+			return "working";
 		case "interrupt_requested":
 			return event.interruptStage === "model"
 				? "cancelling"
 				: "interrupt requested";
 		case "model_request_started":
-			return "thinking";
 		case "model_delta":
-			return null;
-		case "model_request_finished":
-			return null;
-		case "assistant_message":
-			return null;
+			return "thinking";
 		case "context_checkpoint":
 			return "checkpoint";
-		case "tool_calls_received":
-			return null;
-		case "tool_execution_started":
-		case "tool_execution_finished":
 		case "turn_finished":
 			return "done";
 		case "turn_interrupted":
