@@ -34,6 +34,7 @@ test("toParams emits SDK-shaped chat.completions params", () => {
 		temperature: number;
 		max_tokens: number;
 		stream: boolean;
+		stream_options?: { include_usage?: boolean };
 	};
 	assert.equal(params.model, "demo");
 	assert.deepEqual(params.messages, [{ role: "user", content: "hi" }]);
@@ -41,6 +42,11 @@ test("toParams emits SDK-shaped chat.completions params", () => {
 	assert.equal(params.temperature, 0.2);
 	assert.equal(params.max_tokens, 512);
 	assert.equal(params.stream, true);
+	// OpenAI's chat/completions API (and most OpenAI-compatible providers)
+	// only emit a `usage` chunk when the request opts in via
+	// `stream_options.include_usage`. Without it, streaming responses carry
+	// no token counts and the status bar is stuck at `?`.
+	assert.deepEqual(params.stream_options, { include_usage: true });
 });
 
 test("toParams omits stream when the adapter is not streaming", () => {
@@ -49,8 +55,12 @@ test("toParams omits stream when the adapter is not streaming", () => {
 		messages: [{ role: "user", content: "hi" }],
 		tools: [],
 	};
-	const params = adapter.toParams(req) as { stream?: boolean };
+	const params = adapter.toParams(req) as {
+		stream?: boolean;
+		stream_options?: unknown;
+	};
 	assert.equal(params.stream, undefined);
+	assert.equal(params.stream_options, undefined);
 });
 
 test("toParams emits SDK-shaped params for the chat.completions schema (issue #26)", () => {
@@ -68,6 +78,7 @@ test("toParams emits SDK-shaped params for the chat.completions schema (issue #2
 		temperature: 0.4,
 		max_tokens: 256,
 		stream: true,
+		stream_options: { include_usage: true },
 	});
 });
 
