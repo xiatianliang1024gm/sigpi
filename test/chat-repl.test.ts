@@ -579,7 +579,7 @@ test("formatStatusBar hides cache hit rate when there is no cacheable input", as
 	}
 });
 
-test("formatStatusBar shows Hit(0.0%) for a cold cache with real input", async () => {
+test("formatStatusBar omits the Hit segment when the provider reports no cache activity", async () => {
 	const cwd = await realpath(
 		await createTempDir("sigpi-chat-repl-status-cold-"),
 	);
@@ -608,7 +608,9 @@ test("formatStatusBar shows Hit(0.0%) for a cold cache with real input", async (
 			[],
 			undefined,
 			{
-				// cacheRead = 0, input > 0 => legitimate 0.0% hit rate.
+				// cacheRead = 0, input > 0: providers that don't return
+				// `prompt_tokens_details` (e.g. MiniMax) leave cacheRead at 0.
+				// The bar must omit the uninformative `Hit(0.0%)` segment.
 				usage: {
 					input: 1_000,
 					output: 50,
@@ -620,7 +622,7 @@ test("formatStatusBar shows Hit(0.0%) for a cold cache with real input", async (
 		);
 
 		const status = statusLine(await formatStatusBar(state));
-		assert.match(status, /Hit\(0\.0%\)/);
+		assert.doesNotMatch(status, /Hit/);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);

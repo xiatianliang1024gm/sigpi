@@ -153,19 +153,21 @@ export class StatusBarComponent implements Component {
 
 /**
  * Compute the cache hit rate as a percentage of input tokens that came from
- * the prompt cache. Returns `null` when there is no input to measure against
- * (so we never render `Hit(NaN%)` or `Hit(0.0%)` for a fresh conversation).
+ * the prompt cache. Returns `null` when there is nothing meaningful to report
+ * — either no input at all, or no cache hits. A `Hit(0.0%)` segment is
+ * uninformative (it cannot distinguish "provider doesn't report cache info"
+ * from "first request, cache cold") and clutters the bar, so we only render
+ * the segment once the provider reports actual cache activity.
  * The result is rounded to one decimal place and formatted as a string so the
  * status bar always renders a consistent `Hit(80.0%)` shape.
  */
 export function computeCacheHitRate(usage: ModelUsage): string | null {
 	const input = usage.input;
 	const cacheRead = usage.cacheRead;
-	const denominator = input + cacheRead;
-	if (denominator <= 0) {
+	if (input <= 0 || cacheRead <= 0) {
 		return null;
 	}
-	const percent = Math.round((cacheRead / denominator) * 1000) / 10;
+	const percent = Math.round((cacheRead / (input + cacheRead)) * 1000) / 10;
 	return percent.toFixed(1);
 }
 
