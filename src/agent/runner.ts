@@ -600,6 +600,15 @@ export class AgentRunner {
 					reasoning: response.reasoning ?? undefined,
 				});
 				turnMessages.push(assistantMessage);
+				// Mirror the tool-call branch (which pushes the assistant
+				// message into `workingMessages`): the final answer is part of
+				// the request payload, and `estimateWorkingMessageTokens`
+				// resolves `lastUsage.messageIndex` against this list. Without
+				// the push, the measured assistant message sits at an index
+				// one past the working list, the usage path is skipped, and
+				// the `turn_finished` estimate falls back to the inflated
+				// chars/4 heuristic (e.g. ~5.2K vs the provider's ~2.3K).
+				workingMessages.push(assistantMessage);
 
 				let contextUpdated: ContextUpdateResult;
 				try {
