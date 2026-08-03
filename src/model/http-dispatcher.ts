@@ -58,7 +58,7 @@ let currentProxyStatus: HttpProxyStatus = {
  * effect). Falls back to the live `globalThis.fetch` when no proxy dispatcher
  * was installed (direct connections). Pass this to the OpenAI SDK client so
  * model requests route through the *same* proxy as the rest of SigPi, reusing
- * the one proxy implementation instead of inventing a second one (ADR-0024).
+ * the one proxy implementation instead of inventing a second one.
  */
 export function getProxyFetch(): typeof fetch {
 	return installedGlobalFetch ?? globalThis.fetch;

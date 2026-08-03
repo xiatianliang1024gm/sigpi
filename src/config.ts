@@ -457,7 +457,7 @@ function mapSection<T>(
 }
 
 /**
- * Execution-guard keys removed by ADR 0023. A config that still carries them
+ * Execution-guard keys removed from SigPi. A config that still carries them
  * must fail to load with a clear, actionable error rather than being silently
  * stripped (which would mask a now-invalid setup).
  */
@@ -502,7 +502,7 @@ function describeConfigSchemaError(error: z.ZodError): string {
 	const parts: string[] = [];
 	if (removed.length > 0) {
 		parts.push(
-			`Config contains removed execution-guard keys that can no longer be loaded: ${removed.join(", ")}. These guards were removed (ADR 0023); SigPi now runs with the account's own permissions.`,
+			`Config contains removed execution-guard keys that can no longer be loaded: ${removed.join(", ")}. These guards were removed; SigPi now runs with the account's own permissions.`,
 		);
 	}
 	if (others.length > 0) {

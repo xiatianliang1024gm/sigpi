@@ -69,7 +69,7 @@ export interface AgentRuntime {
 	/**
 	 * Point the conversation context's budget getter at a newly selected
 	 * model. Called by `/model switch` so the compaction trigger tracks the
-	 * active model each turn (ADR-0021).
+	 * active model each turn.
 	 */
 	setActiveModel: (model: ModelConfig) => void;
 }
@@ -232,7 +232,7 @@ export async function createAgentRuntime(
 	const compactionHooks = createCompactionHookRegistry();
 	const tools = createDefaultToolRegistry(shellRuntime, config.tools.bash);
 	// Holder for the *active* model so the context budget getter can track
-	// `/model switch` each turn (ADR-0021). The context never caches a budget;
+	// `/model switch` each turn. The context never caches a budget;
 	// it re-reads this holder on every compaction / estimate.
 	const activeModelRef: { current: ModelConfig } = { current: config.model };
 	const conversationContext = new ConversationContext({

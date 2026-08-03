@@ -103,7 +103,7 @@ export class ConversationContext {
 			getRunId: () => this.runId,
 			getSessionId: () => this.sessionId,
 			getLogger: () => this.logger,
-			getBudget: () => this.getBudget(),
+			getBudget: () => this.getContextBudget(),
 			estimateRequest: (...args) => this.estimateRequest(...args),
 			recordCompactionEntry: (args) => this.recordCompaction(args),
 		};
@@ -172,7 +172,6 @@ export class ConversationContext {
 		},
 	): Promise<ContextUpdateResult> {
 		const tagged = ensureMessageIds(messages);
-		this.recordMessages(tagged);
 		this.recentMessages.push(...tagged);
 		this.entries = appendMessageEntries({
 			entries: this.entries,
@@ -211,7 +210,6 @@ export class ConversationContext {
 		},
 	): ContextUpdateResult {
 		const tagged = ensureMessageIds(messages);
-		this.recordMessages(tagged);
 		this.recentMessages.push(...tagged);
 		this.entries = appendMessageEntries({
 			entries: this.entries,
@@ -273,10 +271,6 @@ export class ConversationContext {
 
 	getRecentMessages(): Message[] {
 		return [...this.recentMessages];
-	}
-
-	recordToolExecution(_toolCall: ToolCall, _result: ToolExecutionResult): void {
-		// No-op: exploration ledger has been removed.
 	}
 
 	getContextBudget(): ContextBudget {
@@ -345,10 +339,6 @@ export class ConversationContext {
 		this.lastUsage = null;
 	}
 
-	private recordMessages(_messages: readonly Message[]): void {
-		// No-op: previously updated exploration ledger from messages.
-	}
-
 	private recordCompaction(args: {
 		summarizedCount: number;
 		trigger: ContextUpdateResult["trigger"];
@@ -372,10 +362,6 @@ export class ConversationContext {
 		});
 	}
 
-	private getBudget(): ContextBudget {
-		return this.getContextBudget();
-	}
-
 	private estimateRequest(
 		systemPrompt: string,
 		toolSchemas: readonly ToolSchema[],
@@ -395,7 +381,7 @@ export class ConversationContext {
 			lastUsageMessageIndex: this.lastUsage?.messageIndex ?? null,
 		});
 
-		const budget = this.getBudget();
+		const budget = this.getContextBudget();
 		const threshold = Math.max(
 			0,
 			budget.hardContextLimit - budget.reserveTokens,

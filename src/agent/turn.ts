@@ -27,7 +27,7 @@ export type TurnResult =
  * `SessionRuntime` (which binds `AgentRunner` + `ConversationContext` +
  * `SessionStore` + `PersistedSession`) and is the only turn interface the REPL
  * and one-shot paths hold. Replaces the old `runner | sessionRuntime` dual
- * state and the `executeChatTurn` wrapper (ADR-0010).
+ * state and the `executeChatTurn` wrapper.
  */
 export class AgentTurn {
 	constructor(

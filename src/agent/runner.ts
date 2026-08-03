@@ -12,6 +12,7 @@ import type {
 	Message,
 	ModelProvider,
 	RunTurnResult,
+	RuntimeLogger,
 	ToolSchema,
 	TurnProgressEvent,
 } from "../types.js";
@@ -475,7 +476,6 @@ export class AgentRunner {
 							});
 
 						toolExecutions.push({ toolCall, result });
-						this.context.recordToolExecution(toolCall, result);
 
 						if (!result.ok) {
 							logger?.error("tool_execution_failed", {
@@ -587,27 +587,11 @@ export class AgentRunner {
 					);
 				} catch (error) {
 					if (error instanceof CompactionFailedError) {
-						logger?.warn("turn_compaction_failed", {
-							runId: this.options.runId,
-							sessionId: this.options.sessionId ?? null,
+						contextUpdated = this.compactionFailureUpdate(
+							error,
 							turnId,
-							reason: error.reason,
-							trigger: error.trigger,
-							error: error.message,
-						});
-						contextUpdated = {
-							summarized: false,
-							trimmed: true,
-							summary: this.context.getSummary(),
-							recentMessageCount: this.context.getRecentMessages().length,
-							previousRecentMessageCount:
-								this.context.getRecentMessages().length,
-							summaryChars: this.context.getSummary()?.length ?? 0,
-							previousSummaryChars: this.context.getSummary()?.length ?? 0,
-							tokensBefore: 0,
-							tokensAfter: 0,
-							trigger: error.trigger,
-						};
+							logger,
+						);
 					} else {
 						throw error;
 					}
@@ -675,26 +659,7 @@ export class AgentRunner {
 				);
 			} catch (error) {
 				if (error instanceof CompactionFailedError) {
-					logger?.warn("turn_compaction_failed", {
-						runId: this.options.runId,
-						sessionId: this.options.sessionId ?? null,
-						turnId,
-						reason: error.reason,
-						trigger: error.trigger,
-						error: error.message,
-					});
-					contextUpdated = {
-						summarized: false,
-						trimmed: true,
-						summary: this.context.getSummary(),
-						recentMessageCount: this.context.getRecentMessages().length,
-						previousRecentMessageCount: this.context.getRecentMessages().length,
-						summaryChars: this.context.getSummary()?.length ?? 0,
-						previousSummaryChars: this.context.getSummary()?.length ?? 0,
-						tokensBefore: 0,
-						tokensAfter: 0,
-						trigger: error.trigger,
-					};
+					contextUpdated = this.compactionFailureUpdate(error, turnId, logger);
 				} else {
 					throw error;
 				}
@@ -740,8 +705,6 @@ export class AgentRunner {
 		} catch (error) {
 			if (
 				isTurnInterruptedError(error) ||
-				(error instanceof TurnInterruptedError &&
-					error.source === "user_escape") ||
 				(interruptController?.isInterruptRequested() ?? false)
 			) {
 				const stage =
@@ -797,6 +760,39 @@ export class AgentRunner {
 		}
 	}
 
+	/**
+	 * Build the fallback {@link ContextUpdateResult} when compaction itself
+	 * fails, so the turn still completes with the messages persisted
+	 * untrimmed. Shared by the normal-completion and max-steps paths.
+	 */
+	private compactionFailureUpdate(
+		error: CompactionFailedError,
+		turnId: string,
+		logger: RuntimeLogger | undefined,
+	): ContextUpdateResult {
+		logger?.warn("turn_compaction_failed", {
+			runId: this.options.runId,
+			sessionId: this.options.sessionId ?? null,
+			turnId,
+			reason: error.reason,
+			trigger: error.trigger,
+			error: error.message,
+		});
+		const recentMessageCount = this.context.getRecentMessages().length;
+		return {
+			summarized: false,
+			trimmed: true,
+			summary: this.context.getSummary(),
+			recentMessageCount,
+			previousRecentMessageCount: recentMessageCount,
+			summaryChars: this.context.getSummary()?.length ?? 0,
+			previousSummaryChars: this.context.getSummary()?.length ?? 0,
+			tokensBefore: 0,
+			tokensAfter: 0,
+			trigger: error.trigger,
+		};
+	}
+
 	async compactContext(options?: {
 		instructions?: string;
 		abortSignal?: AbortSignal;
@@ -839,7 +835,7 @@ export function summarizeToolExecutions(
 ): string[] {
 	// Only file read/modify operations belong in the turn summary. Classify by
 	// tool name (not argument shape) so bash/grep/glob/update-plan are excluded
-	// and edit/write are labeled as modifications, not reads. See ADR-0022.
+	// and edit/write are labeled as modifications, not reads.
 	const FILE_OP_TOOLS = new Set(["read", "edit", "write"]);
 
 	// Accumulate one status per path; "modified" wins over "read" so a file that

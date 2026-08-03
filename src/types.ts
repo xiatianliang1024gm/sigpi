@@ -207,11 +207,11 @@ export interface TurnProgressEvent {
 	toolResult?: string;
 	toolResultData?: JsonValue;
 	assistantText?: string;
-	/** Incremental reasoning text emitted mid-stream (spec-0020). */
+	/** Incremental reasoning text emitted mid-stream. */
 	reasoningDelta?: string;
-	/** Incremental assistant content text emitted mid-stream (spec-0020). */
+	/** Incremental assistant content text emitted mid-stream. */
 	contentDelta?: string;
-	/** Incremental tool-call argument fragment emitted mid-stream (spec-0020). */
+	/** Incremental tool-call argument fragment emitted mid-stream. */
 	toolCallDelta?: {
 		index: number;
 		id?: string;
@@ -313,7 +313,7 @@ export interface ModelResponse {
  * A single streaming delta emitted by a model provider mid-request. The
  * transport surfaces these through {@link WireFormatAdapter.onDelta} so the
  * agent loop can render partial reasoning/content without waiting for the full
- * response to finalize (spec-0020).
+ * response to finalize.
  *
  * Exactly one of `reasoningDelta` / `contentDelta` / `toolCallDelta` is
  * expected to be present per delta, but adapters may emit a delta with multiple
@@ -356,7 +356,7 @@ export type { ModelProvider } from "./model/provider.js";
 /**
  * The model-bound context budget that drives compaction. Capacity is a
  * physical property of the selected model, so the whole budget object lives
- * at the model level (see ADR-0021) rather than the agent level.
+ * at the model level rather than the agent level.
  */
 export interface ContextBudget {
 	/**
@@ -382,7 +382,7 @@ export interface ContextManagerOptions {
 	 * Returns the active model's context budget. Called at every compaction /
 	 * estimate so the soft trigger threshold tracks the model selected via
 	 * `/model switch`. This is the single source of truth for the "which
-	 * model is active" budget knowledge (see ADR-0021).
+	 * model is active" budget knowledge.
 	 */
 	getContextBudget: () => ContextBudget;
 	/**

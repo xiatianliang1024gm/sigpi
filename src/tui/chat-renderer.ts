@@ -6,7 +6,6 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ChatCommandMetadata } from "../chat-commands.js";
 import { buildEditor } from "../chat-input.js";
-import type { FileEditSummary } from "../tools/edit-summary.js";
 import {
 	AssistantMessageComponent,
 	SystemMessageComponent,
@@ -22,16 +21,15 @@ export interface AssistantMessageView {
 
 /** Handle for an in-flight tool-call line in the activity log. */
 export interface ToolLineHandle {
-	/** Mark the tool line as succeeded. For edit/write tools, an optional
-	 *  {@link FileEditSummary} renders an inline diff below. */
-	finish(diffSummary?: FileEditSummary | null): void;
+	/** Mark the tool line as succeeded. */
+	finish(): void;
 	/** Append a red error summary to the same line. */
 	fail(error: string): void;
 }
 
 /**
  * Output surface for the REPL loop. Two implementations: {@link ChatRenderer}
- * (persistent Pi-tui `TUI`, ADR 0025 A1) and a console fallback for non-TTY /
+ * (persistent Pi-tui `TUI`) and a console fallback for non-TTY /
  * one-shot modes. The loop is written against this interface so the TTY and
  * non-TTY paths share one control flow.
  */
@@ -46,7 +44,7 @@ export interface ReplView {
 	endTurn(): void;
 	/** Open a tool-call line that resolves in place when the tool finishes or
 	 *  fails. Replaces the one-shot {@link addToolResult}. */
-	beginToolLine(id: string, label: string, toolName: string): ToolLineHandle;
+	beginToolLine(id: string, label: string): ToolLineHandle;
 	appendSystem(text: string, tone?: "error" | "info"): void;
 	setStatusBarModel(model: StatusBarModel): void;
 	getStatusBarModel(): StatusBarModel | null;
@@ -153,15 +151,15 @@ export class ChatRenderer implements ReplView {
 		this.interruptHandler = null;
 	}
 
-	beginToolLine(_id: string, label: string, toolName: string): ToolLineHandle {
-		const component = new ToolLineComponent(label, toolName);
+	beginToolLine(_id: string, label: string): ToolLineHandle {
+		const component = new ToolLineComponent(label);
 		this.appendComponent(component);
 		let finalized = false;
 
-		const finish = (diffSummary?: FileEditSummary | null) => {
+		const finish = () => {
 			if (finalized) return;
 			finalized = true;
-			component.finish(diffSummary ?? undefined);
+			component.finish();
 			this.tui.requestRender();
 		};
 

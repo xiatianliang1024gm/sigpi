@@ -146,7 +146,7 @@ function formatHttpErrorMessage(
  * Merge several abort signals (user/interrupt, total-request timer, idle/stall
  * timer) into one. Whichever fires first aborts the merged controller, and the
  * merged signal's `reason` is set to the firing signal's reason so callers can
- * tell a user interrupt from an idle/stall or total timeout (ADR-0024).
+ * tell a user interrupt from an idle/stall or total timeout.
  */
 function mergeAbortSignals(
 	signals: Array<AbortSignal | undefined>,
@@ -191,7 +191,7 @@ function truncate(value: string, maxChars: number): JsonValue {
  * Headroom subtracted from the context window when capping `max_tokens`, so a
  * request is never sized right up against the model's hard limit. Kept
  * separate from `reserveTokens`, which stays the compaction headroom
- * (ADR-0021 untouched) — see issue #29.
+ * — see issue #29.
  */
 export const MAX_TOKENS_CLAMP_BUFFER_TOKENS = 4096;
 
@@ -294,7 +294,7 @@ function mapSdkError(
 			return reason;
 		}
 		// A total or idle/stall timer firing means the turn hung, not a user
-		// interrupt — classify as `timeout` (ADR-0024). The user/interrupt path
+		// interrupt — classify as `timeout`. The user/interrupt path
 		// is handled above via the TurnInterruptedError reason.
 		if (totalController.signal.aborted || idleController.signal.aborted) {
 			return new ModelRequestError(
@@ -552,11 +552,12 @@ export class ModelTransport {
 		adapter: WireFormatAdapter,
 		onDelta?: (delta: ModelDelta) => void,
 	): Promise<ModelResponse> {
-		// Total request timeout (ADR-0024): bounds the whole request from start
+		// Total request timeout: bounds the whole request from start
 		// to stream-end and is NOT reset on received bytes. This catches a
-		// reasoning-forever model that streams thinking indefinitely (the ADR
-		// 0020 accepted gap) — the idle/stall timer below is kept happy by those
-		// thinking bytes, so only a byte-independent total deadline stops it.
+		// reasoning-forever model that streams thinking indefinitely (the gap
+		// the old idle-only design left open) — the idle/stall timer below is
+		// kept happy by those thinking bytes, so only a byte-independent total
+		// deadline stops it.
 		const totalController = new AbortController();
 		const totalTimer = setTimeout(
 			() => totalController.abort(new Error("model_total_timeout")),
@@ -565,7 +566,7 @@ export class ModelTransport {
 		// Idle/stall timer: bounds silence. For streaming it resets on every
 		// received chunk; for non-streaming it bounds the whole request. The
 		// OpenAI SDK owns the per-byte SSE read, so this timer is our
-		// dead-server / mid-stream-silence guard (ADR-0022).
+		// dead-server / mid-stream-silence guard.
 		const idleController = new AbortController();
 		const idleTimer = setTimeout(
 			() => idleController.abort(new Error("model_idle_timeout")),
@@ -573,7 +574,7 @@ export class ModelTransport {
 		);
 		// One merged signal: a user/ESC interrupt, the byte-independent total
 		// deadline, or the idle/stall silence deadline — whichever fires first
-		// aborts the SDK request (ADR-0024).
+		// aborts the SDK request.
 		const signal = mergeAbortSignals([
 			request.abortSignal,
 			totalController.signal,
@@ -697,7 +698,7 @@ export class ModelTransport {
 			// If the total or idle/stall timer fired, the stream ended early —
 			// classify that as a `timeout` rather than a generic stream_error.
 			// The total timer (bytes-independent) catches reasoning-forever; the
-			// idle timer catches a dead server / mid-stream silence (ADR-0024).
+			// idle timer catches a dead server / mid-stream silence.
 			if (totalController.signal.aborted || idleController.signal.aborted) {
 				throw new ModelRequestError(
 					`Model request timed out after ${this.config.timeoutMs}ms.`,

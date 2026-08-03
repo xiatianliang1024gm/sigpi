@@ -202,7 +202,7 @@ export class ResponsesAdapter implements WireFormatAdapter {
 				if (typeof f.output_text === "string") {
 					this.accumulated.output_text = f.output_text;
 				}
-				// response.completed is not the assembly source (ADR-0007): we
+				// response.completed is not the assembly source: we
 				// only adopt its output when our own folding produced nothing.
 				if (
 					Array.isArray(f.output) &&

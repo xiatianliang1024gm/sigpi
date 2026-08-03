@@ -7,7 +7,7 @@ import {
 import type { ModelUsage, TurnProgressEvent } from "../types.js";
 
 /**
- * Immutable view-model for the status bar (ADR 0022). The footer component
+ * Immutable view-model for the status bar. The footer component
  * renders this into a single line; callers build it (including the async git
  * branch lookup) and hand it to {@link StatusBarComponent}.
  */
@@ -29,7 +29,7 @@ export interface StatusBarModel {
 }
 
 /**
- * Compose the ADR 0022 status bar line from a {@link StatusBarModel}.
+ * Compose the status bar line from a {@link StatusBarModel}.
  *
  * Layout: `{model} | {used}/{limit} ({pct}%) Hit(x%) | {cwd} ({branch})`.
  * Before the first response (or after `recover()`) `usedTokens` is `null` and
@@ -66,7 +66,7 @@ export function composeStatusBar(model: StatusBarModel): string {
 }
 
 /**
- * Pi-tui footer / overlay component that renders the ADR 0022 status bar.
+ * Pi-tui footer / overlay component that renders the status bar.
  *
  * It is a drop-in Pi-tui {@link Component}: `render(width)` returns the single
  * status line, and `invalidate()` lets a host TUI drop cached state on a full
