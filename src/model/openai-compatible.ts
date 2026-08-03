@@ -19,17 +19,17 @@ import type { WireFormatAdapter } from "./wire-format.js";
  * openai-compatible path. SigPi keeps the `Wire format adapter` for
  * schema translation and supplies its own idle/stall timer + retry/backoff on
  * top. The SDK's own retry is disabled (`maxRetries: 0`) so SigPi's retry loop
- * governs (ADR-0022). The SDK client is constructed with SigPi's existing
+ * governs. The SDK client is constructed with SigPi's existing
  * proxy `fetch` (the undici dispatcher installed by `configureHttpProxy`) so
  * outbound model requests route through the same proxy as the rest of SigPi
- * when one is configured (ADR-0024). No new proxy code — we reuse the one
+ * when one is configured. No new proxy code — we reuse the one
  * proxy implementation.
  */
 export function buildSdkClient(config: ModelConfig): OpenAI {
 	return new OpenAI({
 		apiKey: config.apiKey,
 		baseURL: config.baseURL,
-		// Total request deadline (ADR-0024): the SDK aborts the connect/headers
+		// Total request deadline: the SDK aborts the connect/headers
 		// phase at `timeoutMs`. SigPi's own total timer (ModelTransport) extends
 		// that bound across the whole stream read, so a reasoning-forever model
 		// is killed even though the idle/stall timer keeps resetting on bytes.

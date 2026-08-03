@@ -5,19 +5,15 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
-import type { FileEditSummary } from "../tools/edit-summary.js";
-import { FileEditComponent } from "./file-edit-renderer.js";
 import { defaultMarkdownTheme } from "./themes.js";
 
 const GLYPH_BULLET = "\u25CF"; // ●
 const GLYPH_TOOL = "\u23BF"; // ⎿
-const GLYPH_DIFF = "\u23D0"; // ⏐
 
 const INDENT_TOOL = "  "; // 2-space indent for tool lines
-const INDENT_DIFF = "    "; // 4-space indent for diff lines
 
 /**
- * A single message in the persistent transcript. Under ADR 0025 the transcript
+ * A single message in the persistent transcript. The transcript
  * is a Pi-tui component tree (`chatContainer`) scrolled by Pi-tui's viewport;
  * each turn appends one of these components instead of printing to `stdout`.
  *
@@ -46,12 +42,12 @@ export class UserMessageComponent implements Component {
 
 /**
  * Streaming assistant message. The agent loop feeds it incremental
- * {@link ModelDelta} fragments (spec-0020 / ADR 0025): reasoning folds into a
+ * {@link ModelDelta} fragments: reasoning folds into a
  * dim "thinking" block and content into the answer body, both rendered live,
  * in place. Unlike the retired `ReasoningStreamComponent` this component is a
  * permanent member of the transcript — it is never cleared, only finalized.
  *
- * Under ADR 0026 non-thinking content lines are prefixed with `●` (bullet) to
+ * Non-thinking content lines are prefixed with `●` (bullet) to
  * form a visual narrative stream.
  */
 export class AssistantMessageComponent implements Component {
@@ -123,25 +119,19 @@ export class AssistantMessageComponent implements Component {
 /**
  * A single tool-call line in the activity log. Two-phase lifecycle:
  * phase 1 shows the label (tool summary), phase 2 appends the outcome inline.
- * Under ADR 0026 this replaces the retired {@link ToolResultMessageComponent}.
+ * Replaces the retired {@link ToolResultMessageComponent}.
  */
 export class ToolLineComponent implements Component {
 	private readonly label: string;
-	// private readonly toolName: string;
 	private outcome: string = "";
 	private failed = false;
-	private diffComponent: FileEditComponent | null = null;
 
-	constructor(label: string, _toolName: string) {
+	constructor(label: string) {
 		this.label = label;
-		// this.toolName = toolName;
 	}
 
-	finish(diffSummary?: FileEditSummary): void {
+	finish(): void {
 		this.failed = false;
-		if (diffSummary) {
-			this.diffComponent = new FileEditComponent().setSummary(diffSummary);
-		}
 	}
 
 	fail(error: string): void {
@@ -174,21 +164,10 @@ export class ToolLineComponent implements Component {
 			}
 		}
 
-		// todo 未生效
-		// Diff lines below edit/write success
-		if (this.diffComponent) {
-			const diffLines = this.diffComponent.render(width - INDENT_DIFF.length);
-			for (const diffLine of diffLines) {
-				lines.push(`${INDENT_DIFF}${chalk.dim(GLYPH_DIFF)} ${diffLine}`);
-			}
-		}
-
 		return lines;
 	}
 
-	invalidate(): void {
-		this.diffComponent?.invalidate();
-	}
+	invalidate(): void {}
 }
 
 /** System line: errors, compaction notices, interruptions. */
@@ -196,7 +175,6 @@ export class SystemMessageComponent implements Component {
 	private readonly text: string;
 	private readonly tone: "error" | "info";
 
-	// todo use pi-tui Text
 	constructor(text: string, tone: "error" | "info" = "info") {
 		this.text = text;
 		this.tone = tone;

@@ -13,7 +13,7 @@ export interface WireFormatAdapter {
 	 * messages/input, tools, temperature, `max_tokens` / `max_output_tokens`,
 	 * and the stream flag. The SDK client builds the request URL and HTTP
 	 * envelope, so the params are exactly the request body the legacy
-	 * transport used to POST. This is the SDK-facing seam (ADR-0022).
+	 * transport used to POST. This is the SDK-facing seam.
 	 */
 	toParams(request: ModelRequest): Record<string, unknown>;
 	/** Parse a successful (non-streaming) JSON response body into a {@link ModelResponse}. */
@@ -28,14 +28,14 @@ export interface WireFormatAdapter {
 	 * Derive a {@link ModelDelta} from a single accumulated frame, or `null` if
 	 * the frame carries no renderable change. Called by the transport on the
 	 * streaming path immediately after {@link accumulate} so the agent loop can
-	 * render partial reasoning/content (spec-0020).
+	 * render partial reasoning/content live.
 	 */
 	onDelta(frame: unknown): ModelDelta | null;
 	/**
 	 * Return a best-effort partial {@link ModelResponse} reflecting the frames
 	 * accumulated so far. Used to render a live preview of the in-flight
 	 * response and to recover a usable answer if the stream is interrupted
-	 * before it finalizes (spec-0020).
+	 * before it finalizes.
 	 */
 	getPartialView(): ModelResponse;
 	/** Emit the complete {@link ModelResponse} assembled from accumulated frames. */

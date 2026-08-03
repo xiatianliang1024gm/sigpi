@@ -209,11 +209,7 @@ export function applyTurnProgress(
 	if (event.type === "tool_execution_started" && event.toolName) {
 		const id = event.toolCallId;
 		if (id) {
-			const handle = view.beginToolLine(
-				id,
-				event.message ?? event.toolName,
-				event.toolName,
-			);
+			const handle = view.beginToolLine(id, event.message ?? event.toolName);
 			toolLines.set(id, handle);
 		}
 		return currentAssistant;
@@ -380,10 +376,6 @@ export async function runChatReplLoop(
 		latestProgressEvent = null;
 		if (!turn.ok) {
 			writeError(turn.errorMessage);
-			continue;
-		}
-
-		if (turn.completionStatus === "interrupted") {
 		}
 	}
 

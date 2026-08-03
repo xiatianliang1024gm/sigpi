@@ -801,6 +801,18 @@ test("ESC during a hung turn re-throws TurnInterruptedError and is not retried",
 				tools: [],
 				abortSignal: controller.signal,
 			});
+			// Wait until the request actually reaches the server before
+			// interrupting. The point of this test is aborting an in-flight
+			// stream, not racing request dispatch: under parallel test load a
+			// fixed delay can fire before the request is captured.
+			const deadline = Date.now() + 5_000;
+			while (server.captured.length < 1 && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+			assert.ok(
+				server.captured.length >= 1,
+				"request should reach the server before the interrupt",
+			);
 			setTimeout(
 				() =>
 					controller.abort(new TurnInterruptedError("user_escape", "model")),

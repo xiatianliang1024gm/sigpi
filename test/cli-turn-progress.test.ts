@@ -66,7 +66,7 @@ class RecordingReplView implements ReplView {
 		return view;
 	}
 
-	beginToolLine(id: string, label: string, _toolName: string): ToolLineHandle {
+	beginToolLine(id: string, label: string): ToolLineHandle {
 		this.ops.push(`tool-start:${id}:${label}`);
 		return new FakeToolLineHandle(id, this.ops);
 	}

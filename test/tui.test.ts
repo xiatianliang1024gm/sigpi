@@ -392,7 +392,7 @@ test("message components never emit a line wider than the terminal (ADR 0025 ren
 	// unbreakable token.
 	for (const component of [
 		new UserMessageComponent(longToken),
-		new ToolLineComponent(longToken, "test"),
+		new ToolLineComponent(longToken),
 		new AssistantMessageComponent(),
 	]) {
 		if (component instanceof AssistantMessageComponent) {

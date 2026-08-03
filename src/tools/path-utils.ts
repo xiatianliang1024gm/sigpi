@@ -7,8 +7,8 @@ import path from "node:path";
  *
  * SigPi runs with the account's permissions and treats the local environment
  * as a single trust boundary — the OS / container is the real isolation. It
- * imposes no in-process workspace containment check on reads or writes (see
- * ADR 0022): the path is resolved to its absolute form and returned with its
+ * imposes no in-process workspace containment check on reads or writes: the
+ * path is resolved to its absolute form and returned with its
  * lexically-computed relative form. Whether the resolved path is actually
  * reachable is governed by the filesystem, not by SigPi.
  */

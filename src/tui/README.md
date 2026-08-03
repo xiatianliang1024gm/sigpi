@@ -3,8 +3,8 @@
 - This project has one persistent TUI for the chat REPL, plus modal overlays
 - (session selector) shown on top of it.
 -
-- - **Chat REPL** — a single Pi-tui `TUI` lives for the whole session (ADR 0025, A1
--   model, mirroring Pi's `InteractiveMode`). The transcript is a **component tree**
+- - **Chat REPL** — a single Pi-tui `TUI` lives for the whole session (mirroring
+-   Pi's `InteractiveMode`). The transcript is a **component tree**
 -   (`chatContainer` of per-message components: user / assistant / tool-result /
 -   compaction), rendered by Pi-tui and scrolled by Pi-tui's viewport. The input
 -   `Editor`, status footer, and a `pending` area are persistent children.
@@ -15,14 +15,14 @@
 -
 ### Transcript is a component tree, not terminal scrollback
 -
-- Under ADR 0025 the live transcript is owned by the `TUI` as components — **not** by
+- The live transcript is owned by the `TUI` as components — **not** by
 - the OS terminal scrollback. Previous turns are not in `stdout`; they live in the
 - component tree and are scrolled by Pi-tui's viewport. Consequences:
 -
 - - Do **not** print turn output with raw `console.log` while the `TUI` is alive — it
--   desyncs Pi-tui's internal viewport and re-draws the frame displaced (the bug ADR
--   0025 fixes). All live output is a component; only non-TTY / one-shot modes use
--   `console.log`.
+-   desyncs Pi-tui's internal viewport and re-draws the frame displaced (the bug
+-   this design fixes). All live output is a component; only non-TTY / one-shot
+-   modes use `console.log`.
 - - The `TUI` renders from the current cursor on first paint and scrolls its own
 -   viewport as the transcript grows; it does **not** rely on the terminal scrollback
 -   to preserve history.
