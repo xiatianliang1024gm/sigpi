@@ -63,6 +63,7 @@ export interface CompactorDeps {
 		summarizedCount: number;
 		trigger: ContextUpdateResult["trigger"];
 		tokensBefore: number;
+		tokensAfter?: number;
 		customInstructions?: string;
 	}) => void;
 }
@@ -113,6 +114,8 @@ export class Compactor {
 		const estimatedBefore = this.d.estimateRequest(systemPrompt, toolSchemas);
 		const tokensBefore = estimatedBefore.totalTokens;
 		let summarized = false;
+		let summarizedCount = 0;
+		let compactionInstructions: string | undefined;
 		let trimmed = false;
 		let trigger: ContextUpdateResult["trigger"] = null;
 
@@ -216,13 +219,9 @@ export class Compactor {
 								})),
 						);
 						this.d.setRecentMessages(messages.slice(splitIndex));
-						this.d.recordCompactionEntry({
-							summarizedCount: messagesToSummarize.length,
-							trigger,
-							tokensBefore,
-							customInstructions: options?.instructions?.trim() || undefined,
-						});
 						summarized = true;
+						summarizedCount = messagesToSummarize.length;
+						compactionInstructions = options?.instructions?.trim() || undefined;
 						this.invalidateLastUsageAfterTrim();
 						this.d.getLogger()?.info("context_summarization_finished", {
 							runId: this.d.getRunId(),
@@ -262,6 +261,20 @@ export class Compactor {
 		trimmed = this.trimToHardLimit(systemPrompt, toolSchemas, requestContext);
 
 		const estimatedAfter = this.d.estimateRequest(systemPrompt, toolSchemas);
+
+		if (summarized) {
+			// Record the compaction entry after the final post-compaction
+			// estimate (and any hard-limit trim) so the persisted
+			// `tokensAfter` matches the `context_compacted` event the live
+			// status line displays.
+			this.d.recordCompactionEntry({
+				summarizedCount,
+				trigger,
+				tokensBefore,
+				tokensAfter: estimatedAfter.totalTokens,
+				customInstructions: compactionInstructions,
+			});
+		}
 
 		return {
 			summarized,

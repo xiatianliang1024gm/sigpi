@@ -167,6 +167,7 @@ const compactionEntrySchema = z.object({
 	summary: z.string(),
 	firstKeptEntryId: z.string().nullable(),
 	tokensBefore: z.number().int().nonnegative().optional(),
+	tokensAfter: z.number().int().nonnegative().optional(),
 	details: z
 		.object({
 			trigger: z.union([z.literal("token"), z.literal("force"), z.null()]),

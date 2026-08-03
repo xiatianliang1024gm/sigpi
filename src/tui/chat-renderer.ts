@@ -46,6 +46,14 @@ export interface ReplView {
 	 *  fails. Replaces the one-shot {@link addToolResult}. */
 	beginToolLine(id: string, label: string): ToolLineHandle;
 	appendSystem(text: string, tone?: "error" | "info"): void;
+	/**
+	 * Replace the whole transcript with the given components, keeping the
+	 * persistent chrome (input editor + status bar). Used when attaching to a
+	 * different session (`/resume`, `/new`) or replaying a resumed session's
+	 * history at startup, so the terminal shows the target session's messages
+	 * instead of requiring a separate `/history` view.
+	 */
+	replaceTranscript(components: Component[]): void;
 	setStatusBarModel(model: StatusBarModel): void;
 	getStatusBarModel(): StatusBarModel | null;
 	writeLine(line: string): void;
@@ -176,6 +184,19 @@ export class ChatRenderer implements ReplView {
 	appendSystem(text: string, tone: "error" | "info" = "info"): void {
 		const component = new SystemMessageComponent(text, tone);
 		this.appendComponent(component);
+	}
+
+	replaceTranscript(components: Component[]): void {
+		// The editor and status bar are the last two children (see `start` /
+		// `appendComponent`); keep them and swap in the new transcript before
+		// them. The editor instance is reused, so its buffer/history and the
+		// TUI focus survive the swap.
+		const children = this.tui.children;
+		if (children.length < 2) {
+			return;
+		}
+		this.tui.children = [...components, ...children.slice(-2)];
+		this.tui.requestRender();
 	}
 
 	setStatusBarModel(model: StatusBarModel): void {

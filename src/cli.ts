@@ -34,6 +34,7 @@ import {
 	type ToolLineHandle,
 } from "./tui/chat-renderer.js";
 import { formatCompactNumber } from "./tui/status-bar.js";
+import { replaySessionIntoView } from "./tui/transcript-replay.js";
 import type { JsonValue, TurnProgressEvent } from "./types.js";
 
 /**
@@ -307,6 +308,11 @@ export async function runChatReplLoop(
 	});
 	view.start();
 	state.view = view;
+	// When the loop attaches an existing session (via `--session <id>` or
+	// `--continue`), replay its message stream into the terminal so the
+	// conversation history is visible in place. A fresh session has no
+	// entries, so this is a no-op there.
+	replaySessionIntoView(state.view, state.runtime.session);
 
 	const readInput = (): Promise<string | null> => view.readInput();
 	const writeLine = (line: string) => view.writeLine(line);

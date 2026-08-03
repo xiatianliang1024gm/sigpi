@@ -83,7 +83,7 @@ Overrides: `.sigpi/config.toml` in your project, or environment variables.
 ## More
 
 - **Sessions**: `pnpm dev session new --title "fix login bug"` / `pnpm dev session list`
-- **Inside chat**: `/summary`, `/compact`, `/history`, `/resume`, `/model`
+- **Inside chat**: `/summary`, `/compact`, `/resume`, `/model`
 - **Skills**: Drop a `SKILL.md` into `.sigpi/skills/` — the agent loads it automatically. Follows the [Agent Skills spec](https://agentskills.io/specification).
 - **Logging**: `~/.sigpi/logs/agent.log` with daily rotation
 

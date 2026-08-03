@@ -341,6 +341,7 @@ export class ConversationContext {
 		summarizedCount: number;
 		trigger: ContextUpdateResult["trigger"];
 		tokensBefore: number;
+		tokensAfter?: number;
 		customInstructions?: string;
 	}): void {
 		const firstKeptEntryId = this.recentMessages[0]?.id ?? null;
@@ -352,6 +353,7 @@ export class ConversationContext {
 			summary: this.summary ?? "",
 			firstKeptEntryId,
 			tokensBefore: args.tokensBefore,
+			tokensAfter: args.tokensAfter,
 			trigger: args.trigger,
 			keptMessages,
 			summarizedMessages: args.summarizedCount,
