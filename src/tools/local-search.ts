@@ -14,6 +14,14 @@ const IGNORED_NAMES = new Set([
 
 const MAX_TEXT_FILE_BYTES = 2_000_000;
 
+/**
+ * Maximum time a ripgrep subprocess may run before being killed. Ripgrep is
+ * fast even on huge trees; a spawn that outlives this is pathological (network
+ * mount, unbounded follow, a search root with no exclusions) and must not
+ * hang the tool call indefinitely.
+ */
+export const RG_SPAWN_TIMEOUT_MS = 30_000;
+
 export function isRgUnavailable(error: unknown): boolean {
 	if (!error || typeof error !== "object") {
 		return false;

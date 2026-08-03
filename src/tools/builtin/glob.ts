@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import { asQuoted, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
-import { isRgUnavailable } from "../local-search.js";
+import { isRgUnavailable, RG_SPAWN_TIMEOUT_MS } from "../local-search.js";
 import { resolveWorkspacePath } from "../path-utils.js";
 import { joinRenderedSections, withRendered } from "../render.js";
 
@@ -129,7 +129,8 @@ export function createGlobTool(
 			"Find files by name using ripgrep's glob patterns (e.g. ** for recursive matching). The pattern is matched DOWNWARD from the `path` search root (defaults to the current working directory); it must not contain a leading `../` or an absolute path. " +
 			"Supports ** for recursive directory matching. Examples: **/*.js, src/**/*.ts, *.{json,yaml,md}. " +
 			'To search a directory other than the current one — including a parent or any absolute path — set `path` (e.g. path: "..") rather than putting ../ inside the pattern. ' +
-			"Results are sorted by modification time (newest first) and limited to the most recent 100 files; if truncated, narrow the pattern or set a more specific `path`.",
+			"Results are sorted by modification time (newest first) and limited to the most recent 100 files; if truncated, narrow the pattern or set a more specific `path`. " +
+			"A pattern that matches no files is a successful result (totalFound 0), not an error.",
 		inputSchema: globSchema,
 		parameters: {
 			type: "object",
@@ -178,6 +179,7 @@ export function createGlobTool(
 				{
 					pattern,
 					path: searchPath ?? null,
+					exitCode: 0,
 					totalFound,
 					returned: files.length,
 					truncated,
@@ -235,6 +237,7 @@ async function tryRg(
 		const { stdout, stderr } = await execImpl("rg", args, {
 			cwd,
 			maxBuffer: 1024 * 1024,
+			timeout: RG_SPAWN_TIMEOUT_MS,
 		});
 
 		const lines = stdout
@@ -256,6 +259,7 @@ async function tryRg(
 			{
 				pattern,
 				path: searchPath === "." ? null : searchPath,
+				exitCode: 0,
 				totalFound,
 				returned: sortedFiles.length,
 				truncated,
@@ -273,10 +277,54 @@ async function tryRg(
 			}),
 		);
 	} catch (error) {
-		if (!isRgUnavailable(error)) {
-			throw error;
+		const rgError = error as NodeJS.ErrnoException & {
+			stdout?: string;
+			stderr?: string;
+			code?: number | string;
+			killed?: boolean;
+			signal?: string;
+		};
+
+		// rg exits 1 when the glob matched nothing. That is a valid empty
+		// result, not a failure: report it as such so the model can tell
+		// "searched, found nothing" apart from "the search itself broke".
+		if (String(rgError.code) === "1") {
+			return withRendered(
+				{
+					pattern,
+					path: searchPath === "." ? null : searchPath,
+					exitCode: 1,
+					totalFound: 0,
+					returned: 0,
+					truncated: false,
+					files: [],
+					stderr: rgError.stderr ?? "",
+				},
+				renderResult({
+					pattern,
+					path: searchPath === "." ? null : searchPath,
+					totalFound: 0,
+					returned: 0,
+					truncated: false,
+					files: [],
+					stderr: "",
+				}),
+			);
 		}
-		return null; // signal caller to fallback
+
+		if (isRgUnavailable(error)) {
+			return null; // signal caller to fallback
+		}
+
+		// A real ripgrep failure (bad glob, permission error, or timeout):
+		// surface the actual stderr so the model sees the real reason instead
+		// of a generic "Command failed".
+		if (rgError.killed === true && rgError.signal === "SIGTERM") {
+			throw new Error(
+				`ripgrep timed out after ${RG_SPAWN_TIMEOUT_MS}ms searching ${searchPath}; narrow the pattern or set a more specific \`path\`.`,
+			);
+		}
+		throw new Error(rgError.stderr || rgError.message);
 	}
 }
 

@@ -198,7 +198,14 @@ export function buildShellInvocation(
 	// (MAX_ARG_STRLEN, ~128 KiB) when the captured rc alias/function preamble
 	// is large, failing the spawn with E2BIG. Sourcing a file keeps argv tiny.
 	const scriptPath = path.join(os.tmpdir(), `sigpi-sh-${randomUUID()}.sh`);
-	writeFileSync(scriptPath, full, "utf8");
+	// Close stdin inside the shell: an agent shell is non-interactive, and a
+	// command that wrongly reads stdin (e.g. `rg pattern` without a path,
+	// bare `cat`) would otherwise block on the never-closed pipe until the
+	// tool timeout kills it. `exec < /dev/null` replaces the shell's own
+	// stdin, so every child command inherits /dev/null and sees EOF
+	// immediately. This also covers background tasks spawned via this
+	// invocation.
+	writeFileSync(scriptPath, `exec < /dev/null\n${full}`, "utf8");
 	return {
 		executable: shellRuntime.executable,
 		args: [...shellRuntime.argsPrefix, `. '${scriptPath}'`],
@@ -262,6 +269,9 @@ function buildPowerShellEncodedCommand(command: string): string {
 		"[Console]::InputEncoding = $__sigpiUtf8",
 		"[Console]::OutputEncoding = $__sigpiUtf8",
 		"$OutputEncoding = $__sigpiUtf8",
+		// Non-interactive: close stdin defensively so a command that reads it
+		// fails fast instead of blocking until the tool timeout kills it.
+		"try { [Console]::In.Close() } catch { }",
 		`$__sigpiCommand = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${commandBase64}'))`,
 		"Invoke-Expression $__sigpiCommand",
 		"$__sigpiSucceeded = $?",
