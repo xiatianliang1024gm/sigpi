@@ -295,7 +295,10 @@ test("hides the cache hit rate when there is no cacheable input", () => {
 	assert.match(line, /50\/183\.6K \(0%\)/);
 });
 
-test("shows Hit(0.0%) for a cold cache with real input", () => {
+test("omits the Hit segment when the provider reports no cache activity", () => {
+	// Providers that don't return `prompt_tokens_details` (e.g. MiniMax) leave
+	// `cacheRead` at 0. A `Hit(0.0%)` segment is uninformative in that case
+	// (it cannot be distinguished from a cold cache), so the bar omits it.
 	const line = renderStatus(
 		makeModel({
 			usedTokens: 1_050,
@@ -308,7 +311,24 @@ test("shows Hit(0.0%) for a cold cache with real input", () => {
 			},
 		}),
 	);
-	assert.match(line, /Hit\(0\.0%\)/);
+	assert.doesNotMatch(line, /Hit/);
+	assert.match(line, /1\.1K\/183\.6K \(1%\)/);
+});
+
+test("shows Hit(x.x%) when the provider reports cache hits", () => {
+	const line = renderStatus(
+		makeModel({
+			usedTokens: 1_050,
+			usage: {
+				input: 500,
+				output: 50,
+				cacheRead: 500,
+				cacheWrite: 0,
+				totalTokens: 1_050,
+			},
+		}),
+	);
+	assert.match(line, /Hit\(50\.0%\)/);
 });
 
 test("appends the git branch when cwd is a repo", () => {
