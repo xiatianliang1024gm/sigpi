@@ -222,7 +222,7 @@ export class Compactor {
 						summarized = true;
 						summarizedCount = messagesToSummarize.length;
 						compactionInstructions = options?.instructions?.trim() || undefined;
-						this.invalidateLastUsageAfterTrim();
+						this.invalidateLastUsage();
 						this.d.getLogger()?.info("context_summarization_finished", {
 							runId: this.d.getRunId(),
 							sessionId: this.d.getSessionId(),
@@ -242,7 +242,6 @@ export class Compactor {
 							estimatedTokens: estimatedBefore.totalTokens,
 						});
 						this.trimToHardLimit(systemPrompt, toolSchemas, requestContext);
-						this.invalidateLastUsageAfterTrim();
 						if (error instanceof CompactionFailedError) {
 							throw new CompactionFailedError(error.message, {
 								reason: error.reason,
@@ -318,7 +317,7 @@ export class Compactor {
 		}
 
 		if (trimmed) {
-			this.invalidateLastUsageAfterTrim();
+			this.invalidateLastUsage();
 			this.d.getLogger()?.warn("context_trimmed", {
 				runId: this.d.getRunId(),
 				sessionId: this.d.getSessionId(),
@@ -376,14 +375,36 @@ export class Compactor {
 		return Math.min(tokenCutIndex, messageFloorIndex);
 	}
 
-	private invalidateLastUsageAfterTrim(): void {
-		const lastUsage = this.d.getLastUsage();
-		if (!lastUsage) {
-			return;
-		}
-		if (lastUsage.messageIndex >= this.d.getRecentMessages().length) {
-			this.d.setLastUsage(null);
-		}
+	/**
+	 * Drop the provider-reported usage baseline after messages were removed
+	 * from the recent window. A measured `totalTokens` covered the whole
+	 * pre-compaction request, so it no longer reflects the shrunken window,
+	 * and `messageIndex` is stale once the array has been sliced. Until the
+	 * next model response re-records usage, the status bar, `/summary`, and
+	 * the runner's in-turn estimate fall back to the chars/4 estimate — the
+	 * same computation that produced `tokensAfter`.
+	 *
+	 * Also scrubs the pre-compaction `usage` off the kept messages' entries:
+	 * those entries persist into the session stream, and `hydrateState`
+	 * would otherwise restore the stale count on resume.
+	 */
+	private invalidateLastUsage(): void {
+		this.d.setLastUsage(null);
+		const liveIds = new Set(
+			this.d
+				.getRecentMessages()
+				.map((message) => message.id)
+				.filter((id): id is string => Boolean(id)),
+		);
+		this.d.setEntries(
+			this.d
+				.getEntries()
+				.map((entry) =>
+					entry.kind === "message" && entry.usage && liveIds.has(entry.id)
+						? { ...entry, usage: undefined }
+						: entry,
+				),
+		);
 	}
 }
 

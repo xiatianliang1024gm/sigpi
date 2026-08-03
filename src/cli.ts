@@ -392,6 +392,13 @@ export async function runChatReplLoop(
 			break;
 		}
 
+		if (commandResult.kind === "handled") {
+			// Commands that mutate the conversation (e.g. /compact) change
+			// the context window immediately; refresh the bar now instead of
+			// letting it show the stale size until the 5s idle timer fires.
+			void refreshStatusBar();
+		}
+
 		const turnInput =
 			commandResult.kind === "handled" && commandResult.action === "run-turn"
 				? commandResult.input
