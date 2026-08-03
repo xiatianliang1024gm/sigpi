@@ -4,7 +4,10 @@ import test from "node:test";
 import { z } from "zod";
 import { ConversationContext } from "../src/agent/context.js";
 import { AgentRunner, summarizeToolExecutions } from "../src/agent/runner.js";
-import { TurnInterruptController } from "../src/interrupt.js";
+import {
+	TurnInterruptController,
+	TurnInterruptedError,
+} from "../src/interrupt.js";
 import { createShellRuntime } from "../src/shell.js";
 import { createDefaultToolRegistry } from "../src/tools/index.js";
 import { ToolRegistry } from "../src/tools/registry.js";
@@ -391,10 +394,137 @@ test("interrupt during a tool preserves completed results and skips later tools"
 	assert.equal(result.toolExecutions.length, 1);
 	assert.equal(result.toolExecutions[0]?.toolCall.name, "slow_tool");
 	assert.equal(secondToolCalled, false);
+	// The interrupted assistant message carried two tool calls; the second
+	// never ran, so the recovered transcript must pair it with a synthetic
+	// interrupted result instead of leaving it dangling.
+	const messages = context.getRecentMessages();
 	assert.deepEqual(
-		context.getRecentMessages().map((message) => message.role),
+		messages.map((message) => message.role),
+		["user", "assistant", "tool", "tool"],
+	);
+	const interruptedResult = messages[3];
+	if (interruptedResult?.role === "tool") {
+		assert.equal(interruptedResult.toolCallId, "call_2");
+		assert.match(interruptedResult.content, /interrupted/i);
+	} else {
+		assert.fail("expected a synthetic result for the skipped tool call");
+	}
+});
+
+test("closes a dangling tool call when a tool aborts mid-execution on interrupt", async () => {
+	const interruptController = new TurnInterruptController();
+	const tools = new ToolRegistry([
+		{
+			name: "abortable_tool",
+			description: "tool that is still running when the user hits Esc",
+			inputSchema: z.object({}).strict(),
+			parameters: {
+				type: "object",
+				properties: {},
+				additionalProperties: false,
+			},
+			execute: async (_args, context) => {
+				// The user hits Esc ~10ms into the tool's run, exactly like a
+				// long-running bash command being aborted.
+				setTimeout(() => {
+					interruptController.requestInterrupt();
+				}, 10);
+				await new Promise((_resolve, reject) => {
+					const onAbort = () => {
+						reject(
+							context.abortSignal?.reason ??
+								new TurnInterruptedError("user_escape", "tool"),
+						);
+					};
+					context.abortSignal?.addEventListener("abort", onAbort, {
+						once: true,
+					});
+				});
+				return { ok: "should not be reached" };
+			},
+		},
+	]);
+	const provider = new MockProvider((_request, index) => {
+		if (index === 0) {
+			return {
+				assistantText: "Running the abortable tool.",
+				toolCalls: [
+					{
+						id: "call_aborted",
+						name: "abortable_tool",
+						arguments: {},
+						rawArguments: "{}",
+					},
+				],
+				finishReason: "tool_calls",
+			};
+		}
+
+		return {
+			assistantText: "continued",
+			toolCalls: [],
+			finishReason: "stop",
+		};
+	});
+	const context = new ConversationContext();
+	const runner = new AgentRunner({
+		provider,
+		tools,
+		context,
+		systemPrompt: "You are a test agent.",
+	});
+
+	const result = await runner.runTurn(
+		"run the abortable tool",
+		interruptController,
+	);
+
+	assert.equal(result.completionStatus, "interrupted");
+	assert.equal(result.interruptStage, "tool");
+
+	// The aborted tool produced no result, but the recovered transcript must
+	// pair the assistant tool call with a synthetic interrupted result —
+	// otherwise the next request carries a tool call without an output and
+	// providers reject it (400 "No tool output found for tool call ...").
+	const messages = stripMessageIds(context.getRecentMessages());
+	assert.deepEqual(
+		messages.map((message) => message.role),
 		["user", "assistant", "tool"],
 	);
+	const toolMessage = context.getRecentMessages()[2];
+	if (toolMessage?.role === "tool") {
+		assert.equal(toolMessage.toolCallId, "call_aborted");
+		assert.match(toolMessage.content ?? "", /interrupted/i);
+	} else {
+		assert.fail("expected a tool message closing the aborted tool call");
+	}
+
+	// A follow-up turn must be able to continue from the recovered transcript
+	// with every tool call answered.
+	const second = await runner.runTurn(
+		"continue",
+		new TurnInterruptController(),
+	);
+	assert.equal(second.completionStatus, "completed");
+
+	const followUpRequest = provider.requests.at(-1);
+	assert.ok(followUpRequest);
+	const answered = new Set<string>();
+	for (const message of followUpRequest.messages) {
+		if (message.role === "tool" && message.toolCallId) {
+			answered.add(message.toolCallId);
+		}
+	}
+	for (const message of followUpRequest.messages) {
+		if (message.role === "assistant" && message.toolCalls) {
+			for (const toolCall of message.toolCalls) {
+				assert.ok(
+					answered.has(toolCall.id),
+					`tool call ${toolCall.id} must have an output in the follow-up request`,
+				);
+			}
+		}
+	}
 });
 
 test("summarizes older context when the token threshold is exceeded", async () => {

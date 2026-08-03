@@ -13,6 +13,7 @@ import type {
 	ModelProvider,
 	RunTurnResult,
 	RuntimeLogger,
+	ToolCall,
 	ToolSchema,
 	TurnProgressEvent,
 } from "../types.js";
@@ -30,6 +31,8 @@ const MUTATING_TOOL_NAMES = new Set(["write", "edit"]);
 const VERIFICATION_TOOL_NAMES = new Set(["bash"]);
 const VERIFICATION_REMINDER =
 	"You changed files in this turn. Before finishing, run the narrowest relevant verification command with `bash` if feasible, or explain what blocked validation.";
+const INTERRUPTED_TOOL_RESULT_ERROR =
+	"Tool execution was interrupted by the user before it produced output. Re-run the tool if the task still requires it.";
 const TURN_CHECKPOINT_KEEP_LAST_MESSAGES = 4;
 const TURN_CHECKPOINT_PREFIX =
 	"Current turn checkpoint. Earlier tool work in this same user turn was compacted:";
@@ -94,6 +97,38 @@ function findTurnCheckpointSplitIndex(
 	}
 
 	return splitIndex;
+}
+
+/**
+ * Find assistant tool calls in `messages` that have no matching tool result.
+ *
+ * A turn interrupted during tool execution leaves exactly this shape: the
+ * assistant message carrying the tool calls is appended to the transcript
+ * first, and the tool result message is only appended after the tool returns.
+ * When the tool is aborted mid-execution, the result never lands, so the
+ * persisted transcript would contain a tool call without an output — which
+ * providers reject on the next request (400 "No tool output found for tool
+ * call ...").
+ */
+function collectUnansweredToolCalls(messages: readonly Message[]): ToolCall[] {
+	const answeredCallIds = new Set<string>();
+	for (const message of messages) {
+		if (message.role === "tool" && message.toolCallId) {
+			answeredCallIds.add(message.toolCallId);
+		}
+	}
+
+	const unanswered: ToolCall[] = [];
+	for (const message of messages) {
+		if (message.role === "assistant" && message.toolCalls) {
+			for (const toolCall of message.toolCalls) {
+				if (!answeredCallIds.has(toolCall.id)) {
+					unanswered.push(toolCall);
+				}
+			}
+		}
+	}
+	return unanswered;
 }
 
 export class AgentRunner {
@@ -169,6 +204,29 @@ export class AgentRunner {
 		const checkpointTurnMessages = (): ContextUpdateResult => {
 			if (turnMessagesPersisted || turnMessages.length === 0) {
 				return createContextUpdateSnapshot();
+			}
+
+			// Esc during tool execution can leave an assistant toolCall in
+			// `turnMessages` without its matching tool result (the tool was
+			// aborted before `createToolMessage` ran). Persisting that dangling
+			// call makes the next turn send a tool call with no output, which
+			// providers reject (400 "No tool output found for tool call ...").
+			// Close the loop with a synthetic interrupted result so the
+			// recovered transcript stays a valid tool-call sequence.
+			for (const toolCall of collectUnansweredToolCalls(turnMessages)) {
+				logger?.info("turn_interrupted_tool_result_closed", {
+					runId: this.options.runId,
+					sessionId: this.options.sessionId ?? null,
+					turnId,
+					toolName: toolCall.name,
+					toolCallId: toolCall.id,
+				});
+				turnMessages.push(
+					createToolMessage(toolCall.id, toolCall.name, {
+						ok: false,
+						error: INTERRUPTED_TOOL_RESULT_ERROR,
+					}),
+				);
 			}
 
 			const checkpointUpdated = this.context.appendRecoveryMessages(
