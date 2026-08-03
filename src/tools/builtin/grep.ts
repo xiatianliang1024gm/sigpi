@@ -6,6 +6,7 @@ import type { ToolDefinition } from "../../types.js";
 import {
 	grepWorkspaceContentFallback,
 	isRgUnavailable,
+	RG_SPAWN_TIMEOUT_MS,
 } from "../local-search.js";
 import { resolveWorkspacePath } from "../path-utils.js";
 import { joinRenderedSections, withRendered } from "../render.js";
@@ -58,7 +59,8 @@ export function createGrepTool(
 			"Search file contents for a pattern using ripgrep. Use this to find symbols, strings, config keys, or the files that mention a term. " +
 			"Where glob finds files by name, grep finds lines inside them. Patterns use ripgrep regex syntax; regex metacharacters must be escaped. " +
 			"Respects .gitignore (gitignored files are skipped); to search a gitignored file, pass its path directly. " +
-			'`path` sets the search root and may be a parent directory (e.g. "..") or an absolute path to search anywhere on the filesystem; the `glob` filter and matches are scoped downward from it.',
+			'`path` sets the search root and may be a parent directory (e.g. "..") or an absolute path to search anywhere on the filesystem; the `glob` filter and matches are scoped downward from it. ' +
+			"A pattern with no matches is a successful result (exitCode 1), not an error.",
 		inputSchema: grepSchema,
 		parameters: {
 			type: "object",
@@ -169,6 +171,7 @@ export function createGrepTool(
 				const { stdout, stderr } = await execImpl("rg", args, {
 					cwd: context.cwd,
 					maxBuffer: 1024 * 1024,
+					timeout: RG_SPAWN_TIMEOUT_MS,
 				});
 
 				result = {
@@ -181,6 +184,8 @@ export function createGrepTool(
 					stdout?: string;
 					stderr?: string;
 					code?: number | string;
+					killed?: boolean;
+					signal?: string;
 				};
 
 				if (String(rgError.code) === "1") {
@@ -189,6 +194,10 @@ export function createGrepTool(
 						stdout: rgError.stdout ?? "",
 						stderr: rgError.stderr ?? "",
 					};
+				} else if (rgError.killed === true && rgError.signal === "SIGTERM") {
+					throw new Error(
+						`ripgrep timed out after ${RG_SPAWN_TIMEOUT_MS}ms searching ${searchPath}; narrow the pattern or set a more specific \`path\`.`,
+					);
 				} else if (isRgUnavailable(error)) {
 					const fallback = await grepWorkspaceContentFallback({
 						cwd: context.cwd,

@@ -1191,6 +1191,178 @@ test("glob falls back when ripgrep is unavailable", async () => {
 	assert.match((result.data as { rendered: string }).rendered, /src\/tools/);
 });
 
+test("glob treats rg exit 1 (no matches) as an empty result, not an error", async () => {
+	const tools = new ToolRegistry([
+		createGlobTool((async () => {
+			const error = Object.assign(new Error("Command failed: rg --files ..."), {
+				code: 1,
+				stderr: "",
+			});
+			throw error;
+		}) as never),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_glob_empty_1",
+			name: "glob",
+			arguments: { pattern: "no/such/**/*.ts" },
+			rawArguments: '{"pattern":"no/such/**/*.ts"}',
+		},
+		{ cwd: process.cwd() },
+	);
+
+	assert.equal(result.ok, true);
+	const data = result.data as {
+		exitCode: number;
+		totalFound: number;
+		files: string[];
+		rendered: string;
+	};
+	assert.equal(data.exitCode, 1);
+	assert.equal(data.totalFound, 0);
+	assert.deepEqual(data.files, []);
+	assert.match(data.rendered, /\(none\)/);
+});
+
+test("glob surfaces ripgrep's stderr on a real rg failure (exit 2)", async () => {
+	const tools = new ToolRegistry([
+		createGlobTool((async () => {
+			const error = Object.assign(new Error("Command failed: rg --files ..."), {
+				code: 2,
+				stderr:
+					"rg: error parsing glob '[': unclosed character class; missing ']'",
+			});
+			throw error;
+		}) as never),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_glob_err_1",
+			name: "glob",
+			arguments: { pattern: "[" },
+			rawArguments: '{"pattern":"["}',
+		},
+		{ cwd: process.cwd() },
+	);
+
+	assert.equal(result.ok, false);
+	assert.match(result.error ?? "", /unclosed character class/);
+});
+
+test("glob reports a clear error when ripgrep times out", async () => {
+	const tools = new ToolRegistry([
+		createGlobTool((async () => {
+			const error = Object.assign(new Error("Command failed: rg --files ..."), {
+				code: null,
+				killed: true,
+				signal: "SIGTERM",
+			});
+			throw error;
+		}) as never),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_glob_timeout_1",
+			name: "glob",
+			arguments: { pattern: "**/*" },
+			rawArguments: '{"pattern":"**/*"}',
+		},
+		{ cwd: process.cwd() },
+	);
+
+	assert.equal(result.ok, false);
+	assert.match(result.error ?? "", /timed out/i);
+});
+
+test("grep treats rg exit 1 (no matches) as an empty result, not an error", async () => {
+	const tools = new ToolRegistry([
+		createGrepTool((async () => {
+			const error = Object.assign(new Error("Command failed: rg ..."), {
+				code: 1,
+				stdout: "",
+				stderr: "",
+			});
+			throw error;
+		}) as never),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_grep_empty_1",
+			name: "grep",
+			arguments: { pattern: "nonexistent_symbol_xyz" },
+			rawArguments: '{"pattern":"nonexistent_symbol_xyz"}',
+		},
+		{ cwd: process.cwd() },
+	);
+
+	assert.equal(result.ok, true);
+	const data = result.data as {
+		exitCode: number;
+		totalMatchCount: number;
+		rendered: string;
+	};
+	assert.equal(data.exitCode, 1);
+	assert.equal(data.totalMatchCount, 0);
+	assert.match(data.rendered, /\(empty\)/);
+});
+
+test("grep surfaces ripgrep's stderr on a real rg failure (exit 2)", async () => {
+	const tools = new ToolRegistry([
+		createGrepTool((async () => {
+			const error = Object.assign(new Error("Command failed: rg ..."), {
+				code: 2,
+				stderr:
+					"rg: error parsing regex '[': unclosed character class; missing ']'",
+			});
+			throw error;
+		}) as never),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_grep_err_1",
+			name: "grep",
+			arguments: { pattern: "[" },
+			rawArguments: '{"pattern":"["}',
+		},
+		{ cwd: process.cwd() },
+	);
+
+	assert.equal(result.ok, false);
+	assert.match(result.error ?? "", /unclosed character class/);
+});
+
+test("bash closes stdin so commands reading it see EOF instead of hanging", async () => {
+	const shellRuntime = createShellRuntime("sh", "linux");
+	const tools = new ToolRegistry([
+		createBashTool(shellRuntime, {}, new ReadTracker()),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_shell_stdin_1",
+			name: "bash",
+			arguments: { command: "cat", timeout: 5_000 },
+			rawArguments: '{"command":"cat","timeout":5000}',
+		},
+		{ cwd: process.cwd(), shell: shellRuntime },
+	);
+
+	assert.equal(result.ok, true);
+	const data = result.data as {
+		ok: boolean;
+		timedOut: boolean;
+		exitCode: number | null;
+	};
+	assert.equal(data.ok, true);
+	assert.equal(data.timedOut, false);
+	assert.equal(data.exitCode, 0);
+});
+
 test("read reads a bounded line range with offset and limit", async () => {
 	const tools = new ToolRegistry([readTool]);
 

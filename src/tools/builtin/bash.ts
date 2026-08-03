@@ -87,7 +87,9 @@ export function createBashTool(
 			"into later commands, so write paths relative to the project " +
 			"directory (or use absolute paths). " +
 			"Returns stdout, stderr, and exit status. For long output it writes " +
-			"the full output to a session file and returns the path plus a preview.",
+			"the full output to a session file and returns the path plus a preview. " +
+			"stdin is closed (non-interactive): a command that tries to read stdin " +
+			"sees EOF immediately instead of hanging.",
 		inputSchema: bashSchema as z.ZodType<BashArgs>,
 		parameters: {
 			type: "object",
