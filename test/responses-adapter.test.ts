@@ -288,3 +288,149 @@ test("parse (non-streaming) extracts reasoning from a reasoning output item", ()
 	assert.equal(response.reasoning, "hidden plan");
 	assert.equal(response.assistantText, "answer");
 });
+
+test("finalize accumulates reasoning from response.reasoning_text.delta (DeepSeek shape)", () => {
+	const adapter = new ResponsesAdapter(config());
+	for (const frame of [
+		{ type: "response.reasoning_text.delta", delta: "We " },
+		{ type: "response.reasoning_text.delta", delta: "need answer." },
+		{
+			type: "response.output_item.added",
+			item: {
+				id: "msg1",
+				type: "message",
+				role: "assistant",
+				content: [],
+			},
+		},
+		{ type: "response.output_text.delta", item_id: "msg1", delta: "done" },
+		{ type: "response.completed", status: "completed" },
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, "We need answer.");
+	assert.equal(response.assistantText, "done");
+});
+
+test("finalize accumulates reasoning from response.reasoning_summary_text.delta", () => {
+	const adapter = new ResponsesAdapter(config());
+	for (const frame of [
+		{ type: "response.reasoning_summary_text.delta", delta: "sum " },
+		{ type: "response.reasoning_summary_text.delta", delta: "mary" },
+		{
+			type: "response.output_item.added",
+			item: {
+				id: "msg1",
+				type: "message",
+				role: "assistant",
+				content: [],
+			},
+		},
+		{ type: "response.output_text.delta", item_id: "msg1", delta: "ok" },
+		{ type: "response.completed", status: "completed" },
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, "sum mary");
+});
+
+test("finalize accumulates reasoning from response.reasoning_text.done (DeepSeek terminal frame)", () => {
+	const adapter = new ResponsesAdapter(config());
+	for (const frame of [
+		{
+			type: "response.reasoning_text.done",
+			text: "full hidden reasoning",
+		},
+		{
+			type: "response.output_item.added",
+			item: {
+				id: "msg1",
+				type: "message",
+				role: "assistant",
+				content: [],
+			},
+		},
+		{ type: "response.output_text.delta", item_id: "msg1", delta: "answer" },
+		{ type: "response.completed", status: "completed" },
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, "full hidden reasoning");
+});
+
+test("onDelta surfaces reasoningDelta from response.reasoning_text.delta (DeepSeek shape)", () => {
+	const adapter = new ResponsesAdapter(config());
+	const delta = adapter.onDelta({
+		type: "response.reasoning_text.delta",
+		delta: "think",
+	});
+	assert.deepEqual(delta, { reasoningDelta: "think" });
+});
+
+test("parse (non-streaming) extracts DeepSeek reasoning content parts", () => {
+	const adapter = new ResponsesAdapter(config());
+	const response = adapter.parse({
+		status: "completed",
+		output: [
+			{
+				type: "reasoning",
+				content: [
+					{
+						type: "reasoning_text",
+						text: "DeepSeek hidden chain",
+					},
+				],
+			},
+			{
+				type: "message",
+				role: "assistant",
+				content: [{ type: "output_text", text: "answer" }],
+			},
+		],
+	});
+	assert.equal(response.reasoning, "DeepSeek hidden chain");
+	assert.equal(response.assistantText, "answer");
+});
+
+test("finalize assembles DeepSeek reasoning from output_item.done content parts", () => {
+	const adapter = new ResponsesAdapter(config());
+	for (const frame of [
+		{
+			type: "response.output_item.added",
+			item: {
+				id: "r1",
+				type: "reasoning",
+				status: "in_progress",
+				content: [],
+			},
+		},
+		{
+			type: "response.output_item.done",
+			item: {
+				id: "r1",
+				type: "reasoning",
+				status: "completed",
+				content: [{ type: "reasoning_text", text: "assembled reasoning" }],
+			},
+		},
+		{
+			type: "response.output_item.added",
+			item: {
+				id: "msg1",
+				type: "message",
+				role: "assistant",
+				content: [],
+			},
+		},
+		{ type: "response.output_text.delta", item_id: "msg1", delta: "answer" },
+		{ type: "response.completed", status: "completed" },
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.reasoning, "assembled reasoning");
+	assert.equal(response.assistantText, "answer");
+});

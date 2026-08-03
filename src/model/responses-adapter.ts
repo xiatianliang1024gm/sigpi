@@ -45,11 +45,14 @@ interface ResponsesFunctionTool {
 /** Wire-format adapter for the OpenAI `responses` API. */
 export class ResponsesAdapter implements WireFormatAdapter {
 	private accumulated: ValidatedResponsesResponse = { output: [] };
-	// Chain-of-thought accumulated from `response.reasoning.delta` and
-	// `response.reasoning_summary.delta` frames. The onDelta path mirrors the
-	// same fields for live UI rendering, but the accumulator is the source of
-	// truth for `ModelResponse.reasoning` so non-streaming callers (and any
-	// future `onDelta`-less code path) keep access to the full reasoning.
+	// Chain-of-thought accumulated from responses-API reasoning frames:
+	// `response.reasoning_text.delta` / `response.reasoning_summary_text.delta`
+	// (the official OpenAI event names, also used by DeepSeek's responses API)
+	// plus the older non-standard `response.reasoning.delta` /
+	// `response.reasoning_summary.delta` aliases some gateways emit. The onDelta
+	// path mirrors the same fields for live UI rendering, but the accumulator is
+	// the source of truth for `ModelResponse.reasoning` so non-streaming callers
+	// (and any future `onDelta`-less code path) keep access to the full reasoning.
 	private accumulatedReasoning = "";
 
 	constructor(private readonly config: ModelConfig) {}
@@ -114,15 +117,26 @@ export class ResponsesAdapter implements WireFormatAdapter {
 		const eventType = typeof frameObj.type === "string" ? frameObj.type : "";
 		switch (eventType) {
 			case "response.reasoning.delta":
-			case "response.reasoning_summary.delta": {
+			case "response.reasoning_summary.delta":
+			case "response.reasoning_text.delta":
+			case "response.reasoning_summary_text.delta": {
+				// `delta` is `{ text }` on some gateways and a plain string on
+				// others (DeepSeek sends `delta: "chunk"`).
 				const d = isPlainObject(frameObj.delta)
 					? (frameObj.delta as { text?: unknown })
 					: undefined;
-				if (typeof d?.text === "string") {
-					this.accumulatedReasoning += d.text;
+				const text =
+					typeof d?.text === "string"
+						? d.text
+						: typeof frameObj.delta === "string"
+							? frameObj.delta
+							: undefined;
+				if (typeof text === "string") {
+					this.accumulatedReasoning += text;
 				}
 				break;
 			}
+			case "response.reasoning_text.done":
 			case "response.reasoning_summary_text.done": {
 				// Some responses-API gateways emit the full reasoning text in a
 				// terminal `done` frame instead of (or in addition to) the
@@ -283,12 +297,20 @@ export class ResponsesAdapter implements WireFormatAdapter {
 				break;
 			}
 			case "response.reasoning.delta":
-			case "response.reasoning_summary.delta": {
+			case "response.reasoning_summary.delta":
+			case "response.reasoning_text.delta":
+			case "response.reasoning_summary_text.delta": {
 				const d = isPlainObject(frameObj.delta)
 					? (frameObj.delta as { text?: unknown })
 					: undefined;
-				if (typeof d?.text === "string") {
-					return { reasoningDelta: d.text };
+				const text =
+					typeof d?.text === "string"
+						? d.text
+						: typeof frameObj.delta === "string"
+							? frameObj.delta
+							: undefined;
+				if (typeof text === "string") {
+					return { reasoningDelta: text };
 				}
 				break;
 			}
@@ -595,8 +617,11 @@ function parseResponsesUsage(raw: unknown): ModelUsage | undefined {
  * The provider surfaces reasoning in two shapes:
  *   1. A top-level `reasoning` field carrying a string or an array of summary
  *      items with a `text` field.
- *   2. One or more `output` items of type `reasoning` (carrying `summary[]`
- *      or, less commonly, a flat `text`).
+ *   2. One or more `output` items of type `reasoning` carrying:
+ *      - `summary[]` segments with a `text` field (OpenAI),
+ *      - a flat `text` field (some gateways), or
+ *      - `content[]` parts of type `reasoning_text` with a `text` field
+ *        (DeepSeek's responses API).
  *
  * Returns an empty string when no reasoning is present.
  */
@@ -620,6 +645,19 @@ function extractResponsesReasoning(parsed: {
 		// Some gateways emit a flat `text` instead.
 		if (typeof item.text === "string") {
 			pieces.push(item.text);
+		}
+		// DeepSeek emits `content` as an array of { type: "reasoning_text",
+		// text } parts.
+		if (Array.isArray(item.content)) {
+			for (const part of item.content) {
+				if (
+					isPlainObject(part) &&
+					part.type === "reasoning_text" &&
+					typeof part.text === "string"
+				) {
+					pieces.push(part.text);
+				}
+			}
 		}
 	}
 	if (pieces.length > 0) {
