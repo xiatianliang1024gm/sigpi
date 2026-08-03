@@ -206,6 +206,54 @@ test("formatStatusBarForEvent recomputes from state when event has no token esti
 	}
 });
 
+test("formatStatusBar falls back to a context estimate when provider usage is missing", async () => {
+	// Mirrors the responses-API path (e.g. DeepSeek's responses endpoint):
+	// streams never carry `usage`, so after a completed turn `getLastUsage()`
+	// is still null. The bar must keep showing a token count instead of
+	// regressing to `?` once the turn ends and the live event estimate is
+	// dropped.
+	const cwd = await realpath(
+		await createTempDir("sigpi-chat-repl-status-estimate-fallback-"),
+	);
+	const homeDir = await createTempDir(
+		"sigpi-chat-repl-status-estimate-fallback-home-",
+	);
+	const previousCwd = process.cwd();
+	const restoreHome = setTestHome(homeDir);
+	process.chdir(cwd);
+
+	try {
+		await writeTestConfig(homeDir);
+		const runtime = await createAgentRuntime({ createSession: true });
+		const state = runtimeToChatReplState(runtime);
+
+		const provider = new MockProvider(() => ({
+			assistantText: "a",
+			toolCalls: [],
+			finishReason: "stop",
+		}));
+		await state.runtime.context.appendMessages(
+			[
+				{ role: "user", content: "u" },
+				{ role: "assistant", content: "a" },
+			],
+			provider,
+			"You are a test agent.",
+			[],
+			undefined,
+			// No `usage` option: the provider never reported token counts.
+		);
+
+		const status = statusLine(await formatStatusBar(state));
+		assert.doesNotMatch(status, /\?\//);
+		assert.match(status, /^test-model /);
+		assert.match(status, /\d+K\//);
+	} finally {
+		restoreHome();
+		process.chdir(previousCwd);
+	}
+});
+
 test("formatStatusBar appends git branch when cwd is a repo", async () => {
 	const cwd = await realpath(
 		await createTempDir("sigpi-chat-repl-status-git-"),
@@ -714,7 +762,7 @@ test("formatStatusBar restores token count from a resumed session with usage", a
 	}
 });
 
-test("formatStatusBar shows ? for a resumed session without usage", async () => {
+test("formatStatusBar shows a context estimate for a resumed session without usage", async () => {
 	const cwd = await realpath(
 		await createTempDir("sigpi-chat-repl-status-resumeold-"),
 	);
@@ -728,7 +776,8 @@ test("formatStatusBar shows ? for a resumed session without usage", async () => 
 		const runtime = await createAgentRuntime({ createSession: true });
 		const state = runtimeToChatReplState(runtime);
 
-		// Legacy snapshot: assistant message, but no `usage` field.
+		// Legacy snapshot: assistant message, but no `usage` field. The bar
+		// falls back to a context-token estimate instead of regressing to `?`.
 		state.runtime.context.hydrateState({
 			summary: null,
 			recentMessages: [
@@ -738,7 +787,9 @@ test("formatStatusBar shows ? for a resumed session without usage", async () => 
 		});
 
 		const status = statusLine(await formatStatusBar(state));
-		assert.match(status, /\?\//);
+		assert.doesNotMatch(status, /\?\//);
+		assert.match(status, /^test-model /);
+		assert.match(status, /\d+K\//);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);

@@ -1,4 +1,5 @@
 import type { ModelConfig } from "./config.js";
+import { estimateContextTokens } from "./context-window.js";
 import { getGitBranch } from "./git.js";
 import { type AgentRuntime, createAgentRuntime } from "./runtime.js";
 import type { SessionStore } from "./session/store.js";
@@ -137,16 +138,41 @@ export async function formatStatusBar(
 ): Promise<StatusBarModel> {
 	const lastUsage = state.runtime.context.getLastUsage();
 	const usage = lastUsage?.usage ?? null;
-	// Use the provider-reported ground-truth token count from the last
-	// response. Before the first response (no usage yet) we show `?` rather
-	// than a drift-prone estimate.
+	// Prefer the provider-reported ground-truth token count from the last
+	// response. When the provider never reports usage on the streaming path
+	// (e.g. DeepSeek's responses API omits usage in streams even with
+	// `include: ["usage"]`) or a compaction dropped the measured message, fall
+	// back to the same context-token estimate the runner feeds the status bar
+	// during the turn — so a completed turn keeps showing a token count
+	// instead of regressing to `?`. A brand-new conversation with no content
+	// yet still renders the honest `?` via `null`.
 	const model = await buildStatusBarModel(
 		state,
-		usage ? usage.totalTokens : null,
+		usage ? usage.totalTokens : estimateIdleContextTokens(state),
 		usage,
 		null,
 	);
 	return model;
+}
+
+/**
+ * Estimate the current context size from the live context state, mirroring
+ * the runner's in-turn estimate (`estimatedContextTokens` on progress events).
+ * Returns `null` when the conversation has no content yet (no summary and no
+ * recent messages), so a fresh session keeps the honest `?` instead of
+ * reporting a system-prompt-only figure as if it were measured usage.
+ */
+function estimateIdleContextTokens(state: ChatReplState): number | null {
+	const context = state.runtime.context;
+	if (!context.getSummary() && context.getRecentMessages().length === 0) {
+		return null;
+	}
+	return estimateContextTokens({
+		systemPrompt: state.runtime.systemPrompt,
+		summary: context.getSummary(),
+		recentMessages: context.getRecentMessages(),
+		toolSchemas: state.runtime.toolSchemas,
+	}).totalTokens;
 }
 
 export function getCurrentWorkingDirectory(state: ChatReplState): string {
