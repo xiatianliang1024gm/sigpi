@@ -263,10 +263,7 @@ test("executeChatCommand compacts context through the active session runtime", a
 		action: "continue",
 	});
 	assert.deepEqual(outputs, [
-		"Context compacted: summary updated. Snapshot saved.",
-		"Recent messages: 5 -> 2.",
-		"Summary chars: 0 -> 7.",
-		"Estimated context size: 45 -> 18 tokens.",
+		"Context compacted: context window 45 → 18 tokens.",
 	]);
 });
 
@@ -427,10 +424,7 @@ test("executeChatCommand reports when manual compaction is a no-op", async () =>
 		writeLine: (line: string) => outputs.push(line),
 	});
 
-	assert.deepEqual(outputs, [
-		"Nothing to compact.",
-		"Recent messages: 1. Summary chars: 0. Estimated context size: 6 tokens.",
-	]);
+	assert.deepEqual(outputs, ["Nothing to compact. Context window: 6 tokens."]);
 });
 
 test("/model with no args opens the TUI selector instead of printing a list", async () => {

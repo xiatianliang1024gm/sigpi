@@ -33,6 +33,7 @@ import {
 	type ReplView,
 	type ToolLineHandle,
 } from "./tui/chat-renderer.js";
+import { formatCompactNumber } from "./tui/status-bar.js";
 import type { JsonValue, TurnProgressEvent } from "./types.js";
 
 /**
@@ -216,6 +217,19 @@ export function applyTurnProgress(
 		return assistant;
 	}
 
+	if (event.type === "interrupt_requested") {
+		// The status bar alone ("cancelling") is easy to miss; surface the
+		// interruption as a transcript line so the user sees the Esc/Ctrl+C
+		// was acknowledged.
+		view.appendSystem(event.message ?? "Interrupt requested.", "info");
+		return currentAssistant;
+	}
+
+	if (event.type === "context_compacted") {
+		view.appendSystem(formatCompactionMessage(event), "info");
+		return currentAssistant;
+	}
+
 	if (event.type === "tool_execution_started" && event.toolName) {
 		const id = event.toolCallId;
 		if (id) {
@@ -254,10 +268,30 @@ export function applyTurnProgress(
 			handle.fail("interrupted");
 		}
 		toolLines.clear();
+		if (event.type === "turn_interrupted") {
+			view.appendSystem("Turn interrupted.", "info");
+		}
 		return null;
 	}
 
 	return currentAssistant;
+}
+
+/**
+ * Render a compaction notice that highlights the context-window size change
+ * (the number users actually care about) instead of a verbose recap. Falls
+ * back to the event's own message when no token snapshot is available.
+ */
+function formatCompactionMessage(event: TurnProgressEvent): string {
+	const { tokensBefore, tokensAfter } = event;
+	if (
+		typeof tokensBefore === "number" &&
+		typeof tokensAfter === "number" &&
+		(tokensBefore > 0 || tokensAfter > 0)
+	) {
+		return `Context compacted: context window ${formatCompactNumber(tokensBefore)} → ${formatCompactNumber(tokensAfter)} tokens.`;
+	}
+	return event.message ?? "Context compacted.";
 }
 
 export async function runChatReplLoop(

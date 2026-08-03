@@ -82,7 +82,9 @@ class RecordingReplView implements ReplView {
 	addUserMessage(): void {}
 	beginTurn(): void {}
 	endTurn(): void {}
-	appendSystem(): void {}
+	appendSystem(text: string, tone: "error" | "info" = "info"): void {
+		this.ops.push(`system:${tone}:${text}`);
+	}
 	setStatusBarModel(): void {}
 	getStatusBarModel(): StatusBarModel | null {
 		return null;
@@ -297,4 +299,102 @@ test("a step with no text does not emit an empty assistant bubble", () => {
 		"answer",
 	]);
 	assert.match(view.assistants.at(-1)?.content ?? "", /Done\./);
+});
+
+test("context_compacted renders a system message highlighting the window change", () => {
+	const view = new RecordingReplView();
+	let current: AssistantMessageView | null = null;
+	const toolLines = new Map<string, ToolLineHandle>();
+
+	current = applyTurnProgress(
+		view,
+		{ type: "model_delta", step: 1, turnId: "t", contentDelta: "x" },
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "context_compacted",
+			step: 1,
+			turnId: "t",
+			message: "Context compacted",
+			tokensBefore: 12_345,
+			tokensAfter: 6_789,
+			trigger: "token",
+		},
+		current,
+		toolLines,
+	);
+
+	assert.deepEqual(view.ops, [
+		"answer",
+		"system:info:Context compacted: context window 12.3K → 6.8K tokens.",
+	]);
+});
+
+test("context_compacted without a token snapshot falls back to its message", () => {
+	const view = new RecordingReplView();
+	applyTurnProgress(
+		view,
+		{
+			type: "context_compacted",
+			step: 1,
+			turnId: "t",
+			message: "Checkpoint compacted current turn",
+			tokensBefore: 0,
+			tokensAfter: 0,
+			trigger: "token",
+		},
+		null,
+		new Map(),
+	);
+	assert.deepEqual(view.ops, ["system:info:Checkpoint compacted current turn"]);
+});
+
+test("interrupt_requested renders a transcript line, not just the status bar", () => {
+	const view = new RecordingReplView();
+	applyTurnProgress(
+		view,
+		{
+			type: "interrupt_requested",
+			message: "Cancelling current model request",
+			interruptStage: "model",
+			interruptSource: "user_escape",
+		},
+		null,
+		new Map(),
+	);
+	assert.deepEqual(view.ops, ["system:info:Cancelling current model request"]);
+});
+
+test("turn_interrupted finalizes the assistant and renders a terminal message", () => {
+	const view = new RecordingReplView();
+	let current: AssistantMessageView | null = null;
+	const toolLines = new Map<string, ToolLineHandle>();
+
+	current = applyTurnProgress(
+		view,
+		{ type: "model_delta", step: 1, turnId: "t", contentDelta: "partial" },
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "turn_interrupted",
+			turnId: "t",
+			message: "Turn interrupted",
+			interruptStage: "model",
+			interruptSource: "user_escape",
+		},
+		current,
+		toolLines,
+	);
+
+	assert.equal(current, null);
+	// The terminal event must not spawn a new assistant bubble; it only
+	// finalizes the in-flight one and appends the interruption notice.
+	assert.deepEqual(view.ops, ["answer", "system:info:Turn interrupted."]);
+	assert.equal(view.assistants.at(-1)?.content, "partial");
 });

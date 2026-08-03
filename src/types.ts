@@ -186,6 +186,7 @@ export interface TurnProgressEvent {
 		| "model_delta"
 		| "assistant_message"
 		| "context_checkpoint"
+		| "context_compacted"
 		| "tool_calls_received"
 		| "tool_execution_started"
 		| "tool_execution_finished"
@@ -225,6 +226,14 @@ export interface TurnProgressEvent {
 	failureType?: string;
 	interruptStage?: InterruptStage;
 	interruptSource?: InterruptSource;
+	/**
+	 * Token snapshot of the context window around a compaction, reported on
+	 * `context_compacted` events so the UI can surface the window-size change.
+	 */
+	tokensBefore?: number;
+	tokensAfter?: number;
+	/** Which trigger fired for the compaction (see {@link ContextUpdateResult.trigger}). */
+	trigger?: ContextUpdateResult["trigger"];
 	estimatedContextTokens?: number;
 }
 
