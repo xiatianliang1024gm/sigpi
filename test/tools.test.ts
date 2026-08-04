@@ -105,6 +105,36 @@ test("bash reports timeouts in command results", async () => {
 	assert.equal(typeof result.data, "object");
 	assert.equal((result.data as { ok: boolean }).ok, false);
 	assert.equal((result.data as { timedOut: boolean }).timedOut, true);
+	// The rendered text is what reaches the model; the timeout must be
+	// visible there, not only in the structured data fields.
+	const rendered = (result.data as { rendered?: string }).rendered ?? "";
+	assert.match(rendered, /Timed out after 20ms/);
+	assert.match(rendered, /Exit code: \(none\)/);
+	assert.match(rendered, /Signal: SIGTERM/);
+});
+
+test("bash renders the exit code for failed commands", async () => {
+	const shellRuntime = createShellRuntime("sh", "linux");
+	const tools = new ToolRegistry([
+		createBashTool(shellRuntime, {}, new ReadTracker()),
+	]);
+
+	const result = await tools.execute(
+		{
+			id: "call_shell_exit_1",
+			name: "bash",
+			arguments: { command: "exit 3" },
+			rawArguments: '{"command":"exit 3"}',
+		},
+		{ cwd: process.cwd(), shell: shellRuntime },
+	);
+
+	assert.equal(result.ok, true);
+	assert.equal(typeof result.data, "object");
+	assert.equal((result.data as { ok: boolean }).ok, false);
+	assert.equal((result.data as { exitCode: number | null }).exitCode, 3);
+	const rendered = (result.data as { rendered?: string }).rendered ?? "";
+	assert.match(rendered, /Exit code: 3/);
 });
 
 test("bash truncates long output and marks truncation flags", async () => {
