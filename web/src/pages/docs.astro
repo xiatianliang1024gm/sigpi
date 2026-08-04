@@ -1,0 +1,80 @@
+---
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Docs — SigPi</title>
+    <meta
+      name="description"
+      content="SigPi quick start: install, configure, and chat with your coding agent."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/styles/global.css" />
+  </head>
+  <body>
+    <Header />
+
+    <main class="docs">
+      <h1>Quick start</h1>
+      <p class="lead">
+        From clone to your first conversation in about two minutes.
+      </p>
+
+      <h2>Requirements</h2>
+      <ul>
+        <li><strong>Node.js</strong> ≥ 22.19.0</li>
+        <li><strong>pnpm</strong></li>
+      </ul>
+
+      <h2>1. Install</h2>
+      <pre><code>git clone https://github.com/xiatianliang1024gm/sigpi
+cd sigpi
+pnpm install</code></pre>
+
+      <h2>2. Configure</h2>
+      <p>
+        Run <code>pnpm dev init</code>, then edit
+        <code>~/.sigpi/config.toml</code> with your API key and model.
+      </p>
+      <pre><code>[models.default]
+base_url = "https://api.openai.com/v1"
+api_key  = "sk-..."
+name     = "gpt-4o"</code></pre>
+      <p>
+        SigPi works with any provider that speaks the OpenAI chat completions API —
+        OpenAI, Anthropic via proxy, Ollama, LiteLLM, and more. Overrides:
+        <code>.sigpi/config.toml</code> in your project, or environment variables.
+      </p>
+
+      <h2>3. Chat</h2>
+      <pre><code>pnpm dev chat</code></pre>
+      <p>
+        That's it. You're talking to an agent that can see your code.
+      </p>
+
+      <h2>Resume a session</h2>
+      <pre><code>pnpm dev chat --session &lt;id&gt;</code></pre>
+
+      <h2>Useful commands</h2>
+      <ul>
+        <li><code>pnpm dev session new --title "fix login bug"</code></li>
+        <li><code>pnpm dev session list</code></li>
+        <li>Inside chat: <code>/summary</code>, <code>/compact</code>, <code>/resume</code>, <code>/model</code></li>
+      </ul>
+
+      <h2>Skills</h2>
+      <p>
+        Drop a <code>SKILL.md</code> into <code>.sigpi/skills/</code> — the agent
+        loads it automatically. Follows the
+        <a href="https://agentskills.io/specification">Agent Skills spec</a>.
+      </p>
+    </main>
+
+    <Footer />
+  </body>
+</html>
