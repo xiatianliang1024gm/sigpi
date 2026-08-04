@@ -1,4 +1,6 @@
 ---
+import '@fontsource-variable/inter';
+import '@fontsource-variable/jetbrains-mono';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 ---
@@ -8,15 +10,18 @@ import Footer from '../components/Footer.astro';
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Docs — SigPi</title>
+    <title>Quick start — SigPi</title>
     <meta
       name="description"
-      content="SigPi quick start: install, configure, and chat with your coding agent."
+      content="SigPi quick start: install, configure, and chat with your coding-agent harness in about two minutes."
     />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles/global.css" />
   </head>
   <body>
+    <div class="bg-aurora" aria-hidden="true"></div>
+    <div class="bg-grid" aria-hidden="true"></div>
+
     <Header />
 
     <main class="docs">
@@ -25,53 +30,80 @@ import Footer from '../components/Footer.astro';
         From clone to your first conversation in about two minutes.
       </p>
 
-      <h2>Requirements</h2>
+      <h2><span class="hash">#</span>How it fits together</h2>
+      <p>
+        SigPi is a thin chain: a terminal REPL, an agent loop, tools, and a model
+        adapter. Nothing between you and the code.
+      </p>
+      <div class="flow">
+        <div class="flow-item"><span class="tag">src/tui</span>REPL</div>
+        <div class="flow-item"><span class="tag">src/agent</span>Loop</div>
+        <div class="flow-item"><span class="tag">src/tools</span>Tools</div>
+        <div class="flow-item"><span class="tag">src/model</span>LLM adapter</div>
+      </div>
+
+      <h2><span class="hash">#</span>Requirements</h2>
       <ul>
         <li><strong>Node.js</strong> ≥ 22.19.0</li>
         <li><strong>pnpm</strong></li>
+        <li>An OpenAI-compatible model endpoint (OpenAI, Ollama, LiteLLM, …)</li>
       </ul>
 
-      <h2>1. Install</h2>
-      <pre><code>git clone https://github.com/xiatianliang1024gm/sigpi
+      <h2><span class="hash">#</span>1. Install</h2>
+      <pre data-file="terminal"><code>git clone https://github.com/xiatianliang1024gm/sigpi
 cd sigpi
 pnpm install</code></pre>
 
-      <h2>2. Configure</h2>
+      <h2><span class="hash">#</span>2. Configure</h2>
       <p>
         Run <code>pnpm dev init</code>, then edit
         <code>~/.sigpi/config.toml</code> with your API key and model.
       </p>
-      <pre><code>[models.default]
+      <pre data-file="~/.sigpi/config.toml"><code>[models.default]
 base_url = "https://api.openai.com/v1"
 api_key  = "sk-..."
 name     = "gpt-4o"</code></pre>
       <p>
         SigPi works with any provider that speaks the OpenAI chat completions API —
-        OpenAI, Anthropic via proxy, Ollama, LiteLLM, and more. Overrides:
-        <code>.sigpi/config.toml</code> in your project, or environment variables.
+        OpenAI, Ollama, LiteLLM, and more. Override per project with
+        <code>.sigpi/config.toml</code> in your repo, or via environment variables.
       </p>
 
-      <h2>3. Chat</h2>
-      <pre><code>pnpm dev chat</code></pre>
+      <h2><span class="hash">#</span>3. Chat</h2>
+      <pre data-file="terminal"><code>pnpm dev chat</code></pre>
       <p>
-        That's it. You're talking to an agent that can see your code.
+        That's it. You're talking to an agent that can read, search, edit, and run
+        commands in your codebase — and whose entire loop you can read in
+        <code>src/agent/</code>.
       </p>
 
-      <h2>Resume a session</h2>
-      <pre><code>pnpm dev chat --session &lt;id&gt;</code></pre>
+      <h2><span class="hash">#</span>Resume a session</h2>
+      <pre data-file="terminal"><code>pnpm dev chat --session &lt;id&gt;</code></pre>
+      <p>Every conversation is persisted and can be picked up later.</p>
 
-      <h2>Useful commands</h2>
+      <h2><span class="hash">#</span>Useful commands</h2>
       <ul>
         <li><code>pnpm dev session new --title "fix login bug"</code></li>
         <li><code>pnpm dev session list</code></li>
-        <li>Inside chat: <code>/summary</code>, <code>/compact</code>, <code>/resume</code>, <code>/model</code></li>
+        <li>
+          Inside chat: <code>/summary</code>, <code>/compact</code>,
+          <code>/resume</code>, <code>/model</code>
+        </li>
       </ul>
 
-      <h2>Skills</h2>
+      <h2><span class="hash">#</span>Skills</h2>
       <p>
         Drop a <code>SKILL.md</code> into <code>.sigpi/skills/</code> — the agent
         loads it automatically. Follows the
         <a href="https://agentskills.io/specification">Agent Skills spec</a>.
+      </p>
+
+      <h2><span class="hash">#</span>Start reading</h2>
+      <p>
+        When you are ready to go deeper, open
+        <code>AGENTS.md</code> for the entry points, then
+        <code>CONTEXT-MAP.md</code> for the project's vocabulary — the guided tour
+        takes about an afternoon.
       </p>
     </main>
 

@@ -13,6 +13,8 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "astro": "^7.1.6"
   }
 }
