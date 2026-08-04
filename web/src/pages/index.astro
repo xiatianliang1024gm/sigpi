@@ -1,37 +1,62 @@
 ---
+import '@fontsource-variable/inter';
+import '@fontsource-variable/jetbrains-mono';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 
 const features = [
   {
-    icon: '💬',
-    title: 'Chat with an LLM about your code',
-    body: 'Interactive REPL with session persistence. Resume any conversation later.',
+    icon: '🧭',
+    title: 'The agent loop, in plain sight',
+    body: 'One while-loop drives everything: read the transcript, ask the model, run the tool it requests, repeat. src/agent/ is eight small files.',
   },
   {
     icon: '🔍',
-    title: 'Search & navigate',
-    body: 'Built-in grep, glob, and file reading tools the agent uses autonomously.',
+    title: 'Tools you already know',
+    body: 'grep, glob, read, edit, and shell — the same primitives you use by hand, exposed to the model with guardrails and change summaries.',
   },
   {
-    icon: '✏️',
-    title: 'Edit files',
-    body: 'Exact string replacement plus full-file writes, with change summaries.',
+    icon: '💬',
+    title: 'An interactive REPL',
+    body: 'Chat with session persistence. Resume any conversation later with --session. Multi-turn memory survives restarts.',
   },
   {
-    icon: '⚡',
-    title: 'Run shell commands',
-    body: 'Bash with timeout, background tasks, and streaming output.',
+    icon: '🔌',
+    title: 'Works with any OpenAI-compatible LLM',
+    body: 'OpenAI, Ollama, LiteLLM, or a local model — anything that speaks the chat completions API. Configure in a single TOML file.',
   },
   {
     icon: '🧠',
-    title: 'Multi-turn memory',
-    body: 'Sessions survive restarts; long conversations auto-summarize to fit the context window.',
+    title: 'Context that stays in budget',
+    body: 'Long conversations auto-summarize to fit the window. /summary, /compact, and /resume give you manual control.',
   },
   {
     icon: '🎯',
-    title: 'Plan tracking',
-    body: 'The agent tracks multi-step tasks so you can see progress at a glance.',
+    title: 'Plan tracking built in',
+    body: 'The agent keeps a visible plan for multi-step work, so you always know what it is doing and what comes next.',
+  },
+];
+
+const principles = [
+  {
+    k: '01 / zero frameworks',
+    title: 'Plain TypeScript, no magic',
+    body: 'No framework to unlearn. If you can read TypeScript, you can read all of SigPi.',
+  },
+  {
+    k: '02 / small surface',
+    title: '8 runtime deps, ~18k lines',
+    body: 'The whole harness fits in your head. Read it in an afternoon, hack on it the same week.',
+  },
+  {
+    k: '03 / honest defaults',
+    title: 'A TOML file, not a control panel',
+    body: 'One config file, sensible overrides, environment variables when you need them.',
+  },
+  {
+    k: '04 / built to be borrowed',
+    title: 'A reference, not a black box',
+    body: 'Steal the loop, the tool interface, the session model — they are the parts people rebuild anyway.',
   },
 ];
 ---
@@ -41,54 +66,198 @@ const features = [
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SigPi — An open-source coding agent you can actually read</title>
+    <title>SigPi — a coding-agent harness you can read</title>
     <meta
       name="description"
-      content="SigPi is an open-source coding agent built in TypeScript. Runs in your terminal. Works with any OpenAI-compatible LLM."
+      content="SigPi is an open-source, plain-TypeScript agent harness: ~18k lines, 8 runtime dependencies, zero frameworks. Read it in an afternoon."
+    />
+    <meta property="og:title" content="SigPi — a coding-agent harness you can read" />
+    <meta
+      property="og:description"
+      content="An open-source agent harness in plain TypeScript. Small enough to read, simple enough to hack."
     />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles/global.css" />
   </head>
   <body>
+    <div class="bg-aurora" aria-hidden="true"></div>
+    <div class="bg-grid" aria-hidden="true"></div>
+
     <Header />
 
     <main>
+      <!-- ================= HERO ================= -->
       <section class="hero">
-        <p class="badge">Open source · MIT · Built in TypeScript</p>
-        <h1>
-          An open-source coding agent<br />
-          <span class="accent">you can actually read.</span>
-        </h1>
-        <p class="subtitle">
-          SigPi reads your codebase, edits files, runs shell commands, and manages
-          multi-turn sessions — with every line written to be understood. No framework
-          magic, no sprawling abstractions.
-        </p>
-        <div class="cta-row">
-          <a class="btn primary" href="/docs">Get started</a>
-          <a class="btn ghost" href="https://github.com/xiatianliang1024gm/sigpi"
-            >View on GitHub</a
-          >
+        <div class="hero-inner container">
+          <div class="badge-row">
+            <span class="badge"><span class="dot"></span> MIT · open source</span>
+            <span class="badge">100% TypeScript</span>
+            <span class="badge">0 frameworks</span>
+          </div>
+
+          <h1>
+            A coding-agent harness<br />
+            <span class="grad-text">you can actually read.</span>
+          </h1>
+          <p class="subtitle">
+            <strong>SigPi</strong> is an open-source agent harness in plain TypeScript —
+            the REPL, the loop, the tools, the sessions. No framework, no black box.
+            ~18k lines and 8 dependencies, built to be read and hacked on.
+          </p>
+
+          <div class="cta-row">
+            <a class="btn primary" href="/docs">Get started</a>
+            <a class="btn ghost" href="https://github.com/xiatianliang1024gm/sigpi"
+              >View on GitHub</a
+            >
+          </div>
+
+          <div class="terminal-wrap">
+            <div class="terminal" aria-label="SigPi REPL demo">
+              <div class="term-bar">
+                <span class="term-dot r"></span>
+                <span class="term-dot y"></span>
+                <span class="term-dot g"></span>
+                <span class="term-title">sigpi — agent harness · gpt-4o</span>
+              </div>
+              <div class="term-body">
+                <span class="ln"><span class="prompt">$</span> <span class="cmd">sigpi</span></span>
+                <span class="ln dim">sigpi 0.1.0-beta · session 7f3a · model gpt-4o</span>
+                <span class="ln us"><span class="tok">you:</span> how does the agent loop work in this repo?</span>
+                <span class="ln dim">… reading src/agent/agent-loop.ts (58 lines)</span>
+                <span class="ln us"><span class="tok">agent:</span> it is a <span class="cmd">while</span> loop —</span>
+                <span class="ln">  <span class="num">1.</span> send the transcript to the model</span>
+                <span class="ln">  <span class="num">2.</span> run the tool it asks for</span>
+                <span class="ln">  <span class="num">3.</span> append the result and repeat</span>
+                <span class="ln dim">  no framework — just src/agent/, eight files.</span>
+                <span class="ln us"><span class="tok">you:</span> <span class="cmd">/summary</span></span>
+                <span class="ln ok">→ session saved · 1,240 tokens · resume with --session 7f3a</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ================= STATS ================= -->
+          <div class="stats" role="list" aria-label="SigPi at a glance">
+            <div class="stat" role="listitem">
+              <span class="num grad-text">69</span>
+              <span class="lbl">source files</span>
+            </div>
+            <div class="stat" role="listitem">
+              <span class="num grad-text">~18k</span>
+              <span class="lbl">lines of TypeScript</span>
+            </div>
+            <div class="stat" role="listitem">
+              <span class="num grad-text">8</span>
+              <span class="lbl">runtime dependencies</span>
+            </div>
+            <div class="stat" role="listitem">
+              <span class="num grad-text">0</span>
+              <span class="lbl">frameworks</span>
+            </div>
+          </div>
         </div>
-
-        <pre class="terminal" aria-label="Quick start commands"><code><span class="cmt"># 1. Install</span>
-git clone https://github.com/xiatianliang1024gm/sigpi
-cd sigpi && pnpm install
-
-<span class="cmt"># 2. Configure</span>
-pnpm dev init
-<span class="cmt"># edit ~/.sigpi/config.toml with your API key and model</span>
-
-<span class="cmt"># 3. Chat</span>
-pnpm dev chat</code></pre>
       </section>
 
+      <!-- ================= READING PATH ================= -->
+      <section class="section" id="read">
+        <div class="container">
+          <div class="section-head">
+            <span class="eyebrow">The reading path</span>
+            <h2>Understand the whole harness<br />in one afternoon.</h2>
+            <p class="lead">
+              The repo is organized as a guided tour. Follow the path and you will know
+              how SigPi works — not in theory, line by line.
+            </p>
+          </div>
+
+          <div class="path-grid">
+            <div class="path-steps">
+              <div class="path-step">
+                <span class="n">01</span>
+                <div>
+                  <h3>Start with <code>AGENTS.md</code></h3>
+                  <p>
+                    Key entry points and the shape of the codebase — written to orient
+                    a new reader (human or AI) in minutes.
+                  </p>
+                </div>
+              </div>
+              <div class="path-step">
+                <span class="n">02</span>
+                <div>
+                  <h3>Grab the vocabulary from <code>CONTEXT-MAP.md</code></h3>
+                  <p>
+                    The ubiquitous language of the project: what a session is, what a
+                    tool is, how context is managed.
+                  </p>
+                </div>
+              </div>
+              <div class="path-step">
+                <span class="n">03</span>
+                <div>
+                  <h3>Read the loop in <code>src/agent/</code></h3>
+                  <p>
+                    Eight small files. The heart of the harness is a while-loop that
+                    is easier to follow than most middlewares.
+                  </p>
+                </div>
+              </div>
+              <div class="path-step">
+                <span class="n">04</span>
+                <div>
+                  <h3>See the tools in <code>src/tools/</code></h3>
+                  <p>
+                    grep, glob, read, edit, shell — how each tool is declared, how
+                    arguments are validated, how results come back.
+                  </p>
+                </div>
+              </div>
+              <div class="path-step">
+                <span class="n">05</span>
+                <div>
+                  <h3>Meet the REPL in <code>src/tui/</code></h3>
+                  <p>
+                    The interactive shell, the status bar, the render loop. Finish
+                    here and you have seen the whole product.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div class="tree-card">
+              <div class="tree-head">
+                <span class="dir-icon">❯</span> sigpi — the map
+              </div>
+              <div class="tree">
+                <div><span class="c"># start here</span></div>
+                <div><span class="d hl">AGENTS.md</span> <span class="c">← entry points</span></div>
+                <div><span class="d hl">CONTEXT-MAP.md</span> <span class="c">← the language</span></div>
+                <div>&nbsp;</div>
+                <div><span class="d">src/</span></div>
+                <div>&nbsp;&nbsp;<span class="d hl">agent/</span> <span class="c">← the loop · 8 files</span></div>
+                <div>&nbsp;&nbsp;<span class="d hl">tools/</span> <span class="c">← grep · glob · read · edit · shell</span></div>
+                <div>&nbsp;&nbsp;<span class="d">tui/</span> <span class="c">← the REPL</span></div>
+                <div>&nbsp;&nbsp;<span class="d">session/</span> <span class="c">← persistence</span></div>
+                <div>&nbsp;&nbsp;<span class="d">skills/</span> <span class="c">← SKILL.md loading</span></div>
+                <div>&nbsp;&nbsp;<span class="d">model/</span> <span class="c">← LLM adapters</span></div>
+                <div>&nbsp;</div>
+                <div><span class="f">package.json</span> <span class="c-cyan">← 8 deps, 0 frameworks</span></div>
+              </div>
+              <div class="tree-foot">
+                No build pipeline beyond tsc. No framework to learn. Just TypeScript.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= FEATURES ================= -->
       <section class="section" id="features">
         <div class="container">
-          <h2>What it does</h2>
-          <p class="lead">
-            Everything you'd expect from a modern coding agent, without the black box.
-          </p>
+          <div class="section-head center">
+            <span class="eyebrow">What it does</span>
+            <h2>Everything you expect from a coding agent.<br />Nothing you can't inspect.</h2>
+          </div>
           <div class="grid">
             {
               features.map((f) => (
@@ -103,40 +272,46 @@ pnpm dev chat</code></pre>
         </div>
       </section>
 
+      <!-- ================= PRINCIPLES ================= -->
       <section class="section" id="why">
         <div class="container">
-          <h2>Why SigPi?</h2>
-          <p class="lead">
-            Most coding agents stack framework upon framework until the core loop is
-            buried. SigPi keeps the agent loop, tool calling, and context management in
-            plain sight.
-          </p>
-          <ul class="bullets">
-            <li>
-              <strong>It's a reference implementation, not a black box</strong> — if
-              you're building agents yourself, or just want to understand how they
-              tick, this is for you.
-            </li>
-            <li>
-              <strong>Minimal dependencies</strong> — just the OpenAI SDK, a TOML
-              parser, and a terminal UI library.
-            </li>
-            <li>
-              <strong>~60 source files</strong> — small enough to read in an
-              afternoon.
-            </li>
-            <li>
-              <strong>A clear reading path</strong> — start with
-              <code>AGENTS.md</code> for the key entry points, then
-              <code>CONTEXT-MAP.md</code> for the ubiquitous language.
-            </li>
-            <li>
-              <strong>Works with any OpenAI-compatible LLM</strong> — OpenAI, Ollama,
-              LiteLLM, or any provider that speaks the chat completions API.
-            </li>
-          </ul>
-          <div class="cta-row" style="justify-content: flex-start; margin-bottom: 0">
-            <a class="btn primary" href="/docs">Read the quick start</a>
+          <div class="section-head center">
+            <span class="eyebrow">Why SigPi</span>
+            <h2>Built to be the project you start with.</h2>
+            <p class="lead">
+              If you are learning to build agents — or teaching someone — SigPi is a
+              harness that shows its work.
+            </p>
+          </div>
+          <div class="principles">
+            {
+              principles.map((p) => (
+                <div class="principle">
+                  <span class="k">{p.k}</span>
+                  <h3>{p.title}</h3>
+                  <p>{p.body}</p>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= CTA ================= -->
+      <section class="section" style="border-top: none">
+        <div class="container">
+          <div class="cta-band">
+            <h2>Clone it. Read it. <span class="grad-text">Make it yours.</span></h2>
+            <p>
+              The quick start takes about two minutes. Understanding the whole harness
+              takes an afternoon.
+            </p>
+            <div class="cta-row">
+              <a class="btn primary" href="/docs">Read the quick start</a>
+              <a class="btn ghost" href="https://github.com/xiatianliang1024gm/sigpi"
+                >Star on GitHub</a
+              >
+            </div>
           </div>
         </div>
       </section>
