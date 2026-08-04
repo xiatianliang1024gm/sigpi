@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createWriteStream, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { sanitizeWorkingDirectory } from "../shell.js";
+import { killProcessGroup, sanitizeWorkingDirectory } from "../shell.js";
 
 export type BackgroundTaskStatus = "running" | "done";
 
@@ -17,6 +17,8 @@ export interface BackgroundTask {
 	exitCode: number | null;
 	signal: string | null;
 	killed: boolean;
+	/** True when the task's optional deadline fired and killed the process group. */
+	timedOut: boolean;
 }
 
 export interface SpawnBackgroundOptions {
@@ -30,6 +32,13 @@ export interface SpawnBackgroundOptions {
 	scriptPath?: string;
 	description: string | null;
 	env?: NodeJS.ProcessEnv;
+	/**
+	 * Optional deadline in ms. When set, the task's process group is SIGTERMed
+	 * (with a SIGKILL escalation) once it fires. Background tasks are
+	 * long-running by design, so this only applies when the model/caller
+	 * explicitly requested a timeout.
+	 */
+	timeoutMs?: number | null;
 }
 
 /**
@@ -58,6 +67,7 @@ export class BackgroundTaskManager {
 			exitCode: null,
 			signal: null,
 			killed: false,
+			timedOut: false,
 		};
 		this.tasks.set(task.id, task);
 
@@ -93,10 +103,32 @@ export class BackgroundTaskManager {
 		}
 
 		task.pid = proc.pid ?? null;
+
+		// Optional deadline: SIGTERM the process group when it fires, escalating
+		// to SIGKILL if the group ignores SIGTERM so the task can never outlive
+		// its requested timeout. `killProcessGroup` is a no-op when `pid` is
+		// still null (spawn failed before we got here).
+		let timeoutTimer: NodeJS.Timeout | undefined;
+		if (options.timeoutMs != null) {
+			timeoutTimer = setTimeout(() => {
+				task.timedOut = true;
+				killProcessGroup(task.pid, "SIGTERM");
+				const killTimer = setTimeout(
+					() => killProcessGroup(task.pid, "SIGKILL"),
+					2_000,
+				);
+				killTimer.unref?.();
+			}, options.timeoutMs);
+			timeoutTimer.unref?.();
+		}
+
 		proc.stdout?.on("data", (chunk: Buffer) => log.write(chunk));
 		proc.stderr?.on("data", (chunk: Buffer) => log.write(chunk));
 
 		proc.on("error", (error: Error) => {
+			if (timeoutTimer) {
+				clearTimeout(timeoutTimer);
+			}
 			log.write(`\n[spawn error] ${error.message}\n`);
 			if (task.status === "running") {
 				task.status = "done";
@@ -106,11 +138,15 @@ export class BackgroundTaskManager {
 		});
 
 		proc.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
+			if (timeoutTimer) {
+				clearTimeout(timeoutTimer);
+			}
 			task.status = "done";
 			task.exitCode = code;
 			task.signal = signal;
 			log.write(
-				`\n\nExit code: ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}\n` +
+				`\n\n${task.timedOut ? `Timed out after ${options.timeoutMs}ms\n` : ""}` +
+					`Exit code: ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}\n` +
 					`Finished: ${new Date().toISOString()}\n`,
 			);
 			log.end();
