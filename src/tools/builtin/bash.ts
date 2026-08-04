@@ -1,9 +1,16 @@
-import { execFile } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { once } from "node:events";
+import {
+	closeSync,
+	createReadStream,
+	createWriteStream,
+	openSync,
+} from "node:fs";
+import { mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
+import type { Writable } from "node:stream";
 import { z } from "zod";
 import type { RunShellConfig } from "../../config.js";
 import {
@@ -14,25 +21,22 @@ import { compactWhitespace, getString, truncate } from "../../progress.js";
 import {
 	buildShellInvocation,
 	detectShellRuntime,
+	killProcessGroup,
 	sanitizeWorkingDirectory,
 	sourceScript,
 } from "../../shell.js";
 import type { ShellRuntime, ToolDefinition } from "../../types.js";
 import { ReadTracker } from "../read-tracker.js";
 import { ToolExecutionError } from "../registry.js";
-import {
-	formatRawBlock,
-	joinRenderedSections,
-	withRendered,
-} from "../render.js";
-
-const execFileAsync = promisify(execFile);
+import { joinRenderedSections, withRendered } from "../render.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 const DEFAULT_OUTPUT_LENGTH = 30_000;
 const DATA_TRUNCATION_CAP = 4_000;
 const OVERFLOW_PREVIEW_CHARS = 2_000;
+const BLOCK_START_MARKER = "=== CONTENT START ===";
+const BLOCK_END_MARKER = "=== CONTENT END ===";
 
 const bashSchema = z.object({
 	command: z.string().min(1),
@@ -102,13 +106,16 @@ export function createBashTool(
 				timeout: {
 					type: "integer",
 					description:
-						"Optional timeout in milliseconds (default 120000, max 600000).",
+						"Optional timeout in milliseconds (default 120000; clamped to " +
+						"the configured maximum, default 600000). For a background task, " +
+						"the timeout only applies when you set it explicitly.",
 				},
 				maxOutputChars: {
 					type: "integer",
 					description:
 						"Optional cap on inline output characters before it is " +
-						"written to a session file (default 30000, max 150000).",
+						"written to a session file (default 30000; values above the " +
+						"configured max_output_length are clamped down to it).",
 				},
 				description: {
 					type: "string",
@@ -120,8 +127,9 @@ export function createBashTool(
 					description:
 						"Optional. Run the command as a background task (non-blocking) when " +
 						"true; the tool returns a task id and log path you can inspect with " +
-						"/tasks. Defaults to false (foreground, waits for completion). Send a " +
-						'real boolean, not a string like "true".',
+						"/tasks. Defaults to false (foreground, waits for completion). If " +
+						"timeout is omitted the task runs until it finishes or is stopped. " +
+						'Send a real boolean, not a string like "true".',
 				},
 			},
 			required: ["command"],
@@ -171,6 +179,11 @@ export function createBashTool(
 						"run_in_background requires a background task manager, which is unavailable in this runtime",
 					);
 				}
+				// Background tasks are long-running by design, so the timeout
+				// only bounds them when the model explicitly set one — the
+				// default 120s would otherwise kill a 10-minute build.
+				const bgTimeoutMs =
+					timeout != null ? Math.min(Math.max(timeout, 1), maxTimeout) : null;
 				// Ensure the log directory exists: the foreground path only
 				// mkdir's outputDir on overflow, so a background task started
 				// before any overflowing foreground call would hit ENOENT when
@@ -193,6 +206,7 @@ export function createBashTool(
 					description: description ?? null,
 					env: { ...process.env, TERM: process.env.TERM ?? "dumb" },
 					scriptPath: bgInvocation.scriptPath,
+					timeoutMs: bgTimeoutMs,
 				});
 
 				return withRendered(
@@ -217,126 +231,135 @@ export function createBashTool(
 				preamble,
 			});
 
-			const result = await execFileAsync(
-				invocation.executable,
-				invocation.args,
-				{
+			// Redirect stdout/stderr to transient temp files instead of pipes.
+			// Pipes are what made the old `execFile` path hang: `execFile`
+			// resolves only once the child's stdio pipes fully close, and a
+			// command that backgrounds a child (e.g. `server &`) hands the
+			// pipe write-end to that grandchild, so the pipe stays open until
+			// every grandchild exits — stalling the whole timeout budget and
+			// then reporting a misleading success. Files never block the wait,
+			// and they remove the old 32MB `maxBuffer` crash: output streams to
+			// disk and only the head is buffered for the inline preview.
+			const outPath = path.join(
+				os.tmpdir(),
+				`sigpi-bash-out-${randomUUID()}.out`,
+			);
+			const errPath = path.join(
+				os.tmpdir(),
+				`sigpi-bash-err-${randomUUID()}.err`,
+			);
+
+			let ok = false;
+			let exitCode: number | null = null;
+			let signal: string | null = null;
+			let timedOut = false;
+			let stdout = "";
+			let stderr = "";
+			let overflowPath: string | undefined;
+			let preview: string | undefined;
+
+			try {
+				const spawned = await spawnShell({
+					executable: invocation.executable,
+					args: invocation.args,
 					cwd: projectDir,
-					timeout: timeoutMs,
-					maxBuffer: Math.max(limit * 4, 64 * 1024, 32 * 1024 * 1024),
-					signal: context.abortSignal,
 					env: {
 						...process.env,
 						TERM: process.env.TERM ?? "dumb",
 					},
-				},
-			)
-				.then(
-					({ stdout, stderr }) => ({
-						ok: true as const,
-						stdout,
-						stderr,
-						exitCode: 0,
-						signal: null as string | null,
-						timedOut: false,
-					}),
-					(
-						error: NodeJS.ErrnoException & {
-							stdout?: string;
-							stderr?: string;
-							code?: number | string;
-							signal?: string;
-							killed?: boolean;
-							name?: string;
-						},
-					) => {
-						if (error.name === "AbortError" || error.code === "ABORT_ERR") {
-							const reason = context.abortSignal?.reason;
-							if (isTurnInterruptedError(reason)) {
-								throw reason;
-							}
-							throw new TurnInterruptedError("user_escape", "tool");
-						}
-
-						return {
-							ok: false as const,
-							stdout: error.stdout ?? "",
-							// Use `||` (not `??`): when the shell binary is
-							// missing (e.g. zsh not installed), `error.stderr`
-							// is `""`, so `??` would keep the empty string and
-							// hide the failure reason. `||` falls back to the
-							// error message instead.
-							stderr: error.stderr || error.message,
-							exitCode: typeof error.code === "number" ? error.code : null,
-							signal: error.signal ?? null,
-							timedOut: error.killed === true && error.signal === "SIGTERM",
-						};
-					},
-				)
-				.finally(() => {
-					if (invocation.scriptPath) {
-						void rm(invocation.scriptPath, { force: true });
-					}
+					timeoutMs,
+					abortSignal: context.abortSignal,
+					stdoutPath: outPath,
+					stderrPath: errPath,
 				});
 
-			// Record recognized single-file reads so the edit tool's
-			// read-before-edit check passes (resolved against the project
-			// directory the command ran in).
-			if (result.ok) {
-				const readFile0 = detectSingleFileRead(command);
-				if (readFile0) {
-					await tracker.recordRead(projectDir, readFile0);
+				if (spawned.aborted) {
+					const reason = context.abortSignal?.reason;
+					if (isTurnInterruptedError(reason)) {
+						throw reason;
+					}
+					throw new TurnInterruptedError("user_escape", "tool");
 				}
-			}
 
-			// Overflow to a session file when output exceeds the limit.
-			const totalLen = result.stdout.length + result.stderr.length;
-			let overflowPath: string | undefined;
-			let preview: string | undefined;
-			if (totalLen > limit) {
-				await mkdir(outputDir, { recursive: true });
-				overflowPath = path.join(outputDir, `${randomUUID()}.txt`);
-				const fileContent = [
-					`Command: ${command}`,
-					`Cwd: ${projectDir}`,
-					`Exit code: ${result.exitCode ?? "(none)"}`,
-					...(result.signal ? [`Signal: ${result.signal}`] : []),
-					...(result.timedOut ? [`Timed out after ${timeoutMs}ms`] : []),
-					formatRawBlock("STDOUT", result.stdout || "(empty)", {
-						omitLabel: true,
-					}),
-					formatRawBlock("STDERR", result.stderr || "(empty)", {
-						omitLabel: true,
-					}),
-				].join("\n");
-				await writeFile(overflowPath, fileContent, "utf8");
-				preview = fileContent.slice(0, OVERFLOW_PREVIEW_CHARS);
+				exitCode = spawned.exitCode;
+				signal = spawned.signal;
+				timedOut = spawned.timedOut;
+
+				if (spawned.spawnError) {
+					// The shell never started (e.g. the binary is missing). Use
+					// `||` (not `??`): the error file is empty and the error
+					// message carries the reason, and we never want to hide it.
+					stderr =
+						(await readHead(errPath, limit)).trimEnd() ||
+						spawned.spawnError.message;
+				} else {
+					ok = spawned.exitCode === 0;
+					const outStat = await stat(outPath).catch(() => null);
+					const errStat = await stat(errPath).catch(() => null);
+					const totalLen = (outStat?.size ?? 0) + (errStat?.size ?? 0);
+
+					if (totalLen > limit) {
+						await mkdir(outputDir, { recursive: true });
+						overflowPath = path.join(outputDir, `${randomUUID()}.txt`);
+						await writeOverflowFile(overflowPath, {
+							header: [
+								`Command: ${command}`,
+								`Cwd: ${projectDir}`,
+								`Exit code: ${exitCode ?? "(none)"}`,
+								...(signal ? [`Signal: ${signal}`] : []),
+								...(timedOut ? [`Timed out after ${timeoutMs}ms`] : []),
+							],
+							stdoutPath: outPath,
+							stderrPath: errPath,
+						});
+						preview = await readHead(overflowPath, OVERFLOW_PREVIEW_CHARS);
+					} else {
+						stdout = await readFile(outPath, "utf8").catch(() => "");
+						stderr = await readFile(errPath, "utf8").catch(() => "");
+					}
+				}
+
+				// Record recognized single-file reads so the edit tool's
+				// read-before-edit check passes (resolved against the project
+				// directory the command ran in).
+				if (ok) {
+					const readFile0 = detectSingleFileRead(command);
+					if (readFile0) {
+						await tracker.recordRead(projectDir, readFile0);
+					}
+				}
+			} finally {
+				if (invocation.scriptPath) {
+					void rm(invocation.scriptPath, { force: true });
+				}
+				void rm(outPath, { force: true });
+				void rm(errPath, { force: true });
 			}
 
 			const renderedStdout = overflowPath
 				? (preview ?? "")
-				: truncateHeadTail(result.stdout, limit);
+				: truncateHeadTail(stdout, limit);
 			const renderedStderr = overflowPath
 				? ""
-				: truncateHeadTail(result.stderr, limit);
+				: truncateHeadTail(stderr, limit);
 			const dataStdout = overflowPath
 				? (preview ?? "")
-				: truncateHeadTail(result.stdout, DATA_TRUNCATION_CAP);
+				: truncateHeadTail(stdout, DATA_TRUNCATION_CAP);
 			const dataStderr = overflowPath
 				? ""
-				: truncateHeadTail(result.stderr, DATA_TRUNCATION_CAP);
+				: truncateHeadTail(stderr, DATA_TRUNCATION_CAP);
 
 			// Surface the failure reason in the rendered text itself: the
 			// renderer that feeds the model only reads the `rendered` string,
 			// so structured fields like `timedOut`/`signal` would otherwise
 			// never reach it and a bare timeout would look like a generic
 			// "Command failed" wrapper error.
-			const statusLine = result.ok
+			const statusLine = ok
 				? null
 				: [
-						`Exit code: ${result.exitCode ?? "(none)"}`,
-						result.signal ? `Signal: ${result.signal}` : null,
-						result.timedOut ? `Timed out after ${timeoutMs}ms` : null,
+						`Exit code: ${exitCode ?? "(none)"}`,
+						signal ? `Signal: ${signal}` : null,
+						timedOut ? `Timed out after ${timeoutMs}ms` : null,
 					]
 						.filter((part): part is string => part !== null)
 						.join(", ");
@@ -347,20 +370,20 @@ export function createBashTool(
 					description: description ?? null,
 					shell: shellRuntime.shell,
 					platform: shellRuntime.platform,
-					ok: result.ok,
-					exitCode: result.exitCode,
-					signal: result.signal,
-					timedOut: result.timedOut,
+					ok,
+					exitCode,
+					signal,
+					timedOut,
 					cwd: projectDir,
 					overflowPath: overflowPath ?? null,
 					stdout: dataStdout,
 					stderr: dataStderr,
 					stdoutTruncated: overflowPath
 						? true
-						: result.stdout.length > DATA_TRUNCATION_CAP,
+						: stdout.length > DATA_TRUNCATION_CAP,
 					stderrTruncated: overflowPath
 						? true
-						: result.stderr.length > DATA_TRUNCATION_CAP,
+						: stderr.length > DATA_TRUNCATION_CAP,
 				},
 				joinRenderedSections([statusLine, renderedStdout, renderedStderr]),
 			);
@@ -385,6 +408,253 @@ function buildPreamble(
 		parts.push(sourceScript(shellRuntime, rcDefinitionsFile));
 	}
 	return parts.join("\n");
+}
+
+interface SpawnShellOptions {
+	executable: string;
+	args: string[];
+	cwd: string;
+	env: NodeJS.ProcessEnv;
+	timeoutMs: number;
+	abortSignal?: AbortSignal;
+	stdoutPath: string;
+	stderrPath: string;
+}
+
+interface SpawnShellResult {
+	exitCode: number | null;
+	signal: string | null;
+	timedOut: boolean;
+	aborted: boolean;
+	spawnError: Error | null;
+}
+
+/**
+ * Spawn a shell command with stdout/stderr redirected to files, resolving as
+ * soon as the *direct* shell process exits — never when its stdio pipes close.
+ *
+ * Waiting on pipe close is what hung the old `execFile` path: a command that
+ * backgrounds a child (e.g. `server &`) hands the pipe write-end to that
+ * grandchild, so the pipes stay open until every grandchild exits. That stalled
+ * the tool for the full timeout budget and then reported a misleading success
+ * (`execFile` resolves its timeout as a clean exit, never as a killed error).
+ * Redirecting to files decouples our wait from the grandchildren entirely: a
+ * background child keeps writing to its own temp file and never blocks the
+ * result. Timeout/abort kill the whole process group (SIGTERM, then SIGKILL
+ * escalation) so the actual work is stopped, not just the wrapper shell.
+ */
+async function spawnShell(
+	options: SpawnShellOptions,
+): Promise<SpawnShellResult> {
+	// Open the capture files with plain fds (`openSync`, not `open`/
+	// FileHandle) so the fd can be handed straight to `spawn` and closed
+	// synchronously afterwards. A `FileHandle` would keep a live reference:
+	// its GC finalizer would later `close()` the already-closed fd, raising
+	// an EBADF uncaughtException that flakes whatever test/call is running.
+	const outFd = openSync(options.stdoutPath, "w");
+	const errFd = openSync(options.stderrPath, "w");
+	let proc: ChildProcess;
+	try {
+		proc = spawn(options.executable, options.args, {
+			cwd: options.cwd,
+			env: options.env,
+			// Own process group so `killProcessGroup` can take down the whole
+			// tree (the shell *and* any grandchildren it spawned).
+			detached: process.platform !== "win32",
+			stdio: ["ignore", outFd, errFd],
+			windowsHide: true,
+		});
+	} catch (error) {
+		closeSync(outFd);
+		closeSync(errFd);
+		return {
+			exitCode: null,
+			signal: null,
+			timedOut: false,
+			aborted: false,
+			spawnError: error as Error,
+		};
+	}
+	// The child inherited these fds; close our copies so we don't leak them.
+	// This must be synchronous: an `await` here would yield to the event loop
+	// and let a spawn `error` (e.g. ENOENT for a missing shell binary) fire
+	// before the listeners below attach, turning it into an uncaught exception
+	// that rejects `execute` instead of returning a structured result.
+	closeSync(outFd);
+	closeSync(errFd);
+
+	const pid = proc.pid ?? 0;
+
+	return new Promise((resolve) => {
+		let settled = false;
+		let timedOut = false;
+		let aborted = false;
+		let escalateTimer: NodeJS.Timeout | undefined;
+
+		// SIGTERM the group, then escalate to SIGKILL if it ignores SIGTERM so
+		// the tool can never be stuck on a signal-immune process.
+		const terminate = () => {
+			killProcessGroup(pid, "SIGTERM");
+			escalateTimer = setTimeout(() => killProcessGroup(pid, "SIGKILL"), 2_000);
+			escalateTimer.unref?.();
+		};
+
+		const timeoutTimer = setTimeout(() => {
+			timedOut = true;
+			terminate();
+		}, options.timeoutMs);
+		timeoutTimer.unref?.();
+
+		const onAbort = () => {
+			if (aborted) {
+				return;
+			}
+			aborted = true;
+			terminate();
+		};
+		if (options.abortSignal) {
+			if (options.abortSignal.aborted) {
+				onAbort();
+			} else {
+				options.abortSignal.addEventListener("abort", onAbort, { once: true });
+			}
+		}
+
+		const cleanup = () => {
+			clearTimeout(timeoutTimer);
+			if (escalateTimer) {
+				clearTimeout(escalateTimer);
+			}
+			options.abortSignal?.removeEventListener("abort", onAbort);
+		};
+
+		proc.once("error", (error) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			cleanup();
+			resolve({
+				exitCode: null,
+				signal: null,
+				timedOut,
+				aborted,
+				spawnError: error,
+			});
+		});
+
+		proc.once("exit", (code, procSignal) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			cleanup();
+			resolve({
+				exitCode: code,
+				signal: procSignal,
+				timedOut,
+				aborted,
+				spawnError: null,
+			});
+		});
+	});
+}
+
+/**
+ * Stream the stdout/stderr temp files into the overflow session file, keeping
+ * the same structure the old in-memory path produced (a header line list plus
+ * one CONTENT block per stream). Only the head of each file is ever held in
+ * memory, so a multi-hundred-MB output spills to disk without buffering it
+ * whole — the previous 32MB `maxBuffer` crash is gone.
+ */
+async function writeOverflowFile(
+	overflowPath: string,
+	options: {
+		header: string[];
+		stdoutPath: string;
+		stderrPath: string;
+	},
+): Promise<void> {
+	const dest = createWriteStream(overflowPath);
+	try {
+		for (const line of options.header) {
+			dest.write(`${line}\n`);
+		}
+		dest.write("\n");
+		await writeBodyBlock(dest, options.stdoutPath);
+		await writeBodyBlock(dest, options.stderrPath);
+	} finally {
+		dest.end();
+	}
+	await once(dest, "finish");
+}
+
+async function writeBodyBlock(dest: Writable, srcPath: string): Promise<void> {
+	const size = (await stat(srcPath).catch(() => null))?.size ?? 0;
+	dest.write(`${BLOCK_START_MARKER}\n`);
+	if (size === 0) {
+		dest.write("(empty)\n");
+		dest.write(`${BLOCK_END_MARKER}\n`);
+		return;
+	}
+	const endMarker = await streamBody(dest, srcPath);
+	dest.write(`${endMarker}\n`);
+}
+
+/**
+ * Stream `srcPath` into `dest` while scanning for the end-marker candidates so
+ * a marker that collides with the command's own output can be avoided (mirrors
+ * the old `chooseUniqueMarker`, but scans without buffering the whole file).
+ * Returns the chosen marker; the caller writes it after the body.
+ */
+async function streamBody(dest: Writable, srcPath: string): Promise<string> {
+	const candidates: string[] = [BLOCK_END_MARKER];
+	for (let suffix = 1; suffix <= 16; suffix++) {
+		candidates.push(`${BLOCK_END_MARKER}_${suffix}`);
+	}
+	const found = new Set<string>();
+	const reader = createReadStream(srcPath);
+	let tail = "";
+	let lastChar = "";
+	for await (const chunk of reader) {
+		const text = chunk.toString("utf8");
+		const window = tail + text;
+		for (const candidate of candidates) {
+			if (window.includes(candidate)) {
+				found.add(candidate);
+			}
+		}
+		tail = (tail + text).slice(-(BLOCK_END_MARKER.length - 1));
+		if (text.length > 0) {
+			lastChar = text[text.length - 1];
+		}
+		if (!dest.write(chunk)) {
+			await once(dest, "drain");
+		}
+	}
+	const marker =
+		candidates.find((candidate) => !found.has(candidate)) ??
+		`${BLOCK_END_MARKER}_${candidates.length}`;
+	if (lastChar !== "\n") {
+		dest.write("\n");
+	}
+	return marker;
+}
+
+/** Read up to `maxBytes` from the head of a file as UTF-8. */
+async function readHead(filePath: string, maxBytes: number): Promise<string> {
+	try {
+		const handle = await open(filePath, "r");
+		try {
+			const buffer = Buffer.alloc(maxBytes);
+			const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+			return buffer.subarray(0, bytesRead).toString("utf8");
+		} finally {
+			await handle.close();
+		}
+	} catch {
+		return "";
+	}
 }
 
 function truncateHeadTail(value: string, maxChars: number): string {

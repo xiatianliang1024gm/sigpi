@@ -235,6 +235,41 @@ export function sanitizeWorkingDirectory(
 }
 
 /**
+ * Send a signal to a process and, on POSIX, its whole process group. Killing
+ * just the direct shell PID leaves the grandchildren the command spawned
+ * (e.g. `server &`) running, which is both a process leak and the reason a
+ * plain `kill(pid)` never actually stops a command. On Windows there is no
+ * process-group concept, so we fall back to the lone PID. No-ops when `pid`
+ * is absent/zero (e.g. the process failed to spawn), and swallows ESRCH so a
+ * race with an already-exited process is harmless.
+ */
+export function killProcessGroup(
+	pid: number | null | undefined,
+	signal: NodeJS.Signals = "SIGTERM",
+): void {
+	if (!pid || pid <= 0) {
+		return;
+	}
+	if (process.platform === "win32") {
+		try {
+			process.kill(pid, signal);
+		} catch {
+			// already gone
+		}
+		return;
+	}
+	try {
+		process.kill(-pid, signal);
+	} catch {
+		try {
+			process.kill(pid, signal);
+		} catch {
+			// already gone
+		}
+	}
+}
+
+/**
  * Source a script file in the given shell. POSIX shells use `.` (the portable
  * form of `source`, which is a bash/zsh extension and does not exist in
  * `sh`/`dash`); PowerShell uses `.` as well. Centralizing this behind the
