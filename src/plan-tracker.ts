@@ -26,9 +26,16 @@ export function formatPlanStatusGlyph(status: PlanStatus | string): string {
 /**
  * One-line summary for the `update_plan` tool's progress description, e.g.
  * "[2/5] Patching the renderer" while a step is in progress, or
- * "[5/5] All steps completed" when every step is done. Falls back to
+ * "All steps completed" (no index) when every step is done. Falls back to
  * "[completed/total]" with no trailing step label when no step is in progress
  * and the plan is not fully complete (e.g. all items still pending).
+ *
+ * The numerator counts the current *work position*: completed items plus the
+ * single in_progress item (the step being worked on right now), not strictly
+ * finished items. So "[3/4] Doing C" means "two done, working on step three".
+ * When every step is completed the index is omitted on purpose — "[4/4]" for
+ * "working on the last step" and "[4/4]" for "all done" would be
+ * indistinguishable.
  */
 export function formatPlanProgressSummaryLine(view: PlanView): string {
 	const total = view.items.length;
@@ -41,7 +48,7 @@ export function formatPlanProgressSummaryLine(view: PlanView): string {
 	const done = completed + inProgressCount;
 
 	if (view.items.every((item) => item.status === "completed")) {
-		return `[${total}/${total}] All steps completed`;
+		return "All steps completed";
 	}
 
 	const inProgress = view.items.find((item) => item.status === "in_progress");
