@@ -60,9 +60,9 @@ pnpm install</code></pre>
         <code>~/.sigpi/config.toml</code> with your API key and model.
       </p>
       <pre data-file="~/.sigpi/config.toml"><code>[models.default]
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.deepseek.com/v1"
 api_key  = "sk-..."
-name     = "gpt-4o"</code></pre>
+name     = "deepseek-v4-flash"</code></pre>
       <p>
         SigPi works with any provider that speaks the OpenAI chat completions API —
         OpenAI, Ollama, LiteLLM, and more. Override per project with
@@ -87,7 +87,9 @@ name     = "gpt-4o"</code></pre>
         <li><code>pnpm dev session list</code></li>
         <li>
           Inside chat: <code>/summary</code>, <code>/compact</code>,
-          <code>/resume</code>, <code>/model</code>
+          <code>/model</code>, <code>/session</code>, <code>/resume</code>,
+          <code>/new</code>, <code>/tasks</code>, <code>/skill</code>,
+          <code>/exit</code>
         </li>
       </ul>
 
