@@ -40,9 +40,9 @@ const features = [
 
 const principles = [
   {
-    k: '01 / zero frameworks',
-    title: 'Plain TypeScript, no magic',
-    body: 'No framework to unlearn. If you can read TypeScript, you can read all of SigPi.',
+    k: '01 / honest stack',
+    title: 'A TUI library — not a framework to learn',
+    body: 'pi-tui renders the terminal UI. The agent loop, tools, and sessions are plain TypeScript: eight small files in src/agent/.',
   },
   {
     k: '02 / small surface',
@@ -70,7 +70,7 @@ const principles = [
     <title>SigPi — a coding-agent harness you can read</title>
     <meta
       name="description"
-      content="SigPi is an open-source, plain-TypeScript agent harness: ~18k lines, 8 runtime dependencies, zero frameworks. Read it in an afternoon."
+      content="SigPi is an open-source, plain-TypeScript agent harness: ~18k lines, 8 runtime dependencies, no framework to learn. Read it in an afternoon."
     />
     <meta property="og:title" content="SigPi — a coding-agent harness you can read" />
     <meta
@@ -92,7 +92,7 @@ const principles = [
           <div class="badge-row">
             <span class="badge"><span class="dot"></span> MIT · open source</span>
             <span class="badge">100% TypeScript</span>
-            <span class="badge">0 frameworks</span>
+            <span class="badge">interactive REPL</span>
           </div>
 
           <h1>
@@ -101,7 +101,7 @@ const principles = [
           </h1>
           <p class="subtitle">
             <strong>SigPi</strong> is an open-source agent harness in plain TypeScript —
-            the REPL, the loop, the tools, the sessions. No framework, no black box.
+            the REPL, the loop, the tools, the sessions. No black box.
             ~18k lines and 8 dependencies, built to be read and hacked on.
           </p>
 
@@ -118,20 +118,16 @@ const principles = [
                 <span class="term-dot r"></span>
                 <span class="term-dot y"></span>
                 <span class="term-dot g"></span>
-                <span class="term-title">sigpi — agent harness · gpt-4o</span>
+                <span class="term-title">sigpi — agent harness · deepseek-v4-flash</span>
               </div>
               <div class="term-body">
-                <span class="ln"><span class="prompt">$</span> <span class="cmd">sigpi</span></span>
-                <span class="ln dim">sigpi 0.1.0-beta · session 7f3a · model gpt-4o</span>
-                <span class="ln us"><span class="tok">you:</span> how does the agent loop work in this repo?</span>
-                <span class="ln dim">… reading src/agent/agent-loop.ts (58 lines)</span>
-                <span class="ln us"><span class="tok">agent:</span> it is a <span class="cmd">while</span> loop —</span>
-                <span class="ln">  <span class="num">1.</span> send the transcript to the model</span>
-                <span class="ln">  <span class="num">2.</span> run the tool it asks for</span>
-                <span class="ln">  <span class="num">3.</span> append the result and repeat</span>
-                <span class="ln dim">  no framework — just src/agent/, eight files.</span>
-                <span class="ln us"><span class="tok">you:</span> <span class="cmd">/summary</span></span>
-                <span class="ln ok">→ session saved · 1,240 tokens · resume with --session 7f3a</span>
+                <span class="ln"><span class="prompt">❯</span> <span class="cmd">how does the agent loop work in this repo?</span></span>
+                <span class="ln">Let me just read it — that's the whole point of this project.</span>
+                <span class="ln us"><span class="tok">⎿</span> read src/agent/agent-loop.ts</span>
+                <span class="ln dim">  → 58 lines · the turn loop, nothing else</span>
+                <span class="ln us"><span class="tok">→</span> it's a while-loop: send the transcript, ask the model for a tool call, run it, append the result — repeat. Eight small files in src/agent/.</span>
+                <span class="ln us"><span class="prompt">❯</span> <span class="cmd">/resume 7f3a</span></span>
+                <span class="ln ok">→ session resumed · 1,240 tokens · deepseek-v4-flash</span>
               </div>
             </div>
           </div>
@@ -151,8 +147,8 @@ const principles = [
               <span class="lbl">runtime dependencies</span>
             </div>
             <div class="stat" role="listitem">
-              <span class="num grad-text">0</span>
-              <span class="lbl">frameworks</span>
+              <span class="num grad-text">511</span>
+              <span class="lbl">tests passing</span>
             </div>
           </div>
         </div>
@@ -241,10 +237,11 @@ const principles = [
                 <div>&nbsp;&nbsp;<span class="d">skills/</span> <span class="c">← SKILL.md loading</span></div>
                 <div>&nbsp;&nbsp;<span class="d">model/</span> <span class="c">← LLM adapters</span></div>
                 <div>&nbsp;</div>
-                <div><span class="f">package.json</span> <span class="c-cyan">← 8 deps, 0 frameworks</span></div>
+                <div><span class="f">package.json</span> <span class="c-cyan">← 8 deps, no framework to learn</span></div>
               </div>
               <div class="tree-foot">
-                No build pipeline beyond tsc. No framework to learn. Just TypeScript.
+                No build pipeline beyond tsc. The only UI dependency is pi-tui, a
+                terminal-UI library. Everything else is TypeScript you can read.
               </div>
             </div>
           </div>
