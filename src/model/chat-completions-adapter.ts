@@ -127,11 +127,16 @@ export class ChatCompletionsAdapter implements WireFormatAdapter {
 		// accumulator has already cleaned thinking tags out of `content` and
 		// collected them into `accumulatedReasoning`, so `stripThinking` is a
 		// no-op here but kept as a belt-and-braces guard for the non-streaming
-		// `parse()` path that never sets `accumulatedReasoning`).
+		// `parse()` path that never sets `accumulatedReasoning`). On the
+		// non-streaming path, surface the dedicated `reasoning_content` field
+		// (DeepSeek / OpenAI reasoning models) before falling back to tag
+		// extraction from `content`.
 		const accumulatedReasoning = this.accumulatedReasoning;
 		const reasoning = accumulatedReasoning
 			? accumulatedReasoning
-			: this.extractTagReasoning(message.content ?? null);
+			: message.reasoning_content
+				? message.reasoning_content
+				: this.extractTagReasoning(message.content ?? null);
 		const assistantText = stripThinking(message.content ?? null);
 		const toolCalls = this.parseChatCompletionsToolCalls(message.tool_calls);
 

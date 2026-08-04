@@ -307,6 +307,23 @@ test("parse (non-streaming) extracts reasoning from tagged content via convert",
 	assert.equal(response.assistantText, "the answer");
 });
 
+test("parse (non-streaming) surfaces the dedicated reasoning_content field", () => {
+	const adapter = new ChatCompletionsAdapter(config());
+	const response = adapter.parse({
+		choices: [
+			{
+				message: {
+					role: "assistant",
+					content: "the answer",
+					reasoning_content: "deepseek reasoning",
+				},
+			},
+		],
+	});
+	assert.equal(response.reasoning, "deepseek reasoning");
+	assert.equal(response.assistantText, "the answer");
+});
+
 test("toParams forwards reasoning_content on assistant messages", () => {
 	const adapter = new ChatCompletionsAdapter(config());
 	const req: ModelRequest = {
