@@ -300,6 +300,8 @@ export function createBashTool(
 					`Command: ${command}`,
 					`Cwd: ${projectDir}`,
 					`Exit code: ${result.exitCode ?? "(none)"}`,
+					...(result.signal ? [`Signal: ${result.signal}`] : []),
+					...(result.timedOut ? [`Timed out after ${timeoutMs}ms`] : []),
 					formatRawBlock("STDOUT", result.stdout || "(empty)", {
 						omitLabel: true,
 					}),
@@ -324,6 +326,21 @@ export function createBashTool(
 				? ""
 				: truncateHeadTail(result.stderr, DATA_TRUNCATION_CAP);
 
+			// Surface the failure reason in the rendered text itself: the
+			// renderer that feeds the model only reads the `rendered` string,
+			// so structured fields like `timedOut`/`signal` would otherwise
+			// never reach it and a bare timeout would look like a generic
+			// "Command failed" wrapper error.
+			const statusLine = result.ok
+				? null
+				: [
+						`Exit code: ${result.exitCode ?? "(none)"}`,
+						result.signal ? `Signal: ${result.signal}` : null,
+						result.timedOut ? `Timed out after ${timeoutMs}ms` : null,
+					]
+						.filter((part): part is string => part !== null)
+						.join(", ");
+
 			return withRendered(
 				{
 					command,
@@ -345,7 +362,7 @@ export function createBashTool(
 						? true
 						: result.stderr.length > DATA_TRUNCATION_CAP,
 				},
-				joinRenderedSections([renderedStdout, renderedStderr]),
+				joinRenderedSections([statusLine, renderedStdout, renderedStderr]),
 			);
 		},
 		describeProgress(args) {
