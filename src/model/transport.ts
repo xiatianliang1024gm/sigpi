@@ -604,7 +604,7 @@ export class ModelTransport {
 				}
 				clearTimeout(totalTimer);
 				clearTimeout(idleTimer);
-				return adapter.parse(result);
+				return this.finishNonStreaming(adapter.parse(result), onDelta);
 			}
 
 			const result = await this.client.chat.completions.create(
@@ -627,7 +627,7 @@ export class ModelTransport {
 			}
 			clearTimeout(totalTimer);
 			clearTimeout(idleTimer);
-			return adapter.parse(result);
+			return this.finishNonStreaming(adapter.parse(result), onDelta);
 		} catch (error) {
 			throw mapSdkError(
 				error,
@@ -726,5 +726,38 @@ export class ModelTransport {
 				// aborting via the merged signal.
 			}
 		}
+	}
+
+	/**
+	 * Finalize a non-streaming response. A non-streaming request arrives as a
+	 * single JSON body, so the per-chunk {@link onDelta} path never fires and
+	 * callers that render the transcript from deltas (the REPL view) would show
+	 * nothing for the whole answer. Synthesize one delta carrying the full
+	 * reasoning + content so a non-streaming response renders exactly like a
+	 * streamed one — in a single frame. Responses with neither (e.g. a bare
+	 * tool-call step) emit nothing; the runner only forwards deltas that carry
+	 * text.
+	 */
+	private finishNonStreaming(
+		response: ModelResponse,
+		onDelta?: (delta: ModelDelta) => void,
+	): ModelResponse {
+		if (!onDelta) {
+			return response;
+		}
+		const delta: ModelDelta = {};
+		if (response.reasoning) {
+			delta.reasoningDelta = response.reasoning;
+		}
+		if (response.assistantText) {
+			delta.contentDelta = response.assistantText;
+		}
+		if (
+			delta.reasoningDelta !== undefined ||
+			delta.contentDelta !== undefined
+		) {
+			onDelta(delta);
+		}
+		return response;
 	}
 }

@@ -4,7 +4,7 @@ import type { ModelConfig } from "../src/config.js";
 import { ChatCompletionsAdapter } from "../src/model/chat-completions-adapter.js";
 import { ResponsesAdapter } from "../src/model/responses-adapter.js";
 import { ModelRequestError, ModelTransport } from "../src/model/transport.js";
-import type { ModelRequest } from "../src/types.js";
+import type { ModelDelta, ModelRequest } from "../src/types.js";
 import {
 	chatFrame,
 	type LocalModelServer,
@@ -161,6 +161,44 @@ test("stream=false returns the single-JSON response unchanged", async () => {
 				chatAdapter(server.config),
 			);
 			assert.equal(result.assistantText, "legacy");
+		},
+	);
+});
+
+test("stream=false emits one synthesized delta so the UI renders reasoning + content", async () => {
+	// The REPL transcript is rendered from `model_delta` progress events, and
+	// the non-streaming path never streams per-chunk deltas. Without a
+	// synthesized final delta the whole answer (reasoning + content) would
+	// never appear on screen. Locks in the stream=false display fix.
+	await withServer(
+		{ stream: false, timeoutMs: 200 },
+		() => ({
+			kind: "json",
+			body: {
+				choices: [
+					{
+						message: {
+							role: "assistant",
+							content: "the answer",
+							reasoning_content: "the reasoning",
+						},
+					},
+				],
+			},
+		}),
+		async (server) => {
+			const transport = new ModelTransport(server.config, server.client);
+			const deltas: ModelDelta[] = [];
+			const result = await transport.generate(
+				request(),
+				chatAdapter(server.config),
+				(delta) => deltas.push(delta),
+			);
+			assert.equal(result.assistantText, "the answer");
+			assert.equal(result.reasoning, "the reasoning");
+			assert.equal(deltas.length, 1);
+			assert.equal(deltas[0]?.reasoningDelta, "the reasoning");
+			assert.equal(deltas[0]?.contentDelta, "the answer");
 		},
 	);
 });
