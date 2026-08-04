@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { stripAnsi } from "../src/tui/ansi.js";
 import { buildTranscriptComponents } from "../src/tui/transcript-replay.js";
 import type { SessionEntry } from "../src/types.js";
 
@@ -56,6 +57,13 @@ function compactionEntry(
 	};
 }
 
+/** Render components as ANSI-free lines so assertions don't depend on color mode. */
+function renderLines(
+	components: ReturnType<typeof buildTranscriptComponents>,
+): string[] {
+	return components.flatMap((component) => component.render(80)).map(stripAnsi);
+}
+
 test("buildTranscriptComponents maps user/assistant/tool messages to transcript components", () => {
 	const components = buildTranscriptComponents([
 		userEntry("hello"),
@@ -64,7 +72,7 @@ test("buildTranscriptComponents maps user/assistant/tool messages to transcript 
 		assistantEntry("done"),
 	]);
 
-	const lines = components.flatMap((component) => component.render(80));
+	const lines = renderLines(components);
 	assert.ok(lines.some((line) => line.includes("❯ hello")));
 	assert.ok(lines.some((line) => line.includes("let me think")));
 	assert.ok(lines.some((line) => line.includes("hi there")));
@@ -80,7 +88,7 @@ test("buildTranscriptComponents renders failed tool messages with their error", 
 		),
 	]);
 
-	const lines = components.flatMap((component) => component.render(80));
+	const lines = renderLines(components);
 	assert.ok(lines.some((line) => line.includes("⎿ bash")));
 	assert.ok(
 		lines.some((line) => line.includes("command not found: nope")),
@@ -93,7 +101,7 @@ test("buildTranscriptComponents renders compaction entries with the token window
 		compactionEntry("summarized earlier work", [12_345, 6_789]),
 	]);
 
-	const lines = components.flatMap((component) => component.render(80));
+	const lines = renderLines(components);
 	assert.ok(lines.some((line) => line.includes("Context compacted")));
 	assert.ok(
 		lines.some((line) => line.includes("12.3K → 6.8K tokens.")),
@@ -111,7 +119,7 @@ test("buildTranscriptComponents falls back to a plain notice when the token snap
 		compactionEntry("summarized earlier work"),
 	]);
 
-	const lines = components.flatMap((component) => component.render(80));
+	const lines = renderLines(components);
 	assert.ok(lines.some((line) => line.includes("Context compacted")));
 	assert.equal(
 		lines.some((line) => line.includes("summarized earlier work")),
