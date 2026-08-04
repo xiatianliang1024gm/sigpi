@@ -1,6 +1,7 @@
 node_modules
 .env
 dist
+.astro
 .pnpm-store
 logs
 .DS_Store

@@ -1,0 +1,147 @@
+---
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+const features = [
+  {
+    icon: '💬',
+    title: 'Chat with an LLM about your code',
+    body: 'Interactive REPL with session persistence. Resume any conversation later.',
+  },
+  {
+    icon: '🔍',
+    title: 'Search & navigate',
+    body: 'Built-in grep, glob, and file reading tools the agent uses autonomously.',
+  },
+  {
+    icon: '✏️',
+    title: 'Edit files',
+    body: 'Exact string replacement plus full-file writes, with change summaries.',
+  },
+  {
+    icon: '⚡',
+    title: 'Run shell commands',
+    body: 'Bash with timeout, background tasks, and streaming output.',
+  },
+  {
+    icon: '🧠',
+    title: 'Multi-turn memory',
+    body: 'Sessions survive restarts; long conversations auto-summarize to fit the context window.',
+  },
+  {
+    icon: '🎯',
+    title: 'Plan tracking',
+    body: 'The agent tracks multi-step tasks so you can see progress at a glance.',
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SigPi — An open-source coding agent you can actually read</title>
+    <meta
+      name="description"
+      content="SigPi is an open-source coding agent built in TypeScript. Runs in your terminal. Works with any OpenAI-compatible LLM."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/styles/global.css" />
+  </head>
+  <body>
+    <Header />
+
+    <main>
+      <section class="hero">
+        <p class="badge">Open source · MIT · Built in TypeScript</p>
+        <h1>
+          An open-source coding agent<br />
+          <span class="accent">you can actually read.</span>
+        </h1>
+        <p class="subtitle">
+          SigPi reads your codebase, edits files, runs shell commands, and manages
+          multi-turn sessions — with every line written to be understood. No framework
+          magic, no sprawling abstractions.
+        </p>
+        <div class="cta-row">
+          <a class="btn primary" href="/docs">Get started</a>
+          <a class="btn ghost" href="https://github.com/xiatianliang1024gm/sigpi"
+            >View on GitHub</a
+          >
+        </div>
+
+        <pre class="terminal" aria-label="Quick start commands"><code><span class="cmt"># 1. Install</span>
+git clone https://github.com/xiatianliang1024gm/sigpi
+cd sigpi && pnpm install
+
+<span class="cmt"># 2. Configure</span>
+pnpm dev init
+<span class="cmt"># edit ~/.sigpi/config.toml with your API key and model</span>
+
+<span class="cmt"># 3. Chat</span>
+pnpm dev chat</code></pre>
+      </section>
+
+      <section class="section" id="features">
+        <div class="container">
+          <h2>What it does</h2>
+          <p class="lead">
+            Everything you'd expect from a modern coding agent, without the black box.
+          </p>
+          <div class="grid">
+            {
+              features.map((f) => (
+                <div class="card">
+                  <div class="icon">{f.icon}</div>
+                  <h3>{f.title}</h3>
+                  <p>{f.body}</p>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="why">
+        <div class="container">
+          <h2>Why SigPi?</h2>
+          <p class="lead">
+            Most coding agents stack framework upon framework until the core loop is
+            buried. SigPi keeps the agent loop, tool calling, and context management in
+            plain sight.
+          </p>
+          <ul class="bullets">
+            <li>
+              <strong>It's a reference implementation, not a black box</strong> — if
+              you're building agents yourself, or just want to understand how they
+              tick, this is for you.
+            </li>
+            <li>
+              <strong>Minimal dependencies</strong> — just the OpenAI SDK, a TOML
+              parser, and a terminal UI library.
+            </li>
+            <li>
+              <strong>~60 source files</strong> — small enough to read in an
+              afternoon.
+            </li>
+            <li>
+              <strong>A clear reading path</strong> — start with
+              <code>AGENTS.md</code> for the key entry points, then
+              <code>CONTEXT-MAP.md</code> for the ubiquitous language.
+            </li>
+            <li>
+              <strong>Works with any OpenAI-compatible LLM</strong> — OpenAI, Ollama,
+              LiteLLM, or any provider that speaks the chat completions API.
+            </li>
+          </ul>
+          <div class="cta-row" style="justify-content: flex-start; margin-bottom: 0">
+            <a class="btn primary" href="/docs">Read the quick start</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <Footer />
+  </body>
+</html>
