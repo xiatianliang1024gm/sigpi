@@ -18,7 +18,7 @@ export interface ModelProvider {
 	 * Model's maximum output tokens, if known. Compaction uses this as a
 	 * hard cap when sizing the summary request so we never ask for more
 	 * tokens than the model can produce. Optional; consumers should
-	 * default to a sensible internal cap (2048) when absent.
+	 * default to a sensible internal cap (8192) when absent.
 	 */
 	readonly maxTokens?: number;
 	generate(
