@@ -1,6 +1,6 @@
 import type { ModelConfig } from "./config.js";
 import { estimateContextTokens } from "./context-window.js";
-import { getGitBranch } from "./git.js";
+import { getCachedBranch } from "./git.js";
 import { type AgentRuntime, createAgentRuntime } from "./runtime.js";
 import type { SessionStore } from "./session/store.js";
 import {
@@ -236,8 +236,8 @@ export async function formatStatusBarForEvent(
 
 /**
  * Build the status bar view-model for `state`: resolve the usable context
- * budget, the working directory, and the async git branch lookup. The result
- * is handed to {@link StatusBarComponent} for rendering.
+ * budget, the working directory, and the cached git branch. The result is
+ * handed to {@link StatusBarComponent} for rendering.
  */
 export async function buildStatusBarModel(
 	state: ChatReplState,
@@ -248,7 +248,10 @@ export async function buildStatusBarModel(
 	const budget = state.runtime.context.getContextBudget();
 	const limit = Math.max(1, budget.hardContextLimit - budget.reserveTokens);
 	const cwd = getCurrentWorkingDirectory(state);
-	const branch = await getGitBranch(cwd);
+	// Read the branch sampled by the background watcher (see git.ts). This is
+	// synchronous: a status-bar redraw never spawns or awaits git, so a slow
+	// git process cannot stall the turn clock or input handling.
+	const branch = getCachedBranch();
 	return {
 		modelName: state.modelName,
 		limit,

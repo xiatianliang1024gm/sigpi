@@ -9,6 +9,11 @@ import {
 	getResumeAvailability,
 	runtimeToChatReplState,
 } from "../src/chat-repl.js";
+import {
+	_resetGitBranchStateForTests,
+	getCachedBranch,
+	startBranchWatcher,
+} from "../src/git.js";
 import { createAgentRuntime } from "../src/runtime.js";
 import {
 	composeStatusBar,
@@ -29,6 +34,26 @@ import {
  */
 function statusLine(model: StatusBarModel): string {
 	return composeStatusBar(model);
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForBranch(
+	expected: string | null,
+	timeoutMs = 5000,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (getCachedBranch() === expected) return;
+		await sleep(25);
+	}
+	assert.equal(
+		getCachedBranch(),
+		expected,
+		`branch watcher never reported ${expected}`,
+	);
 }
 
 function setTestHome(homeDir: string): () => void {
@@ -270,11 +295,18 @@ test("formatStatusBar appends git branch when cwd is a repo", async () => {
 		gitIn(cwd, "config user.name Test");
 		gitIn(cwd, "commit --allow-empty -q -m initial");
 
-		const runtime = await createAgentRuntime({ createSession: true });
-		const state = runtimeToChatReplState(runtime);
-		const status = statusLine(await formatStatusBar(state));
+		_resetGitBranchStateForTests();
+		startBranchWatcher(cwd, 50);
+		try {
+			await waitForBranch("main");
+			const runtime = await createAgentRuntime({ createSession: true });
+			const state = runtimeToChatReplState(runtime);
+			const status = statusLine(await formatStatusBar(state));
 
-		assert.match(status, /\(main\)/);
+			assert.match(status, /\(main\)/);
+		} finally {
+			_resetGitBranchStateForTests();
+		}
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -292,11 +324,20 @@ test("formatStatusBar omits git branch when cwd is not a repo", async () => {
 
 	try {
 		await writeTestConfig(homeDir);
-		const runtime = await createAgentRuntime({ createSession: true });
-		const state = runtimeToChatReplState(runtime);
-		const status = statusLine(await formatStatusBar(state));
+		_resetGitBranchStateForTests();
+		startBranchWatcher(cwd, 50);
+		try {
+			// Let the first (failing) sample settle before rendering: the bar
+			// must stay branch-less instead of throwing.
+			await sleep(300);
+			const runtime = await createAgentRuntime({ createSession: true });
+			const state = runtimeToChatReplState(runtime);
+			const status = statusLine(await formatStatusBar(state));
 
-		assert.doesNotMatch(status, /\([a-z0-9_-]+\)$/);
+			assert.doesNotMatch(status, /\([a-z0-9_-]+\)$/);
+		} finally {
+			_resetGitBranchStateForTests();
+		}
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -646,12 +687,21 @@ test("formatStatusBar shows @shortSha for a detached HEAD", async () => {
 		gitIn(cwd, "commit --allow-empty -q -m initial");
 		gitIn(cwd, "checkout --detach -q");
 
-		const runtime = await createAgentRuntime({ createSession: true });
-		const state = runtimeToChatReplState(runtime);
-		const status = statusLine(await formatStatusBar(state));
+		_resetGitBranchStateForTests();
+		startBranchWatcher(cwd, 50);
+		try {
+			await waitForBranch(
+				`@${(await gitIn(cwd, "rev-parse --short HEAD")).trim()}`,
+			);
+			const runtime = await createAgentRuntime({ createSession: true });
+			const state = runtimeToChatReplState(runtime);
+			const status = statusLine(await formatStatusBar(state));
 
-		// `@` followed by a short SHA, at the end of the cwd segment.
-		assert.match(status, /\(@[0-9a-f]+\)/);
+			// `@` followed by a short SHA, at the end of the cwd segment.
+			assert.match(status, /\(@[0-9a-f]+\)/);
+		} finally {
+			_resetGitBranchStateForTests();
+		}
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);

@@ -4,19 +4,29 @@ import { spawn } from "node:child_process";
  * Git command budget. A POSIX `git rev-parse` takes a few ms, but Windows
  * process creation is far slower (CreateProcess plus antivirus scans and DLL
  * loads can take hundreds of ms), so win32 gets a much larger budget than
- * POSIX. The result is cached for `BRANCH_CACHE_TTL_MS`, so a slow lookup is
- * amortised across status-bar redraws.
+ * POSIX. The branch watcher re-samples on its own cadence, so a slow lookup
+ * never blocks a status-bar redraw.
  */
 const GIT_TIMEOUT_MS = process.platform === "win32" ? 1000 : 150;
-/** How long a cached branch stays fresh before `getGitBranch` re-queries git. */
-const BRANCH_CACHE_TTL_MS = 2000;
+/**
+ * Extra budget for process *creation* on top of {@link GIT_TIMEOUT_MS}. The
+ * kill timer is armed on the `spawn` event so creation latency does not count
+ * against the git command's own execution budget, but creation itself must
+ * still be bounded: on Windows a CreateProcess stalled in an antivirus / EDR
+ * hook can delay the `spawn` event for minutes, and without an absolute
+ * deadline `runGit` never settles (leaking a process on every watcher tick).
+ */
+const GIT_SPAWN_GRACE_MS = process.platform === "win32" ? 2000 : 250;
+/** How often the background branch watcher re-queries git. */
+const BRANCH_WATCH_INTERVAL_MS = 2000;
 
-interface BranchCacheEntry {
-	value: string | null;
-	at: number;
-}
-
-const branchCache = new Map<string, BranchCacheEntry>();
+/** Last successfully sampled branch, read synchronously by the status bar. */
+let currentBranch: string | null = null;
+/** `cwd` the current watcher samples; `null` while stopped. */
+let branchWatcherCwd: string | null = null;
+let branchWatcherTimer: NodeJS.Timeout | null = null;
+/** One in-flight sample at a time, so a stalled git cannot pile up processes. */
+let branchSampleInFlight = false;
 
 interface GitResult {
 	ok: boolean;
@@ -26,9 +36,14 @@ interface GitResult {
 /**
  * Run `git <args>` in `cwd` with a short timeout. Returns `{ ok, value }`
  * where `value` is the trimmed stdout on success and `null` on any failure
- * (non-zero exit, spawn error, timeout, empty output). Never throws.
+ * (non-zero exit, spawn error, timeout, empty output). Never throws and never
+ * settles early while a process creation is still pending: if the OS spawn is
+ * stalled (e.g. an antivirus / EDR hook on Windows), the promise stays
+ * pending until the child reaches `spawn`/`error`/`close`, so the watcher's
+ * in-flight slot is not released and no replacement git is spawned on top of
+ * the stalled one.
  */
-function runGit(cwd: string, args: string[]): Promise<GitResult> {
+export function runGit(cwd: string, args: string[]): Promise<GitResult> {
 	return new Promise((resolve) => {
 		let settled = false;
 		const finish = (result: GitResult): void => {
@@ -59,23 +74,47 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
 			stdout += chunk.toString("utf8");
 		});
 
+		// Absolute deadline: bounds the whole lookup from promise start,
+		// including process creation. A child that spawned gets killed here;
+		// one that has not spawned yet (stalled CreateProcess) is left alone
+		// and settles via the `spawn`/`error`/`close` handlers below — killing
+		// it is a no-op, and settling now would release the watcher's
+		// in-flight slot and let the next tick pile up another git spawn.
+		let spawned = false;
+		const hardTimer = setTimeout(() => {
+			if (spawned) {
+				clearTimeout(timer);
+				try {
+					child.kill("SIGKILL");
+				} catch {
+					// `close`/`error` still settle.
+				}
+				finish({ ok: false, value: null });
+			}
+		}, GIT_TIMEOUT_MS + GIT_SPAWN_GRACE_MS);
+
 		// Arm the kill timer only once the process has actually spawned, so
 		// process-creation latency (the dominant cost on Windows) does not count
 		// against the git command's own execution budget.
 		let timer: NodeJS.Timeout | undefined;
 		child.on("spawn", () => {
+			if (settled) return;
+			spawned = true;
 			timer = setTimeout(() => {
+				clearTimeout(hardTimer);
 				child.kill("SIGKILL");
 				finish({ ok: false, value: null });
 			}, GIT_TIMEOUT_MS);
 		});
 
 		child.on("error", () => {
+			clearTimeout(hardTimer);
 			clearTimeout(timer);
 			finish({ ok: false, value: null });
 		});
 
 		child.on("close", (code) => {
+			clearTimeout(hardTimer);
 			clearTimeout(timer);
 			if (code !== 0) {
 				finish({ ok: false, value: null });
@@ -91,43 +130,77 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
 }
 
 /**
- * Return the current git branch for `cwd`, or `null` when not in a repo,
- * when git is unavailable, or when the lookup times out.
- *
- * - Normal branch: returns the branch name (e.g. `"main"`).
- * - Detached HEAD: returns `"@{shortSha}"` (e.g. `"@a1b2c3d"`).
- * - Not a repo / timeout / error: returns `null`.
- *
- * Results are cached per `cwd` for a short TTL so repeated status-bar redraws
- * do not spawn a subprocess storm, while a branch change (`git checkout`, by
- * the agent or in another terminal) is still picked up on the next refresh
- * once the entry has aged out. Pass `ttlMs` to override the freshness window
- * (tests use `0` to force a re-query).
+ * Start the background branch watcher for `cwd`. It samples git on
+ * `intervalMs` and stores the result in a module-level variable that
+ * {@link getCachedBranch} reads synchronously, so status-bar redraws never
+ * spawn (or await) a git process. Restarting re-targets the singleton
+ * without leaking the previous interval.
  */
-export async function getGitBranch(
+export function startBranchWatcher(
 	cwd: string,
-	ttlMs: number = BRANCH_CACHE_TTL_MS,
-): Promise<string | null> {
-	const cached = branchCache.get(cwd);
-	if (cached !== undefined && Date.now() - cached.at < ttlMs) {
-		return cached.value;
-	}
+	intervalMs: number = BRANCH_WATCH_INTERVAL_MS,
+): void {
+	stopBranchWatcher();
+	branchWatcherCwd = cwd;
+	void sampleBranch(cwd);
+	branchWatcherTimer = setInterval(() => {
+		void sampleBranch(cwd);
+	}, intervalMs);
+}
 
-	const result = await runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
-	if (!result.ok || !result.value) {
-		branchCache.set(cwd, { value: null, at: Date.now() });
-		return null;
+/** Stop the background branch watcher (no-op when it is not running). */
+export function stopBranchWatcher(): void {
+	if (branchWatcherTimer !== null) {
+		clearInterval(branchWatcherTimer);
+		branchWatcherTimer = null;
 	}
+	// Drop the target so an in-flight sample from the stopped watcher cannot
+	// write its (stale) result into the module variable.
+	branchWatcherCwd = null;
+}
 
-	let branch: string | null = result.value;
-	if (branch === "HEAD") {
-		// Detached HEAD — fall back to the short SHA, prefixed with `@`.
-		const sha = await runGit(cwd, ["rev-parse", "--short", "HEAD"]);
-		branch = sha.ok && sha.value ? `@${sha.value}` : null;
+/**
+ * Synchronously return the last sampled git branch for the status bar, or
+ * `null` when nothing has been sampled yet, when not in a repo, when git is
+ * unavailable, or when the lookup timed out. Never runs git.
+ */
+export function getCachedBranch(): string | null {
+	return currentBranch;
+}
+
+/**
+ * Sample the git branch for `cwd` and store it in {@link currentBranch}.
+ * Skips when a previous sample is still in flight so a slow or stalled git
+ * spawn can never accumulate processes, and keeps the last known branch on
+ * failure so a transient git hiccup does not flicker the bar to no branch.
+ */
+async function sampleBranch(cwd: string): Promise<void> {
+	if (branchSampleInFlight) {
+		return;
 	}
-
-	branchCache.set(cwd, { value: branch, at: Date.now() });
-	return branch;
+	branchSampleInFlight = true;
+	try {
+		const result = await runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+		let branch: string | null = result.value;
+		if (result.ok && branch !== null) {
+			if (branch === "HEAD") {
+				// Detached HEAD — fall back to the short SHA, prefixed with `@`.
+				const sha = await runGit(cwd, ["rev-parse", "--short", "HEAD"]);
+				branch = sha.ok && sha.value ? `@${sha.value}` : null;
+			}
+			if (branch !== null) {
+				// Only publish while this watcher is still the active one: an
+				// in-flight sample from a stopped/restarted watcher must not
+				// overwrite the new watcher's value (or leak into a later
+				// test's assertions).
+				if (cwd === branchWatcherCwd) {
+					currentBranch = branch;
+				}
+			}
+		}
+	} finally {
+		branchSampleInFlight = false;
+	}
 }
 
 /**
@@ -144,9 +217,11 @@ function cleanGitEnv(): NodeJS.ProcessEnv {
 }
 
 /**
- * Test-only: clear the in-process branch cache. Production code never needs
- * this — the cache is intentionally unbounded.
+ * Test-only: stop the watcher and clear the sampled branch and in-flight
+ * flag so tests start from a clean slate.
  */
-export function _resetGitBranchCacheForTests(): void {
-	branchCache.clear();
+export function _resetGitBranchStateForTests(): void {
+	stopBranchWatcher();
+	currentBranch = null;
+	branchSampleInFlight = false;
 }
