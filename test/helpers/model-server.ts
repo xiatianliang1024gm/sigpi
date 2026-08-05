@@ -21,6 +21,10 @@ export type ResponseSpec =
 			/** Keep emitting frames forever (cycling the list) — simulates a
 			 *  reasoning-forever stream that never completes. */
 			loop?: boolean;
+			/** Delay before writing the FIRST frame (default: immediate).
+			 *  Simulates a reasoning model that is silently thinking: headers
+			 *  arrive, but the body read waits for the first chunk. */
+			firstFrameDelayMs?: number;
 	  }
 	| { kind: "error"; status: number; statusText?: string; body: string }
 	/** 2xx with an invalid JSON body — forces the SDK's JSON.parse to throw. */
@@ -222,7 +226,16 @@ function writeSpec(res: http.ServerResponse, spec: ResponseSpec): void {
 					writeFrame(index + 1);
 				}
 			};
-			writeFrame(0);
+			if (spec.firstFrameDelayMs && spec.firstFrameDelayMs > 0) {
+				// Headers sent, body silent: the client's first read stays
+				// pending. A user interrupt must still stop the turn promptly.
+				// Clear the timer on disconnect so an aborted test/request does
+				// not keep the server process alive for the full delay.
+				const timer = setTimeout(() => writeFrame(0), spec.firstFrameDelayMs);
+				res.on("close", () => clearTimeout(timer));
+			} else {
+				writeFrame(0);
+			}
 			return;
 		}
 	}
