@@ -1,5 +1,9 @@
 # SigPi
 
+<p align="center">
+  <img src="assets/banner.png" alt="SigPi" width="100%">
+</p>
+
 > **An open-source coding agent you can actually read.**  
 > Built in TypeScript. Runs in your terminal. Works with any OpenAI-compatible LLM.
 

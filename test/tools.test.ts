@@ -642,7 +642,7 @@ test("update_plan summary reports all steps completed when every item is done", 
 		],
 	});
 
-	assert.equal(progress.summary, "[3/3] All steps completed");
+	assert.equal(progress.summary, "All steps completed");
 });
 
 test("update_plan summary falls back to completed count when no step is in progress", () => {
@@ -657,6 +657,22 @@ test("update_plan summary falls back to completed count when no step is in progr
 	});
 
 	assert.equal(progress.summary, "[1/3]");
+});
+
+test("update_plan summary counts the work position: completed plus in_progress", () => {
+	const describePlan = updatePlanTool.describeProgress;
+	assert.ok(describePlan);
+	const progress = describePlan({
+		plan: [
+			{ step: "Step A", status: "completed" },
+			{ step: "Step B", status: "completed" },
+			{ step: "Step C", status: "in_progress", activeForm: "Doing C" },
+			{ step: "Step D", status: "pending" },
+		],
+	});
+
+	// Two done, working on step three → "[3/4]", not "[2/4]".
+	assert.equal(progress.summary, "[3/4] Doing C");
 });
 
 test("update_plan accepts blank activeForm on non-active steps", async () => {

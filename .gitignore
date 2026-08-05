@@ -18,3 +18,5 @@ bench/data
 .npmrc
 .agents/
 *.js
+promo/
+*Zone.Identifier
