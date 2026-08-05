@@ -5,6 +5,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -67,38 +68,70 @@ function countLabel(logPath: string, label: string): number {
 }
 
 /**
- * Replace `git` on PATH with a fake `git.exe` (a copy of the running Node
- * binary) whose `rev-parse` main module is `scriptBody`. The fake runs with
- * the queried directory as its cwd, so Node resolves `rev-parse` there —
- * exactly the file the real `git rev-parse` command would use. Returns a
- * restore function that puts the original PATH back.
+ * A per-platform fake `git` script. `win32` is Node code: the fake is a copy
+ * of the running Node binary, so it needs `rev-parse` as its main module
+ * (see `installFakeGit`). `posix` is POSIX shell code: the fake is `/bin/sh`
+ * (see `installFakeGit`), which reads `rev-parse` as a shell script and
+ * starts in ~5ms — a freshly created executable is scanned on first exec
+ * (macOS XProtect can take 300ms+, longer than the `runGit` kill timer),
+ * while `/bin/sh` is already trusted.
+ */
+interface FakeGitSpec {
+	win32: string;
+	posix: string;
+}
+
+/**
+ * Wrap the platform bodies with spawn/exit logging. Tests wait on the log to
+ * observe invocations and to know when spawned fakes have exited before
+ * removing their working directory on Windows.
+ */
+function fakeGitSpec(
+	logPath: string,
+	win32: string,
+	posix: string,
+): FakeGitSpec {
+	const win32Script = [
+		`import { appendFileSync } from "node:fs";`,
+		`appendFileSync(${JSON.stringify(logPath)}, "spawn\\n");`,
+		`process.on("exit", () => { try { appendFileSync(${JSON.stringify(logPath)}, "exit\\n"); } catch {} });`,
+		win32,
+	].join("\n");
+	const posixScript = [
+		`printf 'spawn\\n' >> ${JSON.stringify(logPath)}`,
+		`trap 'printf "exit\\n" >> ${JSON.stringify(logPath)}' EXIT`,
+		posix,
+	].join("\n");
+	return { win32: win32Script, posix: posixScript };
+}
+
+/**
+ * Replace `git` on PATH with a fake so `spawn("git")` resolves to it on every
+ * platform. On Windows: a copy of the running Node binary named `git.exe`
+ * (PATH lookup appends `.exe`) whose `rev-parse` main module is `spec.win32`
+ * — Node resolves `rev-parse` against the queried directory, exactly the
+ * file the real `git rev-parse` command would use. On POSIX: a symlink
+ * named `git` to the already-trusted `/bin/sh`, so `spawn("git", ["rev-parse",
+ * ...])` runs `sh rev-parse ...` with the shell body from `spec.posix`.
+ * Returns a restore function that puts the original PATH back.
  */
 function installFakeGit(
 	repoDir: string,
 	fakeDir: string,
-	scriptBody: string,
+	spec: FakeGitSpec,
 ): () => void {
-	copyFileSync(process.execPath, join(fakeDir, "git.exe"));
-	writeFileSync(join(repoDir, "rev-parse"), scriptBody, "utf8");
+	if (process.platform === "win32") {
+		copyFileSync(process.execPath, join(fakeDir, "git.exe"));
+		writeFileSync(join(repoDir, "rev-parse"), spec.win32, "utf8");
+	} else {
+		symlinkSync("/bin/sh", join(fakeDir, "git"));
+		writeFileSync(join(repoDir, "rev-parse"), spec.posix, "utf8");
+	}
 	const previousPath = process.env.PATH;
 	process.env.PATH = `${fakeDir}${delimiter}${previousPath ?? ""}`;
 	return () => {
 		process.env.PATH = previousPath;
 	};
-}
-
-/**
- * Wrap a fake `rev-parse` body with spawn/exit logging. Tests wait on the
- * log to observe invocations and to know when spawned fakes have exited
- * before removing their working directory on Windows.
- */
-function fakeGitScript(logPath: string, body: string): string {
-	return [
-		`import { appendFileSync } from "node:fs";`,
-		`appendFileSync(${JSON.stringify(logPath)}, "spawn\\n");`,
-		`process.on("exit", () => { try { appendFileSync(${JSON.stringify(logPath)}, "exit\\n"); } catch {} });`,
-		body,
-	].join("\n");
 }
 
 test("runGit settles within the deadline when git hangs", async () => {
@@ -108,9 +141,16 @@ test("runGit settles within the deadline when git hangs", async () => {
 	try {
 		// A `git` that never exits must settle the lookup in bounded time: the
 		// spawn-armed kill timer (and the absolute deadline backstop) resolve
-		// with `null` instead of leaking a process per watcher tick.
-		const scriptBody = fakeGitScript(logPath, `setInterval(() => {}, 1000);`);
-		const restore = installFakeGit(dir, fakeDir, scriptBody);
+		// with `null` instead of leaking a process per watcher tick. The POSIX
+		// body uses `exec` so the killed process is the sleeper itself — a
+		// bare `sleep` would survive the SIGKILL of its parent `sh` as an
+		// orphan holding the runner's pipes open.
+		const spec = fakeGitSpec(
+			logPath,
+			`setInterval(() => {}, 1000);`,
+			`exec sleep 1000`,
+		);
+		const restore = installFakeGit(dir, fakeDir, spec);
 		try {
 			const startedAt = Date.now();
 			const result = await runGit(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -176,8 +216,8 @@ test("branch watcher reports null when the lookup fails", async () => {
 	try {
 		// A failing lookup (non-repo, git unavailable, timeout) keeps the
 		// bar on `null` instead of throwing.
-		const scriptBody = fakeGitScript(logPath, `process.exit(1);`);
-		const restore = installFakeGit(dir, fakeDir, scriptBody);
+		const spec = fakeGitSpec(logPath, `process.exit(1);`, `exit 1`);
+		const restore = installFakeGit(dir, fakeDir, spec);
 		try {
 			startBranchWatcher(dir, 100);
 			try {
@@ -230,7 +270,7 @@ test("branch watcher keeps the last known branch when a lookup fails", async () 
 		// First invocation succeeds ("main"); later ones exit non-zero to
 		// simulate a transient git failure. The watcher must keep "main"
 		// instead of flipping the bar to no branch.
-		const scriptBody = fakeGitScript(
+		const spec = fakeGitSpec(
 			logPath,
 			[
 				`import { existsSync, writeFileSync } from "node:fs";`,
@@ -238,8 +278,13 @@ test("branch watcher keeps the last known branch when a lookup fails", async () 
 				`writeFileSync(${JSON.stringify(flagPath)}, "1");`,
 				`console.log("main");`,
 			].join("\n"),
+			[
+				`[ -f ${JSON.stringify(flagPath)} ] && exit 1`,
+				`touch ${JSON.stringify(flagPath)}`,
+				`echo main`,
+			].join("\n"),
 		);
-		const restore = installFakeGit(dir, fakeDir, scriptBody);
+		const restore = installFakeGit(dir, fakeDir, spec);
 		try {
 			startBranchWatcher(dir, 100);
 			try {
@@ -278,11 +323,12 @@ test.skip("branch watcher skips ticks while a lookup is in flight", async () => 
 		// A deliberately slow lookup (400ms) must not be re-spawned by the
 		// 50ms ticker: while one sample is in flight, later ticks skip, so a
 		// stalled git can never pile up processes.
-		const scriptBody = fakeGitScript(
+		const spec = fakeGitSpec(
 			logPath,
 			`await new Promise((resolve) => setTimeout(resolve, 400)); console.log("fake-branch");`,
+			`sleep 0.4; echo fake-branch`,
 		);
-		const restore = installFakeGit(dir, fakeDir, scriptBody);
+		const restore = installFakeGit(dir, fakeDir, spec);
 		try {
 			startBranchWatcher(dir, 50);
 			try {
