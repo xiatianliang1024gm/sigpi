@@ -136,8 +136,9 @@ export interface SummarizeArgs {
  * token thresholds, hard-limit trim) stays in `ConversationContext`.
  *
  * Throws `CompactionFailedError` with `reason: "truncated"` when the model
- * hits its output limit, or `reason: "empty"` when no usable summary is
- * returned.
+ * hits its output limit, `reason: "empty"` when no usable summary is
+ * returned, or `reason: "summarize_error"` when the provider blocks the
+ * output (content filter).
  */
 export async function summarize(
 	provider: ModelProvider,
@@ -173,10 +174,15 @@ export async function summarize(
 
 	// Size the summary output against the model's reserve budget, capped at
 	// the model's `max_tokens` when the provider exposes one. Falls back to
-	// 2048 when neither is known, preserving the pre-token-based behaviour. A
-	// 256 floor protects against degenerate micro-budgets when `reserveTokens`
-	// is unusually low.
-	const providerMaxTokens = provider.maxTokens ?? 2048;
+	// 8192 when neither is known: 2048 proved too small for the mandated
+	// <analysis> + 8-section <summary> structure on real sessions — with a
+	// reasoning model the analysis block alone consumed most of the budget
+	// and the summary request truncated before finishing the verbatim user
+	// messages. 8192 sits inside the reserve-derived ceiling (0.8 × 16384 ≈
+	// 13107 with defaults) and matches common provider output caps (e.g.
+	// DeepSeek's 8k). A 256 floor protects against degenerate micro-budgets
+	// when `reserveTokens` is unusually low.
+	const providerMaxTokens = provider.maxTokens ?? 8192;
 	const summaryMaxTokens = Math.max(
 		256,
 		Math.min(Math.floor(0.8 * args.reserveTokens), providerMaxTokens),
@@ -207,10 +213,22 @@ export async function summarize(
 			reason: "truncated",
 		});
 	}
+	// The transport deliberately lets content-filtered responses through for
+	// purpose "summary" (see transport.ts), so classify the refusal here
+	// instead of misreporting it as an empty model response.
+	if (response.finishReason === "content_filter") {
+		throw new CompactionFailedError(
+			"Summary model output was blocked by the provider's content filter.",
+			{ reason: "summarize_error" },
+		);
+	}
 
 	if (!summaryText) {
+		const detail = rawSummaryText
+			? `response contained no complete <summary> block; preview: ${JSON.stringify(rawSummaryText.slice(0, 200))}`
+			: "response was empty";
 		throw new CompactionFailedError(
-			"Summary model returned no usable summary.",
+			`Summary model returned no usable summary (finishReason=${response.finishReason ?? "none"}, ${detail}).`,
 			{
 				reason: "empty",
 			},
@@ -224,12 +242,26 @@ export async function summarize(
  * Extract the final <summary> block from a summarization response. If the model
  * omitted the tags, fall back to the whole text (after stripping a single
  * leading <analysis> scratch block) so a good summary is never discarded over
- * a formatting miss. Returns null only when there is genuinely no text.
+ * a formatting miss. Returns null only when there is genuinely no usable
+ * summary text: an empty response, an <analysis>-only response, an empty
+ * <summary></summary> block, or an unterminated <summary> block (the model
+ * started the block and was cut off — the raw tag text must not be injected
+ * into the working context).
  */
 export function extractSummaryFromResponse(text: string): string | null {
-	const match = text.match(/<summary>([\s\S]*?)<\/summary>/i);
-	if (match) {
-		return match[1].trim();
+	// Prefer the LAST complete <summary> block: the prompt's <analysis> is
+	// scratch space and may sketch the format, so the first match is not
+	// necessarily the final summary.
+	const matches = [...text.matchAll(/<summary>([\s\S]*?)<\/summary>/gi)];
+	if (matches.length > 0) {
+		const content = matches[matches.length - 1]?.[1]?.trim() ?? "";
+		return content || null;
+	}
+	// An opening <summary> tag with no closing tag means the model began the
+	// block and was cut off. The no-tags fallback below would otherwise
+	// return the raw "<summary>…" text as the "summary".
+	if (/<summary>/i.test(text)) {
+		return null;
 	}
 	const stripped = text
 		.replace(/^\s*<analysis>[\s\S]*?<\/analysis>\s*/i, "")

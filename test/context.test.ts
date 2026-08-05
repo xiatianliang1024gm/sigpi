@@ -194,7 +194,7 @@ test("context summarization prompt preserves goals with structured checkpoint se
 	const summarySystemMessage = request?.messages[1];
 	const promptMessage = request?.messages[2];
 
-	assert.equal(request?.maxTokens, 2048);
+	assert.equal(request?.maxTokens, 8192);
 	assert.match(
 		summarySystemMessage?.content ?? "",
 		/ONLY output the structured summary/,
@@ -987,7 +987,7 @@ test("summary request uses provider.maxTokens when it is the tightest cap", asyn
 	assert.equal(summaryRequest?.maxTokens, 800);
 });
 
-test("summary request keeps the 2048 default cap when provider exposes no maxTokens", async () => {
+test("summary request budget is bounded by reserve tokens when provider exposes no maxTokens", async () => {
 	const provider = new MockProvider(() => ({
 		assistantText: "summary",
 		toolCalls: [],
@@ -1013,10 +1013,11 @@ test("summary request keeps the 2048 default cap when provider exposes no maxTok
 
 	await context.compactNow(provider, "You are a test agent.", []);
 
-	// reserveTokens=4_000, 0.8*4000=3200. Provider has no maxTokens → cap is
-	// the internal default (2048). The 256 floor does not apply (2048 > 256).
+	// reserveTokens=4_000, 0.8*4000=3200. Provider has no maxTokens → the
+	// internal fallback (8192) applies, but the reserve-derived ceiling is
+	// tighter, so the summary request uses 3200. The 256 floor does not apply.
 	const summaryRequest = provider.requests[0];
-	assert.equal(summaryRequest?.maxTokens, 2048);
+	assert.equal(summaryRequest?.maxTokens, 3200);
 });
 
 test("compactNow with instructions injects a custom-instructions block into the summary prompt", async () => {

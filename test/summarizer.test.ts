@@ -44,6 +44,23 @@ test("summarize assembles the prompt from transcript and previous summary", asyn
 	assert.equal(request.maxTokens, 4096);
 });
 
+test("summarize falls back to an 8192 budget when the provider exposes no max_tokens", async () => {
+	const provider = new MockProvider(() => ({
+		assistantText: "<summary>summarized</summary>",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	await summarize(provider, {
+		systemPrompt: "You are a test agent.",
+		messages: [transcriptMessage("hi")],
+		previousSummary: null,
+		reserveTokens: 16_384,
+	});
+	// min(0.8 * 16384 ≈ 13107, fallback 8192) = 8192 — large enough for the
+	// <analysis> + 8-section <summary> structure on a full-size compaction.
+	assert.equal(provider.requests[0].maxTokens, 8192);
+});
+
 test("summarize uses the create prompt when there is no previous summary", async () => {
 	const provider = new MockProvider(() => ({
 		assistantText: "<summary>first</summary>",
@@ -95,12 +112,61 @@ test("summarize throws CompactionFailedError when no usable summary is returned"
 	);
 });
 
+test("summarize throws CompactionFailedError when the provider content-filters the summary", async () => {
+	const provider = new MockProvider(() => ({
+		assistantText: "",
+		toolCalls: [],
+		finishReason: "content_filter",
+	}));
+	await assert.rejects(
+		summarize(provider, {
+			systemPrompt: "s",
+			messages: [transcriptMessage("x")],
+			previousSummary: null,
+			reserveTokens: 16_384,
+		}),
+		(err) =>
+			err instanceof CompactionFailedError &&
+			err.reason === "summarize_error" &&
+			/content filter/i.test(err.message),
+	);
+});
+
 test("extractSummaryFromResponse keeps only the <summary> block", () => {
 	assert.equal(
 		extractSummaryFromResponse(
 			"<analysis>scratch</analysis>\n<summary>final</summary>",
 		),
 		"final",
+	);
+});
+
+test("extractSummaryFromResponse prefers the last <summary> block over a sketch in <analysis>", () => {
+	assert.equal(
+		extractSummaryFromResponse(
+			"<analysis>format sketch: <summary>draft</summary></analysis>\n<summary>final</summary>",
+		),
+		"final",
+	);
+});
+
+test("extractSummaryFromResponse returns null for an empty <summary> block", () => {
+	assert.equal(
+		extractSummaryFromResponse(
+			"<analysis>scratch</analysis>\n<summary>   </summary>",
+		),
+		null,
+	);
+});
+
+test("extractSummaryFromResponse returns null for an unterminated <summary> block", () => {
+	// The model started the block and was cut off; the raw "<summary>…" tag
+	// text must not be returned as the summary.
+	assert.equal(
+		extractSummaryFromResponse(
+			"<analysis>scratch</analysis>\n<summary>Primary",
+		),
+		null,
 	);
 });
 

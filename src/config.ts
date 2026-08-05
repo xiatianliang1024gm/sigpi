@@ -38,7 +38,7 @@ const modelConfigSchema = z.object({
 	/**
 	 * Model's maximum output tokens. Used as a cap when sizing the
 	 * compaction summary so we never ask the model for a summary larger
-	 * than it can produce. Optional; defaults to 2048 internally when
+	 * than it can produce. Optional; defaults to 8192 internally when
 	 * not configured.
 	 */
 	maxTokens: z.number().int().positive().optional(),
