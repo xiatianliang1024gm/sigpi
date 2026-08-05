@@ -3,7 +3,8 @@
 		"includes": ["src/**/*.ts", "test/**/*.ts"]
 	},
 	"formatter": {
-		"enabled": true
+		"enabled": true,
+		"lineEnding": "auto"
 	},
 	"linter": {
 		"enabled": true,

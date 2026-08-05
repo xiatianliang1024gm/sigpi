@@ -3,6 +3,7 @@ import { z } from "zod";
 import { asInlineCode, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
 import { createEditSummary } from "../edit-summary.js";
+import { normalizeLineEndings } from "../line-endings.js";
 import { resolveWorkspacePath } from "../path-utils.js";
 import type { ReadTracker } from "../read-tracker.js";
 import { ToolExecutionError } from "../registry.js";
@@ -30,6 +31,7 @@ export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 			"(3) `old_string` must appear exactly once, unless `replace_all` is true. " +
 			"No regex or fuzzy matching is used; a single character of whitespace or indentation difference is enough to miss. " +
 			"When `old_string` appears more than once, supply a longer string with more surrounding context or set `replace_all: true`. " +
+			"The result is written with LF line endings (CRLF is normalized). " +
 			"To create a new file, use the write tool instead. " +
 			"To replace every occurrence, set `replace_all: true`.",
 		inputSchema: editSchema,
@@ -191,7 +193,10 @@ export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 				? original.split(old_string).join(new_string)
 				: replaceFirst(original, old_string, new_string);
 
-			await writeFile(resolved, updated, "utf8");
+			// old_string matching stays exact, but what lands on disk is
+			// always LF: a CRLF new_string from a Windows-running model must
+			// not leave the file with mixed line endings.
+			await writeFile(resolved, normalizeLineEndings(updated), "utf8");
 			await tracker.recordResolved(resolved);
 
 			return withRendered(
