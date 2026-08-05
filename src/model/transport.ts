@@ -474,6 +474,25 @@ export class ModelTransport {
 					);
 				}
 
+				// Full raw response body as parsed from the provider (assistant
+				// text, reasoning, tool calls, usage). Debug-only; the logger
+				// redacts sensitive fields and inline secrets. Logged only for
+				// usable responses — truncated/interrupted ones surface via
+				// `model_request_failed`. `rawResponse` comes from
+				// SDK-parsed JSON / accumulated SSE frames, so the cast to
+				// JsonValue is safe.
+				this.logger?.debug("model_response_body", {
+					runId: request.context?.runId,
+					sessionId: request.context?.sessionId,
+					turnId: request.context?.turnId,
+					purpose: request.context?.purpose ?? "turn",
+					step: request.context?.step,
+					model: this.config.name,
+					attempt,
+					elapsedMs: Date.now() - startedAt,
+					response: response.rawResponse as unknown as JsonValue,
+				});
+
 				this.logger?.info("model_request_succeeded", {
 					runId: request.context?.runId,
 					sessionId: request.context?.sessionId,
@@ -581,6 +600,22 @@ export class ModelTransport {
 			idleController.signal,
 		]);
 		const params = adapter.toParams(request);
+
+		// Full request body as sent to the provider (messages, tools, params).
+		// Debug-only: the logger redacts sensitive fields and inline secrets.
+		// Logged per attempt inside `performRequest` so a retried request shows
+		// exactly what was sent each time. `params` is built by the wire-format
+		// adapters as a plain JSON object literal, so the cast to JsonValue is
+		// safe (the SDK serializes the same value over the wire).
+		this.logger?.debug("model_request_body", {
+			runId: request.context?.runId,
+			sessionId: request.context?.sessionId,
+			turnId: request.context?.turnId,
+			purpose: request.context?.purpose ?? "turn",
+			step: request.context?.step,
+			model: this.config.name,
+			params: params as unknown as JsonValue,
+		});
 
 		try {
 			if (this.config.apiFormat === "responses") {
