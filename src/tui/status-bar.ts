@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { isAbsolute, relative, sep } from "node:path";
 import {
 	type Component,
 	truncateToWidth,
@@ -233,13 +234,26 @@ export function formatCompactNumber(value: number): string {
 	return formatter.format(value);
 }
 
+/**
+ * Shorten a path inside the user's home directory to `~...`, or return it
+ * unchanged otherwise. Uses `node:path` so the comparison works on both
+ * POSIX (`/`) and Windows (`\`) separators — a hard-coded `/` prefix test
+ * never matched on Windows, so the cwd segment was never shortened there.
+ */
 function shortenWorkingDirectory(value: string): string {
 	const home = homedir();
 	if (!home) {
 		return value;
 	}
-	if (value === home) {
+	const rel = relative(home, value);
+	if (rel === "") {
+		// `value` resolves to home itself (also covers drive-letter case
+		// differences on Windows, which a string `===` comparison would miss).
 		return "~";
 	}
-	return value.startsWith(`${home}/`) ? `~${value.slice(home.length)}` : value;
+	const outside = rel === ".." || rel.startsWith(`..${sep}`);
+	if (!outside && !isAbsolute(rel)) {
+		return `~${sep}${rel}`;
+	}
+	return value;
 }
