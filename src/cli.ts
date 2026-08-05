@@ -11,6 +11,7 @@ import {
 import {
 	type ChatReplState,
 	formatStatusBarForEvent,
+	getCurrentWorkingDirectory,
 	runtimeToChatReplState,
 } from "./chat-repl.js";
 import type { AppConfig } from "./config.js";
@@ -19,6 +20,7 @@ import {
 	initializeUserConfig,
 	loadAppConfig,
 } from "./config.js";
+import { startBranchWatcher, stopBranchWatcher } from "./git.js";
 import { TurnInterruptController } from "./interrupt.js";
 import { resolveDatedLogFilePath } from "./logger.js";
 import { configureHttpProxy } from "./model/http-dispatcher.js";
@@ -477,6 +479,11 @@ export async function runChatReplLoop(
 		}
 	}, TURN_STATUS_REFRESH_INTERVAL_MS);
 
+	// Background git branch sampler: feeds the status bar's branch segment
+	// through a cached variable instead of spawning git on every refresh (see
+	// git.ts). Cleared on the loop's single exit path below.
+	startBranchWatcher(getCurrentWorkingDirectory(state));
+
 	while (true) {
 		const queuedLine = queuedLines.shift();
 		const line = queuedLine ?? (await readInput());
@@ -599,6 +606,7 @@ export async function runChatReplLoop(
 	view.stop();
 	clearInterval(statusBarRefreshTimer);
 	clearInterval(turnStatusTimer);
+	stopBranchWatcher();
 	// The terminal is restored, so a plain stdout line is safe here. Print
 	// the run's cumulative agent time and billed tokens (no-op on an empty
 	// session with no turns).
