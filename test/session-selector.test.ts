@@ -5,6 +5,7 @@ import {
 	createSessionSelectorState,
 	prepareSessionChoices,
 	reduceSessionSelector,
+	renderSessionSelectorFullScreen,
 	renderSessionSelectorWithWidth,
 	SessionSelectorComponent,
 	selectSessionInteractive,
@@ -387,7 +388,7 @@ test("parent-TUI selector cancels on Esc and leaves the parent TUI interactive",
 	tui.stop();
 });
 
-test("overlay composite preserves base content under the selector (Terminal seam)", async () => {
+test("overlay composite covers the base content while the selector is open (Terminal seam)", async () => {
 	const terminal = new FakeTerminal();
 	terminal.columns = 60;
 	terminal.rows = 24;
@@ -402,11 +403,12 @@ test("overlay composite preserves base content under the selector (Terminal seam
 				updatedAt: "2026-05-22T10:00:00.000Z",
 			}),
 		]),
+		() => terminal.rows,
 	);
 	tui.showOverlay(component, {
 		anchor: "center",
-		width: "90%",
-		maxHeight: "90%",
+		width: "100%",
+		maxHeight: "100%",
 	});
 	tui.start();
 
@@ -415,11 +417,7 @@ test("overlay composite preserves base content under the selector (Terminal seam
 
 	const lines = renderedLines(terminal.writes);
 
-	// Both the base content and the selector modal are present in the composite.
-	assert.ok(
-		lines.some((line) => line.includes("BASE_ONE")),
-		"base content is preserved under the overlay",
-	);
+	// The selector is rendered...
 	assert.ok(
 		lines.some((line) =>
 			line.includes("find why the parser skips the final token"),
@@ -427,15 +425,69 @@ test("overlay composite preserves base content under the selector (Terminal seam
 		"session selector is rendered via the overlay",
 	);
 
-	// The base line sits above the centered modal, proving the overlay
-	// composited on top of (not in place of) the base content.
-	const baseIndex = lines.findIndex((line) => line.includes("BASE_ONE"));
-	const selectorIndex = lines.findIndex((line) => line.includes("> "));
-	assert.ok(baseIndex >= 0, "base line found");
+	// ...and the background is fully covered: no base text shows through.
 	assert.ok(
-		selectorIndex > baseIndex,
-		"overlay is composited below the base line",
+		!lines.some((line) => line.includes("BASE_ONE")),
+		"base content is covered while the selector is open",
+	);
+	assert.ok(
+		!lines.some((line) => line.includes("BASE_TWO")),
+		"base content is covered while the selector is open",
 	);
 
 	tui.stop();
+});
+
+test("full-screen selector render covers every terminal row", () => {
+	const now = new Date("2026-05-22T10:05:00.000Z");
+	const lines = renderSessionSelectorFullScreen(
+		createSessionSelectorState([
+			createSessionSummary({
+				sessionId: "aaaaaaaa-1111-4111-8111-111111111111",
+				title: "find why the parser skips the final token",
+				updatedAt: "2026-05-22T10:00:00.000Z",
+				estimatedTokens: 1800,
+			}),
+		]),
+		100,
+		10,
+		now,
+	);
+
+	assert.equal(lines.length, 10, "one line per terminal row");
+	assert.ok(
+		lines.some((line) => line.includes("Select a session to resume:")),
+		"header is present",
+	);
+	assert.ok(
+		lines.some((line) => line.includes("find why the parser skips")),
+		"session line is present",
+	);
+	// Rows the helper pads (outside the content block) are full-width blanks
+	// so the base screen is hidden around the picker.
+	const contentHeight = Math.min(
+		renderSessionSelectorWithWidth(
+			createSessionSelectorState([
+				createSessionSummary({
+					sessionId: "aaaaaaaa-1111-4111-8111-111111111111",
+					title: "find why the parser skips the final token",
+					updatedAt: "2026-05-22T10:00:00.000Z",
+					estimatedTokens: 1800,
+				}),
+			]),
+			100,
+			now,
+		).split("\n").length,
+		10,
+	);
+	const topPad = Math.floor((10 - contentHeight) / 2);
+	for (const row of [0, topPad - 1, topPad + contentHeight, lines.length - 1]) {
+		assert.ok(row >= 0 && row < lines.length, "padding row in range");
+		assert.equal(
+			lines[row].length,
+			100,
+			`padding row ${row} spans the full width`,
+		);
+		assert.equal(lines[row].trim(), "", `padding row ${row} is blank`);
+	}
 });
