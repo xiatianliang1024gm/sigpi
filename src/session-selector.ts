@@ -1,6 +1,7 @@
 import { stdin as processInput, stdout as processOutput } from "node:process";
 import {
 	type Component,
+	matchesKey,
 	ProcessTerminal,
 	type Terminal,
 	TUI,
@@ -303,20 +304,26 @@ export async function selectSessionInteractive(
 }
 
 function inputToSelectorAction(data: string): SessionSelectorAction | null {
-	switch (data) {
-		case "\x1B[A":
-			return { type: "up" };
-		case "\x1B[B":
-			return { type: "down" };
-		case "\r":
-		case "\n":
-			return { type: "confirm" };
-		case "\x1B":
-		case "\u0003":
-			return { type: "cancel" };
-		default:
-			return null;
+	// Use pi-tui's matchesKey instead of exact byte comparisons: with the
+	// Kitty keyboard protocol active (iTerm2/Ghostty/kitty), the terminal
+	// reports Escape as `\x1b[27u`, arrows as `\x1b[1;1A` etc., and Enter as
+	// `\x1b[13u` instead of the legacy raw bytes, so an exact-byte switch
+	// silently drops every navigation key on those terminals.
+	if (matchesKey(data, "up")) {
+		return { type: "up" };
 	}
+	if (matchesKey(data, "down")) {
+		return { type: "down" };
+	}
+	// matchesKey treats `\n` as Enter only when the Kitty protocol is off;
+	// keep accepting it unconditionally to preserve legacy behavior.
+	if (matchesKey(data, "enter") || data === "\n") {
+		return { type: "confirm" };
+	}
+	if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+		return { type: "cancel" };
+	}
+	return null;
 }
 
 function truncatePreview(value: string, maxChars = 72): string {

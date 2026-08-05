@@ -1,6 +1,7 @@
 import {
 	type Component,
 	type Editor,
+	matchesKey,
 	ProcessTerminal,
 	TUI,
 } from "@earendil-works/pi-tui";
@@ -242,15 +243,36 @@ export class ChatRenderer implements ReplView {
 		}
 	}
 
+	/**
+	 * True when `data` is an Esc or Ctrl+C keypress in any of the encodings a
+	 * terminal can produce: the legacy raw bytes (`\x1b` / `\x03`) and the
+	 * CSI-u / modifyOtherKeys forms emitted when the Kitty keyboard protocol
+	 * or modifyOtherKeys mode is active. On Kitty-capable terminals (iTerm2,
+	 * Ghostty, kitty) the negotiated disambiguate-escape-codes flag makes the
+	 * terminal report the Escape key as `\x1b[27u` instead of a bare `\x1b`,
+	 * so an exact-byte comparison silently dropped the interrupt there — Esc
+	 * appeared dead exactly on the terminals where the protocol is on.
+	 */
 	private handleInterruptKey(data: string): undefined {
-		if (data !== "\x1B" && data !== "\u0003") {
-			return undefined;
-		}
 		// Esc / Ctrl+C only interrupt an active agent turn.
 		// Exit is only via the /exit command (or /quit, exit, quit).
-		if (this.phase === "turn") {
+		if (this.phase === "turn" && isInterruptKey(data)) {
 			this.interruptHandler?.();
 		}
 		return undefined;
 	}
+}
+
+/**
+ * True when `data` is an Esc or Ctrl+C keypress in any of the encodings a
+ * terminal can produce: the legacy raw bytes (`\x1b` / `\x03`) and the
+ * CSI-u / modifyOtherKeys forms emitted when the Kitty keyboard protocol or
+ * modifyOtherKeys mode is active. On Kitty-capable terminals (iTerm2,
+ * Ghostty, kitty) the negotiated disambiguate-escape-codes flag makes the
+ * terminal report the Escape key as `\x1b[27u` instead of a bare `\x1b`, so
+ * an exact-byte comparison silently dropped the interrupt there — Esc
+ * appeared dead exactly on the terminals where the protocol is on.
+ */
+export function isInterruptKey(data: string): boolean {
+	return matchesKey(data, "escape") || matchesKey(data, "ctrl+c");
 }
