@@ -4,6 +4,7 @@ import { z } from "zod";
 import { asInlineCode, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
 import { createWriteSummary } from "../edit-summary.js";
+import { normalizeLineEndings } from "../line-endings.js";
 import { resolveWorkspacePath } from "../path-utils.js";
 import type { ReadTracker } from "../read-tracker.js";
 import { ToolExecutionError } from "../registry.js";
@@ -25,6 +26,7 @@ export function createWriteTool(
 			"Write UTF-8 text to a file under the working directory. " +
 			"Creates the file if it does not exist and overwrites it if it does. " +
 			"Parent directories are created automatically. " +
+			"CRLF line endings are normalized to LF. " +
 			"Unlike the edit tool, this does not require a prior read and replaces the entire file contents. " +
 			"Use edit for targeted changes to an existing file.",
 		inputSchema: writeSchema,
@@ -58,7 +60,8 @@ export function createWriteTool(
 
 			await mkdir(path.dirname(resolved), { recursive: true });
 			const previousContent = await readExistingFile(resolved);
-			await writeFile(resolved, content, "utf8");
+			const normalized = normalizeLineEndings(content);
+			await writeFile(resolved, normalized, "utf8");
 
 			// Refresh the read fingerprint: the model authored this content, so
 			// a later edit in the same turn is permitted without a re-read, and
@@ -67,9 +70,13 @@ export function createWriteTool(
 
 			return withRendered(
 				{
-					bytesWritten: Buffer.byteLength(content, "utf8"),
+					bytesWritten: Buffer.byteLength(normalized, "utf8"),
 					created: previousContent === null,
-					editSummary: createWriteSummary(relative, previousContent, content),
+					editSummary: createWriteSummary(
+						relative,
+						previousContent,
+						normalized,
+					),
 				},
 				"ok",
 			);

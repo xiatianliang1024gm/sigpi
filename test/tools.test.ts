@@ -1864,7 +1864,7 @@ test("edit allows consecutive edits after refreshing the read fingerprint", asyn
 	);
 });
 
-test("edit does not normalize newlines and requires an exact CRLF/LF match", async () => {
+test("edit requires an exact CRLF/LF match and normalizes the result to LF", async () => {
 	const cwd = await createTempDir("sigpi-edit-crlf-");
 	await writeWorkspaceFile(cwd, "demo.txt", "alpha\r\nbeta\r\n");
 	const tracker = new ReadTracker();
@@ -1910,7 +1910,44 @@ test("edit does not normalize newlines and requires an exact CRLF/LF match", asy
 		{ cwd },
 	);
 	assert.equal(crlf.ok, true);
-	assert.equal(await readFile(path.join(cwd, "demo.txt"), "utf8"), "x\r\n");
+	assert.equal(await readFile(path.join(cwd, "demo.txt"), "utf8"), "x\n");
+});
+
+test("edit with CRLF new_string leaves the file with LF line endings", async () => {
+	const cwd = await createTempDir("sigpi-edit-crlf-new-");
+	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nbeta\n");
+	const tracker = new ReadTracker();
+	const tools = new ToolRegistry([
+		createReadTool(tracker),
+		createEditTool(tracker),
+	]);
+	await tools.execute(
+		{
+			id: "r",
+			name: "read",
+			arguments: { file_path: "demo.txt" },
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+	const result = await tools.execute(
+		{
+			id: "e",
+			name: "edit",
+			arguments: {
+				file_path: "demo.txt",
+				old_string: "alpha",
+				new_string: "ONE\r\nTWO",
+			},
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+	assert.equal(result.ok, true);
+	assert.equal(
+		await readFile(path.join(cwd, "demo.txt"), "utf8"),
+		"ONE\nTWO\nbeta\n",
+	);
 });
 
 test("edit requires a non-empty old_string", async () => {
@@ -1963,6 +2000,28 @@ test("write overwrites an existing file without requiring a prior read", async (
 	);
 	assert.equal(result.ok, true);
 	assert.equal(await readFile(path.join(cwd, "demo.txt"), "utf8"), "new\n");
+});
+
+test("write normalizes CRLF content to LF", async () => {
+	const cwd = await createTempDir("sigpi-write-crlf-");
+	const tools = new ToolRegistry([createWriteTool(new ReadTracker())]);
+	const result = await tools.execute(
+		{
+			id: "w",
+			name: "write",
+			arguments: {
+				file_path: "demo.txt",
+				content: "one\r\ntwo\r\nthree\n",
+			},
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+	assert.equal(result.ok, true);
+	assert.equal(
+		await readFile(path.join(cwd, "demo.txt"), "utf8"),
+		"one\ntwo\nthree\n",
+	);
 });
 
 test("bash cat records a read so a later edit is allowed", async () => {

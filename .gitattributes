@@ -1,0 +1,7 @@
+# Normalize line endings to LF for all text files, on every platform.
+# Working trees always get LF; the index always stores LF. This keeps
+# diffs clean even when files are created by tools running on Windows.
+* text=auto eol=lf
+
+# Binary files must never be treated as text or have line endings touched.
+*.png binary
