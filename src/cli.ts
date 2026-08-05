@@ -33,7 +33,12 @@ import {
 	type ReplView,
 	type ToolLineHandle,
 } from "./tui/chat-renderer.js";
-import { formatCompactNumber } from "./tui/status-bar.js";
+import {
+	formatCompactNumber,
+	formatElapsed,
+	getStatusEventLabel,
+	type LastTurnStats,
+} from "./tui/status-bar.js";
 import { replaySessionIntoView } from "./tui/transcript-replay.js";
 import type { JsonValue, TurnProgressEvent } from "./types.js";
 
@@ -179,6 +184,96 @@ export interface RunChatReplLoopDependencies {
  */
 const STATUS_BAR_REFRESH_INTERVAL_MS = 5_000;
 
+/**
+ * Live turn-clock tick. While a turn is in flight the status bar refreshes
+ * once per second so the elapsed timer visibly advances (e.g. `thinking · 4s`).
+ * 1s is the right cadence: model deltas and tool events already refresh far
+ * more often during streaming, so this only covers quiet gaps (long-running
+ * tools, slow providers); a 500ms tick would double the render churn for no
+ * visible difference, and 2s+ reads as a frozen clock.
+ */
+const TURN_STATUS_REFRESH_INTERVAL_MS = 1_000;
+
+/** The turn events that end a turn and carry final elapsed/token stats. */
+function isTurnTerminalEvent(event: TurnProgressEvent): boolean {
+	return (
+		event.type === "turn_finished" ||
+		event.type === "turn_interrupted" ||
+		event.type === "turn_failed" ||
+		event.type === "turn_max_steps_reached"
+	);
+}
+
+/**
+ * Cumulative agent usage across one REPL run (sigpi start → exit). Every
+ * terminal turn event folds its elapsed/token totals in; when the loop exits
+ * the totals are printed as a single summary line. Token fields mirror the
+ * per-turn log fields, so `inputTokens + outputTokens` is the billed figure.
+ */
+export interface ReplRunStats {
+	/** Number of turns that reached a terminal event in this run. */
+	turnCount: number;
+	/** Sum of each turn's user-submit → terminal-event elapsed time, in ms. */
+	elapsedMs: number;
+	/** Provider-reported usage summed across every turn's model requests. */
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	totalTokens: number;
+}
+
+export function createReplRunStats(): ReplRunStats {
+	return {
+		turnCount: 0,
+		elapsedMs: 0,
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		totalTokens: 0,
+	};
+}
+
+/**
+ * Fold a terminal turn event's stats into the run accumulator. Non-terminal
+ * events, and turns that never emit a terminal event, are not counted.
+ */
+export function accumulateTurnStats(
+	stats: ReplRunStats,
+	event: TurnProgressEvent,
+): ReplRunStats {
+	stats.turnCount += 1;
+	stats.elapsedMs += event.elapsedMs ?? 0;
+	const tokens = event.turnTokens;
+	if (tokens) {
+		stats.inputTokens += tokens.input;
+		stats.outputTokens += tokens.output;
+		stats.cacheReadTokens += tokens.cacheRead;
+		stats.cacheWriteTokens += tokens.cacheWrite;
+		stats.totalTokens += tokens.totalTokens;
+	}
+	return stats;
+}
+
+/**
+ * One-line summary printed when the REPL exits: total turns, wall-clock agent
+ * time, and billed tokens (cumulative `input + output` across every turn).
+ * Returns `null` when no turn ran, so an empty session prints nothing.
+ */
+export function formatReplRunSummary(stats: ReplRunStats): string | null {
+	if (stats.turnCount === 0) {
+		return null;
+	}
+	const turns = `${stats.turnCount} ${stats.turnCount === 1 ? "turn" : "turns"}`;
+	let line = `Session: ${turns} · ${formatElapsed(stats.elapsedMs)}`;
+	const billed = stats.inputTokens + stats.outputTokens;
+	if (billed > 0) {
+		line = `${line} · ${formatCompactNumber(billed)} billed`;
+	}
+	return line;
+}
+
 let activeStatusBarProgressListener:
 	| ((event: TurnProgressEvent) => void)
 	| null = null;
@@ -322,15 +417,42 @@ export async function runChatReplLoop(
 	let latestProgressEvent: TurnProgressEvent | null = null;
 	let currentAssistant: AssistantMessageView | null = null;
 	let toolLines: Map<string, ToolLineHandle> = new Map();
+	// Epoch ms of the in-flight turn (user submit → terminal event). While
+	// set, the status bar renders a live elapsed clock; `null` when idle.
+	let turnStartedAt: number | null = null;
+	// Final stats of the most recently finished turn, shown on the bar until
+	// the next turn starts.
+	let lastTurnStats: LastTurnStats | null = null;
+	// Cumulative usage across every turn in this run, printed on exit.
+	const runStats = createReplRunStats();
 
 	const refreshStatusBar = async (
 		event: TurnProgressEvent | null = latestProgressEvent,
 	): Promise<void> => {
-		view.setStatusBarModel(await formatStatusBarForEvent(state, event));
+		view.setStatusBarModel(
+			await formatStatusBarForEvent(state, event, {
+				turnStartedAt,
+				lastTurnStats,
+			}),
+		);
 	};
 
 	const viewProgressListener = (event: TurnProgressEvent) => {
 		latestProgressEvent = event;
+		if (isTurnTerminalEvent(event)) {
+			// The turn is over: freeze the clock and keep the final
+			// elapsed/token totals on the bar until the next turn.
+			turnStartedAt = null;
+			lastTurnStats = {
+				label: getStatusEventLabel(event) ?? "done",
+				elapsedMs: event.elapsedMs ?? 0,
+				// Cumulative provider-reported usage across the turn's model
+				// requests (every tool step re-sends the context, so this
+				// billing figure runs well above the bar's left segment).
+				tokens: event.turnTokens ?? null,
+			};
+			accumulateTurnStats(runStats, event);
+		}
 		void refreshStatusBar(event);
 		currentAssistant = applyTurnProgress(
 			view,
@@ -346,6 +468,14 @@ export async function runChatReplLoop(
 	const statusBarRefreshTimer = setInterval(() => {
 		void refreshStatusBar();
 	}, STATUS_BAR_REFRESH_INTERVAL_MS);
+
+	// Live turn clock: tick once per second while a turn is in flight (see
+	// the constant's doc comment). No-op when idle; cleared on exit below.
+	const turnStatusTimer = setInterval(() => {
+		if (turnStartedAt !== null) {
+			void refreshStatusBar();
+		}
+	}, TURN_STATUS_REFRESH_INTERVAL_MS);
 
 	while (true) {
 		const queuedLine = queuedLines.shift();
@@ -372,6 +502,10 @@ export async function runChatReplLoop(
 				// stdin and freezes the REPL).
 				state = { ...updatedState, view };
 				latestProgressEvent = null;
+				// The state changed (e.g. /model, /new, /resume): the previous
+				// turn's clock/stats no longer apply to the new context.
+				turnStartedAt = null;
+				lastTurnStats = null;
 				// The state changed (e.g. /model, /new, /resume): rebuild the
 				// status bar immediately from the fresh state instead of
 				// letting it show the previous session/model until the next
@@ -414,6 +548,10 @@ export async function runChatReplLoop(
 		latestProgressEvent = null;
 		toolLines = new Map();
 		currentAssistant = null;
+		// Start the turn clock at user submit and drop the previous turn's
+		// stats: the bar now shows the live elapsed timer instead.
+		turnStartedAt = Date.now();
+		lastTurnStats = null;
 		view.beginTurn(() => {
 			const interrupt = interruptController.requestInterrupt();
 			if (!interrupt.accepted || interrupt.alreadyRequested) {
@@ -449,6 +587,10 @@ export async function runChatReplLoop(
 		queuedLines.push(...view.takeQueuedLines());
 
 		latestProgressEvent = null;
+		// Defensive: the terminal event normally stops the clock, but if the
+		// runner ever returns without one (an error before its own try block),
+		// stop the clock here rather than leave a stuck ticking timer.
+		turnStartedAt = null;
 		if (!turn.ok) {
 			writeError(turn.errorMessage);
 		}
@@ -456,6 +598,14 @@ export async function runChatReplLoop(
 
 	view.stop();
 	clearInterval(statusBarRefreshTimer);
+	clearInterval(turnStatusTimer);
+	// The terminal is restored, so a plain stdout line is safe here. Print
+	// the run's cumulative agent time and billed tokens (no-op on an empty
+	// session with no turns).
+	const runSummary = formatReplRunSummary(runStats);
+	if (runSummary) {
+		console.log(runSummary);
+	}
 	return state;
 }
 

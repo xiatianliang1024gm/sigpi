@@ -10,6 +10,7 @@ import {
 import type { ReplView } from "./tui/chat-renderer.js";
 import {
 	getStatusEventLabel,
+	type LastTurnStats,
 	StatusBarComponent,
 	type StatusBarModel,
 } from "./tui/status-bar.js";
@@ -182,29 +183,55 @@ export function getCurrentWorkingDirectory(state: ChatReplState): string {
 	);
 }
 
+/**
+ * Live turn state the REPL loop threads into the status bar: the turn clock
+ * (started at user submit, stopped at the terminal event) and the stats of
+ * the most recent finished turn, which stay visible while idle.
+ */
+export interface StatusBarTurnContext {
+	/** Epoch ms when the current turn started; `null`/absent while idle. */
+	turnStartedAt?: number | null;
+	/** Stats of the last finished turn, shown while idle until the next turn. */
+	lastTurnStats?: LastTurnStats | null;
+}
+
 export async function formatStatusBarForEvent(
 	state: ChatReplState,
 	event: TurnProgressEvent | null,
+	turnContext: StatusBarTurnContext = {},
 ): Promise<StatusBarModel> {
+	let model: StatusBarModel;
 	if (typeof event?.estimatedContextTokens === "number") {
 		// A live, in-flight estimate of the request being built. It has no
 		// completed `usage` payload yet, so no cache-hit segment.
-		const model = await buildStatusBarModel(
+		model = await buildStatusBarModel(
 			state,
 			event.estimatedContextTokens,
 			null,
 			getStatusEventLabel(event),
 		);
-		return model;
+	} else {
+		const base = await formatStatusBar(state);
+		const suffix = getStatusEventLabel(event);
+		if (!suffix) {
+			model = base;
+		} else {
+			base.eventLabel = suffix;
+			model = base;
+		}
 	}
 
-	const base = await formatStatusBar(state);
-	const suffix = getStatusEventLabel(event);
-	if (!suffix) {
-		return base;
+	// Merge live turn timing / last-turn stats into whatever the event built.
+	const lastTurn = turnContext.lastTurnStats ?? null;
+	model.turnStartedAt = turnContext.turnStartedAt ?? null;
+	model.lastTurnStats = lastTurn;
+	if (lastTurn && !model.eventLabel) {
+		// The terminal event has been cleared from `latestProgressEvent`, but
+		// the finished turn's label ("done", "interrupted", ...) should stay
+		// on the bar alongside its time/token totals until the next turn.
+		model.eventLabel = lastTurn.label;
 	}
-	base.eventLabel = suffix;
-	return base;
+	return model;
 }
 
 /**

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Component, TUI } from "@earendil-works/pi-tui";
-import { applyTurnProgress } from "../src/cli.js";
+import {
+	accumulateTurnStats,
+	applyTurnProgress,
+	createReplRunStats,
+	formatReplRunSummary,
+} from "../src/cli.js";
 import type {
 	AssistantMessageView,
 	ReplView,
@@ -400,4 +405,89 @@ test("turn_interrupted finalizes the assistant and renders a terminal message", 
 	// finalizes the in-flight one and appends the interruption notice.
 	assert.deepEqual(view.ops, ["answer", "system:info:Turn interrupted."]);
 	assert.equal(view.assistants.at(-1)?.content, "partial");
+});
+
+test("repl run stats sum elapsed time and usage across turns", () => {
+	const stats = createReplRunStats();
+	accumulateTurnStats(stats, {
+		type: "turn_finished",
+		turnId: "t1",
+		elapsedMs: 12_400,
+		turnTokens: {
+			input: 2_200,
+			output: 700,
+			cacheRead: 100,
+			cacheWrite: 50,
+			totalTokens: 3_050,
+		},
+	});
+	accumulateTurnStats(stats, {
+		type: "turn_interrupted",
+		turnId: "t2",
+		elapsedMs: 3_100,
+		turnTokens: {
+			input: 800,
+			output: 200,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 1_000,
+		},
+	});
+	assert.deepEqual(stats, {
+		turnCount: 2,
+		elapsedMs: 15_500,
+		inputTokens: 3_000,
+		outputTokens: 900,
+		cacheReadTokens: 100,
+		cacheWriteTokens: 50,
+		totalTokens: 4_050,
+	});
+});
+
+test("repl run stats still count elapsed time when the provider reports no usage", () => {
+	const stats = createReplRunStats();
+	accumulateTurnStats(stats, {
+		type: "turn_finished",
+		turnId: "t1",
+		elapsedMs: 500,
+		// No `turnTokens`: the provider omitted usage on the streaming path.
+	});
+	assert.deepEqual(stats, {
+		turnCount: 1,
+		elapsedMs: 500,
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		totalTokens: 0,
+	});
+});
+
+test("repl run summary formats totals and omits the token segment without usage", () => {
+	assert.equal(
+		formatReplRunSummary({
+			turnCount: 2,
+			elapsedMs: 125_000,
+			inputTokens: 3_000,
+			outputTokens: 900,
+			cacheReadTokens: 100,
+			cacheWriteTokens: 50,
+			totalTokens: 4_050,
+		}),
+		"Session: 2 turns · 2m 05s · 3.9K billed",
+	);
+	assert.equal(
+		formatReplRunSummary({
+			turnCount: 1,
+			elapsedMs: 500,
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			totalTokens: 0,
+		}),
+		"Session: 1 turn · 0s",
+	);
+	// An empty session prints nothing.
+	assert.equal(formatReplRunSummary(createReplRunStats()), null);
 });

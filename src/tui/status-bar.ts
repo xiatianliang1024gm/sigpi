@@ -27,6 +27,35 @@ export interface StatusBarModel {
 	branch: string | null;
 	/** Optional progress label suffixed after the cwd segment (e.g. "working"). */
 	eventLabel?: string | null;
+	/**
+	 * Epoch ms when the current turn started (user submit). While set, the
+	 * composed line renders a live elapsed clock next to the event label
+	 * (e.g. `thinking · 4s`); the clock advances on every re-render without
+	 * rebuilding the model.
+	 */
+	turnStartedAt?: number | null;
+	/** Final stats of the most recently finished turn, rendered after it ends. */
+	lastTurnStats?: LastTurnStats | null;
+}
+
+/**
+ * Wall-clock and token accounting for a completed turn, kept on the bar
+ * until the next turn starts so the user sees "this answer took 12s and
+ * 8.2K billed" without re-querying anything.
+ */
+export interface LastTurnStats {
+	/** Terminal event label of the finished turn ("done", "interrupted", ...). */
+	label: string;
+	/** Total elapsed time from user submit to the terminal event, in ms. */
+	elapsedMs: number;
+	/**
+	 * Provider-reported usage accumulated across the turn's model requests,
+	 * or `null` when no request reported usage (some providers omit usage on
+	 * the streaming path). The bar renders it as `input + output`, i.e. the
+	 * billing-relevant total (every tool step re-sends the whole context, so
+	 * this is higher than the context-window figure on the left).
+	 */
+	tokens: ModelUsage | null;
 }
 
 /**
@@ -37,7 +66,10 @@ export interface StatusBarModel {
  * we render an honest `?` instead of a drift-prone estimate. The cache hit
  * rate is appended only when there is real cacheable input to measure against.
  */
-export function composeStatusBar(model: StatusBarModel): string {
+export function composeStatusBar(
+	model: StatusBarModel,
+	now: number = Date.now(),
+): string {
 	const cwdSegment = model.branch
 		? `${shortenWorkingDirectory(model.cwd)} (${model.branch})`
 		: shortenWorkingDirectory(model.cwd);
@@ -62,6 +94,18 @@ export function composeStatusBar(model: StatusBarModel): string {
 	let line = segments.join(" | ");
 	if (model.eventLabel) {
 		line = `${line} | ${model.eventLabel}`;
+	}
+	if (model.turnStartedAt != null) {
+		// Live turn clock: derived from the start timestamp on every render so
+		// the ticking refresh only needs to re-render, not rebuild the model.
+		line = `${line} · ${formatElapsed(Math.max(0, now - model.turnStartedAt))}`;
+	} else if (model.lastTurnStats) {
+		// Turn is over: freeze the final wall-clock and billed token total.
+		line = `${line} · ${formatElapsed(model.lastTurnStats.elapsedMs)}`;
+		const tokens = model.lastTurnStats.tokens;
+		if (tokens) {
+			line = `${line} · ${formatCompactNumber(tokens.input + tokens.output)} billed`;
+		}
 	}
 	return line;
 }
@@ -232,6 +276,21 @@ export function formatCompactNumber(value: number): string {
 		maximumFractionDigits: 1,
 	});
 	return formatter.format(value);
+}
+
+/**
+ * Format a duration for the status bar: whole seconds under a minute
+ * (`12s`), minutes + seconds beyond (`1m 05s`). The live clock ticks once
+ * per second, so sub-second precision would read as noise; exact ms is kept
+ * in the turn log instead.
+ */
+export function formatElapsed(ms: number): string {
+	const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	return minutes > 0
+		? `${minutes}m ${String(seconds).padStart(2, "0")}s`
+		: `${seconds}s`;
 }
 
 /**

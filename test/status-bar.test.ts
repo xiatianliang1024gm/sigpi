@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getStatusEventLabel } from "../src/tui/status-bar.js";
+import {
+	composeStatusBar,
+	formatElapsed,
+	getStatusEventLabel,
+	type StatusBarModel,
+} from "../src/tui/status-bar.js";
 import type { TurnProgressEvent } from "../src/types.js";
 
 /**
@@ -131,4 +136,81 @@ test("terminal states keep their explicit labels", () => {
 
 test("no event means no label (idle bar)", () => {
 	assert.equal(getStatusEventLabel(null), null);
+});
+
+function model(overrides: Partial<StatusBarModel> = {}): StatusBarModel {
+	return {
+		modelName: "test-model",
+		limit: 100_000,
+		usedTokens: 1_000,
+		usage: null,
+		cwd: "/work",
+		branch: "main",
+		...overrides,
+	};
+}
+
+test("formatElapsed renders whole seconds, then minutes and seconds", () => {
+	assert.equal(formatElapsed(0), "0s");
+	assert.equal(formatElapsed(2_000), "2s");
+	assert.equal(formatElapsed(59_999), "59s");
+	assert.equal(formatElapsed(60_000), "1m 00s");
+	assert.equal(formatElapsed(125_000), "2m 05s");
+	assert.equal(formatElapsed(-5), "0s");
+});
+
+test("live turn clock advances with the render time, not the model", () => {
+	const bar = model({ eventLabel: "thinking", turnStartedAt: 1_000 });
+	assert.equal(
+		composeStatusBar(bar, 3_000),
+		"test-model | 1K/100K (1%) | /work (main) | thinking · 2s",
+	);
+	assert.equal(
+		composeStatusBar(bar, 5_500),
+		"test-model | 1K/100K (1%) | /work (main) | thinking · 4s",
+	);
+});
+
+test("a completed turn freezes elapsed time and shows billed tokens", () => {
+	const bar = model({
+		eventLabel: "done",
+		lastTurnStats: {
+			label: "done",
+			elapsedMs: 12_400,
+			tokens: {
+				input: 2_200,
+				output: 700,
+				cacheRead: 100,
+				cacheWrite: 50,
+				totalTokens: 3_050,
+			},
+		},
+	});
+	assert.equal(
+		composeStatusBar(bar),
+		"test-model | 1K/100K (1%) | /work (main) | done · 12s · 2.9K billed",
+	);
+});
+
+test("a completed turn without provider usage omits the token segment", () => {
+	const bar = model({
+		eventLabel: "interrupted",
+		lastTurnStats: { label: "interrupted", elapsedMs: 3_000, tokens: null },
+	});
+	assert.equal(
+		composeStatusBar(bar),
+		"test-model | 1K/100K (1%) | /work (main) | interrupted · 3s",
+	);
+});
+
+test("the live clock takes precedence over last-turn stats while a turn runs", () => {
+	const bar = model({
+		eventLabel: "working",
+		turnStartedAt: 10_000,
+		lastTurnStats: { label: "done", elapsedMs: 5_000, tokens: null },
+	});
+	assert.equal(
+		composeStatusBar(bar, 12_000),
+		"test-model | 1K/100K (1%) | /work (main) | working · 2s",
+	);
 });
