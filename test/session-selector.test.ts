@@ -336,6 +336,50 @@ test("interactive selector handles raw arrow navigation and cancel", async () =>
 	assert.equal(await cancelPromise, null);
 });
 
+test("interactive selector handles Kitty CSI-u key encodings (iTerm2/Ghostty/kitty)", async () => {
+	// With the Kitty keyboard protocol's disambiguate-escape-codes flag, the
+	// terminal reports arrows as `CSI 1 ; m A/B`, Enter as `CSI 13 u`, and
+	// Esc as `CSI 27 u` instead of the legacy raw bytes. The selector must
+	// still navigate/confirm/cancel.
+	const terminal = new FakeTerminal();
+	const firstId = "11111111-1111-4111-8111-111111111111";
+	const secondId = "22222222-2222-4222-8222-222222222222";
+
+	const selectionPromise = selectSessionInteractive(
+		[
+			createSessionSummary({
+				sessionId: firstId,
+				updatedAt: "2026-05-22T00:00:00.000Z",
+			}),
+			createSessionSummary({
+				sessionId: secondId,
+				updatedAt: "2026-05-21T00:00:00.000Z",
+			}),
+		],
+		{ terminal },
+	);
+
+	terminal.inputHandler?.("\x1b[1;1B"); // Kitty down arrow
+	terminal.inputHandler?.("\x1b[13u"); // Kitty Enter
+
+	assert.equal(await selectionPromise, secondId);
+
+	const cancelTerminal = new FakeTerminal();
+	const cancelPromise = selectSessionInteractive(
+		[
+			createSessionSummary({
+				sessionId: firstId,
+				updatedAt: "2026-05-22T00:00:00.000Z",
+			}),
+		],
+		{ terminal: cancelTerminal },
+	);
+
+	cancelTerminal.inputHandler?.("\x1b[27u"); // Kitty Esc
+
+	assert.equal(await cancelPromise, null);
+});
+
 test("parent-TUI selector cancels on Esc and leaves the parent TUI interactive", async () => {
 	const terminal = new FakeTerminal();
 	const tui = new TUI(terminal);
