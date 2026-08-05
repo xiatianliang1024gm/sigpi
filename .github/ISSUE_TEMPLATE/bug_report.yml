@@ -1,0 +1,97 @@
+name: Bug report
+description: Something is broken, misbehaving, or confusing
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please fill in what you can — every field helps us reproduce the bug. If the agent misbehaved during a chat, the log at `~/.sigpi/logs/agent.log` usually has the details — and if a session was involved, attaching its `.jsonl` file below is the single most useful thing you can do (we can replay the exact conversation).
+  - type: input
+    id: session
+    attributes:
+      label: Session file (optional, highly recommended)
+      description: |
+        Run `pnpm dev session list` to find the session id, then attach the file at
+        `~/.sigpi/projects/<project>/sessions/<sessionId>.jsonl`. ⚠️ It contains the full conversation including any code or secrets you pasted — redact before attaching.
+      placeholder: "~/.sigpi/projects/my-repo-ab12cd34ef567890/sessions/abc123.jsonl"
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: SigPi version
+      description: Output of `node dist/src/cli.js --version` (or the version in package.json).
+      placeholder: "0.1.0-beta.2026080402"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      description: Output of `node --version`.
+      placeholder: "v24.5.0"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform & shell
+      description: e.g. macOS 14 / zsh, Ubuntu 24.04 / zsh, Windows + WSL.
+      placeholder: "Linux / zsh"
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Model & provider
+      description: Which model/provider were you using? (OpenAI, Ollama, LiteLLM, custom base_url…)
+      placeholder: "gpt-4o via api.openai.com"
+    validations:
+      required: false
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: What did you do? Include the command you ran and any input you gave the agent.
+      placeholder: |
+        1. pnpm dev chat
+        2. asked it to "…"
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Paste the error output or the relevant section of `~/.sigpi/logs/agent.log`.
+      render: shell
+    validations:
+      required: true
+  - type: checkboxes
+    id: triage
+    attributes:
+      label: Quick checks
+      description: Before submitting, please confirm.
+      options:
+        - label: I searched the existing issues and this isn't a duplicate
+          required: true
+        - label: I'm on the latest version of the `main` branch
+          required: false
+  - type: dropdown
+    id: pr
+    attributes:
+      label: Are you willing to fix it?
+      options:
+        - "Yes, I'll open a PR"
+        - "No, but I can help test a fix"
+        - "No"
+    validations:
+      required: true

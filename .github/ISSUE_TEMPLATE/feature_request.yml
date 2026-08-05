@@ -1,0 +1,52 @@
+name: Feature request
+description: A capability, model adapter, or improvement you'd like to see
+title: "feature: "
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for thinking about SigPi's future. The project is deliberately small and readable — please frame the request around the problem you're solving, so we can judge it against that constraint.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation that made you want this feature. Concrete examples help.
+      placeholder: |
+        I want to use a model that doesn't speak the OpenAI-compatible API, e.g. Anthropic directly.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should SigPi do? If you have a design in mind, sketch it. Point at existing seams if you know them (e.g. the ModelProvider interface, the tool registry, session store).
+      placeholder: |
+        Add a second WireFormatAdapter / a new provider class behind the existing ModelProvider seam.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Workarounds, configs, or other tools you tried.
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: Acceptable scope
+      description: Roughly how big is this allowed to be? A small change, a new module, a new runtime dependency?
+      placeholder: "A new adapter in src/model/, no new runtime deps."
+    validations:
+      required: false
+  - type: dropdown
+    id: pr
+    attributes:
+      label: Are you willing to implement it?
+      options:
+        - "Yes, I'll open a PR"
+        - "I can help but need guidance"
+        - "No"
+    validations:
+      required: true
