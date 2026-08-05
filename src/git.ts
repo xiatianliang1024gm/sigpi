@@ -1,6 +1,13 @@
 import { spawn } from "node:child_process";
 
-const GIT_TIMEOUT_MS = 50;
+/**
+ * Git command budget. A POSIX `git rev-parse` takes a few ms, but Windows
+ * process creation is far slower (CreateProcess plus antivirus scans and DLL
+ * loads can take hundreds of ms), so win32 gets a much larger budget than
+ * POSIX. The result is cached for `BRANCH_CACHE_TTL_MS`, so a slow lookup is
+ * amortised across status-bar redraws.
+ */
+const GIT_TIMEOUT_MS = process.platform === "win32" ? 1000 : 150;
 /** How long a cached branch stays fresh before `getGitBranch` re-queries git. */
 const BRANCH_CACHE_TTL_MS = 2000;
 
@@ -52,10 +59,16 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
 			stdout += chunk.toString("utf8");
 		});
 
-		const timer = setTimeout(() => {
-			child.kill("SIGKILL");
-			finish({ ok: false, value: null });
-		}, GIT_TIMEOUT_MS);
+		// Arm the kill timer only once the process has actually spawned, so
+		// process-creation latency (the dominant cost on Windows) does not count
+		// against the git command's own execution budget.
+		let timer: NodeJS.Timeout | undefined;
+		child.on("spawn", () => {
+			timer = setTimeout(() => {
+				child.kill("SIGKILL");
+				finish({ ok: false, value: null });
+			}, GIT_TIMEOUT_MS);
+		});
 
 		child.on("error", () => {
 			clearTimeout(timer);
