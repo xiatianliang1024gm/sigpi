@@ -828,6 +828,59 @@ test("ESC during a hung turn re-throws TurnInterruptedError and is not retried",
 	);
 });
 
+test("ESC interrupts a stream whose first chunk never arrives (silent reasoning)", async () => {
+	const { TurnInterruptedError } = await import("../src/interrupt.js");
+	const controller = new AbortController();
+	await withServer(
+		{ timeoutMs: 5000, maxRetries: 2 },
+		() => ({
+			kind: "sse",
+			// Headers arrive but the body stays silent for a long time — the
+			// exact "stuck in thinking" shape: the pending body read is waiting
+			// on the server's first chunk.
+			frames: [chatFrame({ content: "x" })],
+			firstFrameDelayMs: 60_000,
+		}),
+		async (server) => {
+			const provider = createProvider(server, {
+				timeoutMs: 5000,
+				maxRetries: 2,
+			});
+			const run = provider.generate({
+				messages: [{ role: "user", content: "silent" }],
+				tools: [],
+				abortSignal: controller.signal,
+			});
+			const deadline = Date.now() + 5_000;
+			while (server.captured.length < 1 && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+			assert.ok(
+				server.captured.length >= 1,
+				"request should reach the server before the interrupt",
+			);
+			setTimeout(
+				() =>
+					controller.abort(new TurnInterruptedError("user_escape", "model")),
+				10,
+			);
+			const startedAt = Date.now();
+			await assert.rejects(
+				() => run,
+				(error) => error instanceof TurnInterruptedError,
+			);
+			// The interrupt must settle promptly — it must NOT wait for the
+			// server's first chunk (60s away) or the total/idle timers.
+			assert.ok(
+				Date.now() - startedAt < 3_000,
+				"interrupt should not wait for the silent server",
+			);
+			// The interrupt must not be retried.
+			assert.equal(server.captured.length, 1);
+		},
+	);
+});
+
 test("provider clamps an oversized max_tokens to the remaining context fit (chat)", async () => {
 	await withServer(
 		{ stream: false, hardContextLimit: 8192 },

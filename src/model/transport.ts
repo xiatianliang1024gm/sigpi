@@ -284,6 +284,13 @@ function mapSdkError(
 		return error;
 	}
 
+	// The stream-read abort race in `readSdkStream` throws the user's
+	// TurnInterruptedError directly; pass it through untouched so the turn
+	// stops without being wrapped (and thus misclassified / retried).
+	if (isTurnInterruptedError(error)) {
+		return error;
+	}
+
 	// The SDK aborts the call when our merged signal fires. Disambiguate the
 	// three abort sources by inspecting the signal's reason / which side
 	// aborted, so ESC (TurnInterruptedError) re-throws without being retried
@@ -635,6 +642,8 @@ export class ModelTransport {
 						idleController,
 						idleTimer,
 						onDelta,
+						signal,
+						request.abortSignal,
 					);
 				}
 				clearTimeout(totalTimer);
@@ -658,6 +667,8 @@ export class ModelTransport {
 					idleController,
 					idleTimer,
 					onDelta,
+					signal,
+					request.abortSignal,
 				);
 			}
 			clearTimeout(totalTimer);
@@ -685,6 +696,8 @@ export class ModelTransport {
 		idleController: AbortController,
 		idleTimer: ReturnType<typeof setTimeout>,
 		onDelta?: (delta: ModelDelta) => void,
+		abortSignal?: AbortSignal,
+		userAbortSignal?: AbortSignal,
 	): Promise<ModelResponse> {
 		const iterator = stream[Symbol.asyncIterator]();
 		const resetIdle = () => {
@@ -698,9 +711,50 @@ export class ModelTransport {
 			);
 		};
 
+		// Classify a fired abort: a user Esc/Ctrl+C interrupt rethrows the
+		// TurnInterruptedError; the total or idle/stall timers (or any other
+		// abort source) surface as a `timeout`.
+		const classifyAbort = (): Error => {
+			if (
+				userAbortSignal?.aborted &&
+				isTurnInterruptedError(userAbortSignal.reason)
+			) {
+				return userAbortSignal.reason;
+			}
+			return new ModelRequestError(
+				`Model request timed out after ${this.config.timeoutMs}ms.`,
+				"timeout",
+				{ timeoutMs: this.config.timeoutMs },
+			);
+		};
+
+		// Promise that rejects as soon as the merged signal fires. The body
+		// read below is raced against it so an Esc interrupt (or the total /
+		// idle timers) stops the turn IMMEDIATELY, without depending on the
+		// underlying fetch/undici teardown settling a `reader.read()` that is
+		// waiting for the server's first chunk. While a reasoning model is
+		// silently thinking (no bytes for minutes), that teardown can stall on
+		// some platforms (notably Windows), which made Esc appear dead: the
+		// abort fired inside the SDK but the pending read never woke up.
+		const abortWait = new Promise<never>((_, reject) => {
+			if (abortSignal?.aborted) {
+				reject(classifyAbort());
+				return;
+			}
+			abortSignal?.addEventListener("abort", () => reject(classifyAbort()), {
+				once: true,
+			});
+		});
+
 		try {
 			while (true) {
-				const { value, done } = await iterator.next();
+				if (abortSignal?.aborted) {
+					throw classifyAbort();
+				}
+				const { value, done } = await Promise.race([
+					iterator.next(),
+					abortWait,
+				]);
 				if (value !== undefined) {
 					resetIdle();
 				}
@@ -755,7 +809,18 @@ export class ModelTransport {
 		} finally {
 			clearTimeout(idleTimer);
 			try {
-				await iterator.return?.(undefined);
+				// Do NOT await the generator's return(): the SDK iterator is
+				// suspended on a body read that may not settle promptly after an
+				// abort while the server is silent (the same stall the abortWait
+				// race above works around). Awaiting it here would hang turn
+				// teardown exactly the way Esc used to appear to hang.
+				const teardown = iterator.return?.(undefined);
+				if (
+					teardown &&
+					typeof (teardown as Promise<unknown>).catch === "function"
+				) {
+					(teardown as Promise<unknown>).catch(() => {});
+				}
 			} catch {
 				// Iterator teardown is best-effort; the SDK stream is already
 				// aborting via the merged signal.
