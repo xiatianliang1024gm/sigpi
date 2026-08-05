@@ -2,6 +2,10 @@
 base_url = "http://localhost:8000/v1"
 api_key = "your-api-key"
 name = "your-model-name"
+# Wire format used to talk to this provider. Choices:
+#   "chat_completions" - the OpenAI chat completions API (works with OpenAI,
+#                        DeepSeek, Ollama, LiteLLM, Anthropic-via-proxy, etc.)
+#   "responses"        - the newer OpenAI Responses API
 api_format = "chat_completions"
 timeout_ms = 60000
 max_retries = 2
@@ -16,16 +20,25 @@ retry_base_delay_ms = 250
 # base_url = "https://api.example.com/v1"
 # api_key = "your-api-key"
 # name = "remote-model"
-# api_format = "responses"
+# api_format = "responses"  # "chat_completions" or "responses" (see [models.local])
 # hard_context_limit = 128000
 # reserve_tokens = 16384
 # keep_recent_tokens = 20000
 
 [agent]
-# max step in a turn, prevent infinite loop
-max_steps = 100
+# Max steps in a turn; prevents infinite loops. A step is one model call plus
+# the tool calls it makes. Raise for long multi-tool tasks, lower for tighter
+# turn budgets.
+max_steps = 300
 
 [logging]
+# Verbosity of ~/.sigpi/logs/agent.log. Choices:
+#   "debug" - everything, including tool call details and the FULL
+#             LLM request/response bodies (model_request_body /
+#             model_response_body; noisiest, use for troubleshooting)
+#   "info"  - normal operational events (default)
+#   "warn"  - only warnings and errors
+#   "error" - only errors
 level = "info"
 file = "~/.sigpi/logs/agent.log"
 # Max chars of a model response body captured in logs.
@@ -35,6 +48,13 @@ file = "~/.sigpi/logs/agent.log"
 sessions_root = "~/.sigpi/projects"
 
 [shell]
+# Shell used for the bash tool. Choices:
+#   "zsh"        - Z shell (macOS default)
+#   "bash"       - Bourne Again shell (Linux default)
+#   "sh"         - POSIX shell
+#   "pwsh"       - PowerShell 7+ (cross-platform)
+#   "powershell" - Windows PowerShell (5.x)
+#   "cmd"        - Windows Command Prompt
 # kind = "zsh"
 # path = "/bin/zsh"
 

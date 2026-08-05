@@ -4,6 +4,8 @@
   <img src="assets/banner.png" alt="SigPi" width="100%">
 </p>
 
+> **中文版：[README.zh-CN.md](./README.zh-CN.md)**
+
 > **An open-source coding agent you can actually read.**  
 > Built in TypeScript. Runs in your terminal. Works with any OpenAI-compatible LLM.
 
@@ -75,9 +77,9 @@ SigPi works with any provider that speaks the OpenAI chat completions API (OpenA
 ```toml
 # ~/.sigpi/config.toml
 [models.default]
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.deepseek.com"
 api_key  = "sk-..."
-name     = "gpt-4o"
+name     = "deepseek-v4-flash"
 ```
 
 Overrides: `.sigpi/config.toml` in your project, or environment variables.
