@@ -96,6 +96,34 @@ export function reduceSessionSelector(
 	};
 }
 
+/**
+ * Render the picker as a full-screen modal: every visible row is either
+ * picker content or a blank line, so background transcript text never bleeds
+ * in around the list. `height` is the terminal's row count, taken live so a
+ * terminal resize is picked up on the next render.
+ */
+export function renderSessionSelectorFullScreen(
+	state: SessionSelectorState,
+	width: number,
+	height: number,
+	now: Date = new Date(),
+): string[] {
+	const content = renderSessionSelectorWithWidth(state, width, now).split("\n");
+	const contentHeight = Math.min(content.length, height);
+	const topPad = Math.max(0, Math.floor((height - contentHeight) / 2));
+	const blank = " ".repeat(width);
+	const lines: string[] = [];
+	for (let row = 0; row < height; row++) {
+		const contentRow = row - topPad;
+		if (contentRow >= 0 && contentRow < contentHeight) {
+			lines.push(content[contentRow]);
+		} else {
+			lines.push(blank);
+		}
+	}
+	return lines;
+}
+
 export function renderSessionSelectorWithWidth(
 	state: SessionSelectorState,
 	maxWidth = 100,
@@ -166,9 +194,22 @@ function formatCompactTokens(tokens: number | null): string {
 export class SessionSelectorComponent implements Component {
 	public onResolve?: (result: string | null) => void;
 
-	constructor(private state: SessionSelectorState) {}
+	constructor(
+		private state: SessionSelectorState,
+		/**
+		 * Live terminal row count. When provided, the picker renders as a
+		 * full-screen modal that covers the whole viewport (including any
+		 * transcript behind it) instead of a floating box with background
+		 * text visible around it.
+		 */
+		private readonly getHeight?: () => number,
+	) {}
 
 	render(width: number): string[] {
+		const height = this.getHeight?.();
+		if (height !== undefined) {
+			return renderSessionSelectorFullScreen(this.state, width, height);
+		}
 		return renderSessionSelectorWithWidth(this.state, width).split("\n");
 	}
 
@@ -212,19 +253,22 @@ export async function selectSessionInteractive(
 	}
 
 	return new Promise<string | null>((resolve) => {
-		const component = new SessionSelectorComponent(
-			createSessionSelectorState(sessions),
-		);
-
 		if (parentTui) {
 			// Reuse the parent TUI's overlay stack so we don't create a
 			// second ProcessTerminal on the same process.stdin.  A new
 			// ProcessTerminal would call process.stdin.pause() on stop,
 			// which breaks stdin for the parent REPL.
+			const component = new SessionSelectorComponent(
+				createSessionSelectorState(sessions),
+				() => parentTui.terminal.rows,
+			);
 			component.onResolve = (result) => {
 				parentTui.hideOverlay();
 				resolve(result);
 			};
+			// The component renders one line per terminal row (picker content
+			// plus blanks), so the overlay covers the whole viewport and hides
+			// the transcript behind it while the picker is open.
 			parentTui.showOverlay(component, {
 				anchor: "center",
 				width: "100%",
@@ -236,19 +280,23 @@ export async function selectSessionInteractive(
 		const terminal = options?.terminal ?? new ProcessTerminal();
 		const tui = new TUI(terminal);
 
+		const component = new SessionSelectorComponent(
+			createSessionSelectorState(sessions),
+			() => terminal.rows,
+		);
 		component.onResolve = (result) => {
 			tui.stop();
 			terminal.clearScreen();
 			resolve(result);
 		};
 
-		// Render the session selector as a full-screen modal overlay. Pi-tui's
-		// differential renderer composites it over whatever base content the TUI
-		// holds, so the underlying screen is preserved around the modal.
+		// Full-screen modal: the component paints every row (content plus
+		// blank lines), so nothing from the underlying screen shows through
+		// around the picker.
 		tui.showOverlay(component, {
 			anchor: "center",
-			width: "90%",
-			maxHeight: "90%",
+			width: "100%",
+			maxHeight: "100%",
 		});
 		tui.start();
 	});
