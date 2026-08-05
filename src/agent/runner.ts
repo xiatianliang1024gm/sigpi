@@ -11,6 +11,7 @@ import type {
 	ExecutedToolCall,
 	Message,
 	ModelProvider,
+	ModelUsage,
 	RunTurnResult,
 	RuntimeLogger,
 	ToolCall,
@@ -183,6 +184,33 @@ export class AgentRunner {
 		let turnCheckpoint: string | null = null;
 		let lastCheckpointedTurnMessageCount = 0;
 		let emptyResponseRetries = 0;
+		/**
+		 * Provider-reported usage summed across every model request in this
+		 * turn (main steps plus in-turn checkpoint summaries). Mutable fields
+		 * on a `const` object: a `let` union assigned only inside a closure
+		 * would be narrowed to `never` at the terminal read sites. The
+		 * `turnUsageReported` flag tracks whether any request reported usage,
+		 * so callers can distinguish "0 tokens" from "usage unknown".
+		 */
+		const turnUsage = {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+		};
+		let turnUsageReported = false;
+		const accumulateUsage = (usage?: ModelUsage): void => {
+			if (!usage) {
+				return;
+			}
+			turnUsageReported = true;
+			turnUsage.input += usage.input;
+			turnUsage.output += usage.output;
+			turnUsage.cacheRead += usage.cacheRead;
+			turnUsage.cacheWrite += usage.cacheWrite;
+			turnUsage.totalTokens += usage.totalTokens;
+		};
 
 		interruptController?.beginTurn();
 
@@ -312,6 +340,7 @@ export class AgentRunner {
 				},
 			});
 			turnCheckpoint = response.assistantText?.trim() || turnCheckpoint;
+			accumulateUsage(response.usage);
 
 			workingMessages.length = 0;
 			workingMessages.push(
@@ -365,6 +394,11 @@ export class AgentRunner {
 				trimCount,
 				modelElapsedMs: lastModelElapsedMs,
 				turnElapsedMs: Date.now() - turnStartedAt,
+				inputTokens: turnUsageReported ? turnUsage.input : 0,
+				outputTokens: turnUsageReported ? turnUsage.output : 0,
+				cacheReadTokens: turnUsageReported ? turnUsage.cacheRead : 0,
+				cacheWriteTokens: turnUsageReported ? turnUsage.cacheWrite : 0,
+				turnTotalTokens: turnUsageReported ? turnUsage.totalTokens : 0,
 			});
 			reportProgress({
 				type: "turn_interrupted",
@@ -378,6 +412,7 @@ export class AgentRunner {
 				trimCount,
 				interruptStage: stage,
 				interruptSource: "user_escape",
+				turnTokens: turnUsageReported ? turnUsage : undefined,
 			});
 
 			return {
@@ -471,6 +506,7 @@ export class AgentRunner {
 						interruptController?.leaveActiveStage();
 					});
 				lastModelElapsedMs = Date.now() - modelStartedAt;
+				accumulateUsage(response.usage);
 
 				reportProgress({
 					type: "model_request_finished",
@@ -783,6 +819,11 @@ export class AgentRunner {
 					trimCount,
 					modelElapsedMs: lastModelElapsedMs,
 					turnElapsedMs: Date.now() - turnStartedAt,
+					inputTokens: turnUsageReported ? turnUsage.input : 0,
+					outputTokens: turnUsageReported ? turnUsage.output : 0,
+					cacheReadTokens: turnUsageReported ? turnUsage.cacheRead : 0,
+					cacheWriteTokens: turnUsageReported ? turnUsage.cacheWrite : 0,
+					turnTotalTokens: turnUsageReported ? turnUsage.totalTokens : 0,
 				});
 				reportProgress({
 					type: "turn_finished",
@@ -794,6 +835,7 @@ export class AgentRunner {
 					modelElapsedMs: lastModelElapsedMs,
 					summaryCount,
 					trimCount,
+					turnTokens: turnUsageReported ? turnUsage : undefined,
 				});
 
 				return {
@@ -851,6 +893,11 @@ export class AgentRunner {
 				trimCount,
 				modelElapsedMs: lastModelElapsedMs,
 				turnElapsedMs: Date.now() - turnStartedAt,
+				inputTokens: turnUsageReported ? turnUsage.input : 0,
+				outputTokens: turnUsageReported ? turnUsage.output : 0,
+				cacheReadTokens: turnUsageReported ? turnUsage.cacheRead : 0,
+				cacheWriteTokens: turnUsageReported ? turnUsage.cacheWrite : 0,
+				turnTotalTokens: turnUsageReported ? turnUsage.totalTokens : 0,
 			});
 			reportProgress({
 				type: "turn_max_steps_reached",
@@ -862,6 +909,7 @@ export class AgentRunner {
 				modelElapsedMs: lastModelElapsedMs,
 				summaryCount,
 				trimCount,
+				turnTokens: turnUsageReported ? turnUsage : undefined,
 			});
 
 			return {
@@ -917,6 +965,11 @@ export class AgentRunner {
 				turnElapsedMs: Date.now() - turnStartedAt,
 				failureType,
 				error: error instanceof Error ? error.message : String(error),
+				inputTokens: turnUsageReported ? turnUsage.input : 0,
+				outputTokens: turnUsageReported ? turnUsage.output : 0,
+				cacheReadTokens: turnUsageReported ? turnUsage.cacheRead : 0,
+				cacheWriteTokens: turnUsageReported ? turnUsage.cacheWrite : 0,
+				turnTotalTokens: turnUsageReported ? turnUsage.totalTokens : 0,
 			});
 			reportProgress({
 				type: "turn_failed",
@@ -928,6 +981,7 @@ export class AgentRunner {
 				summaryCount,
 				trimCount,
 				failureType,
+				turnTokens: turnUsageReported ? turnUsage : undefined,
 			});
 			throw error;
 		}

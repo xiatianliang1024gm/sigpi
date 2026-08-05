@@ -224,6 +224,14 @@ export interface TurnProgressEvent {
 	/** Which trigger fired for the compaction (see {@link ContextUpdateResult.trigger}). */
 	trigger?: ContextUpdateResult["trigger"];
 	estimatedContextTokens?: number;
+	/**
+	 * Provider-reported token usage accumulated across every model request in
+	 * the turn (main steps plus in-turn checkpoint summaries). Reported on the
+	 * terminal turn events (`turn_finished`, `turn_interrupted`,
+	 * `turn_failed`, `turn_max_steps_reached`) so the UI can surface "this
+	 * answer consumed N tokens". Absent when no request reported usage.
+	 */
+	turnTokens?: ModelUsage;
 }
 
 export type ProgressReporter = (event: TurnProgressEvent) => void;

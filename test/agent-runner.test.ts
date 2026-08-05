@@ -14,6 +14,7 @@ import { ToolRegistry } from "../src/tools/registry.js";
 import type { ExecutedToolCall, TurnProgressEvent } from "../src/types.js";
 import {
 	createTempDir,
+	MemoryLogger,
 	MockProvider,
 	stripMessageIds,
 	writeWorkspaceFile,
@@ -1368,4 +1369,118 @@ test("turn_finished estimate uses provider usage, not the chars/4 fallback", asy
 		estimate !== undefined && estimate >= 1_200 && estimate < 1_500,
 		`expected the provider-reported 1.2K ground truth, got ${estimate}`,
 	);
+});
+
+test("turn_finished reports accumulated provider usage across the turn", async () => {
+	const progressEvents: TurnProgressEvent[] = [];
+	const logger = new MemoryLogger();
+	const usagePerRequest = [
+		{
+			input: 1_000,
+			output: 200,
+			cacheRead: 100,
+			cacheWrite: 50,
+			totalTokens: 1_350,
+		},
+		{
+			input: 1_200,
+			output: 500,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 1_700,
+		},
+	] as const;
+
+	const provider = new MockProvider((_request, index) => {
+		const usage = usagePerRequest[index] ?? usagePerRequest.at(-1);
+		if (index === 0) {
+			return {
+				assistantText: null,
+				toolCalls: [
+					{
+						id: "call_usage_1",
+						name: "glob",
+						arguments: { pattern: "no-such-file-xyz/**" },
+						rawArguments: '{"pattern":"no-such-file-xyz/**"}',
+					},
+				],
+				finishReason: "tool_calls",
+				usage,
+			};
+		}
+		return {
+			assistantText: "Done.",
+			toolCalls: [],
+			finishReason: "stop",
+			usage,
+		};
+	});
+
+	const runner = new AgentRunner({
+		provider,
+		tools: createDefaultToolRegistry(),
+		context: new ConversationContext(),
+		systemPrompt: "You are a test agent.",
+		options: {
+			workingDirectory: process.cwd(),
+			progressReporter: (event) => {
+				progressEvents.push(event);
+			},
+			logger,
+		},
+	});
+
+	const result = await runner.runTurn("do the thing");
+	assert.equal(result.outputText, "Done.");
+
+	const finished = progressEvents.find(
+		(event) => event.type === "turn_finished",
+	);
+	assert.ok(finished, "expected a turn_finished event");
+	assert.deepEqual(finished.turnTokens, {
+		input: 2_200,
+		output: 700,
+		cacheRead: 100,
+		cacheWrite: 50,
+		totalTokens: 3_050,
+	});
+
+	const logEntry = logger.entries.find(
+		(entry) => entry.event === "turn_finished",
+	);
+	assert.ok(logEntry, "expected a turn_finished log entry");
+	assert.equal(logEntry.fields?.inputTokens, 2_200);
+	assert.equal(logEntry.fields?.outputTokens, 700);
+	assert.equal(logEntry.fields?.turnTotalTokens, 3_050);
+	assert.equal(typeof logEntry.fields?.turnElapsedMs, "number");
+});
+
+test("terminal events omit turnTokens when the provider reports no usage", async () => {
+	const progressEvents: TurnProgressEvent[] = [];
+	const provider = new MockProvider(() => ({
+		assistantText: "Plain answer.",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+
+	const runner = new AgentRunner({
+		provider,
+		tools: createDefaultToolRegistry(),
+		context: new ConversationContext(),
+		systemPrompt: "You are a test agent.",
+		options: {
+			workingDirectory: process.cwd(),
+			progressReporter: (event) => {
+				progressEvents.push(event);
+			},
+		},
+	});
+
+	await runner.runTurn("hello");
+
+	const finished = progressEvents.find(
+		(event) => event.type === "turn_finished",
+	);
+	assert.ok(finished);
+	assert.equal(finished.turnTokens, undefined);
 });

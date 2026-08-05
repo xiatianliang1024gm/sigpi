@@ -1037,3 +1037,48 @@ test("attachSessionById can switch from one bound session to another", async () 
 		process.chdir(previousCwd);
 	}
 });
+
+test("formatStatusBarForEvent threads live turn clock and keeps last-turn stats", async () => {
+	const cwd = await realpath(
+		await createTempDir("sigpi-chat-repl-turn-stats-"),
+	);
+	const homeDir = await createTempDir("sigpi-chat-repl-turn-stats-home-");
+	const previousCwd = process.cwd();
+	const restoreHome = setTestHome(homeDir);
+	process.chdir(cwd);
+
+	try {
+		await writeTestConfig(homeDir);
+		const runtime = await createAgentRuntime({ createSession: true });
+		const state = runtimeToChatReplState(runtime);
+
+		// While the turn is in flight: live clock is threaded onto the model.
+		const inFlight = await formatStatusBarForEvent(
+			state,
+			{ type: "model_delta", step: 1, turnId: "t", contentDelta: "x" },
+			{ turnStartedAt: 5_000 },
+		);
+		assert.equal(inFlight.turnStartedAt, 5_000);
+		assert.match(composeStatusBar(inFlight, 9_000), /thinking · 4s/);
+
+		// After the turn: event cleared, but the last-turn label + totals stay.
+		const idle = await formatStatusBarForEvent(state, null, {
+			lastTurnStats: {
+				label: "done",
+				elapsedMs: 12_400,
+				tokens: {
+					input: 2_200,
+					output: 700,
+					cacheRead: 100,
+					cacheWrite: 50,
+					totalTokens: 3_050,
+				},
+			},
+		});
+		assert.equal(idle.eventLabel, "done");
+		assert.match(statusLine(idle), /done · 12s · 2\.9K billed/);
+	} finally {
+		restoreHome();
+		process.chdir(previousCwd);
+	}
+});
