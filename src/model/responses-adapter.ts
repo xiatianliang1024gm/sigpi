@@ -211,19 +211,32 @@ export class ResponsesAdapter implements WireFormatAdapter {
 			}
 			case "response.completed": {
 				const f = frameObj;
-				if (typeof f.status === "string") this.accumulated.status = f.status;
-				if (isPlainObject(f.usage)) this.accumulated.usage = f.usage;
-				if (typeof f.output_text === "string") {
-					this.accumulated.output_text = f.output_text;
+				// DeepSeek (and the OpenAI Responses API) stream the finished
+				// response object NESTED under `response` — `status`, `usage`
+				// and the full `output` array live at `response.*`, not at the
+				// frame's top level. Some gateways emit the fields at the top
+				// level instead; accept both shapes so `usage` (and the
+				// finish-reason `status`) are never silently dropped.
+				const completed = isPlainObject(f.response)
+					? (f.response as Record<string, unknown>)
+					: f;
+				if (typeof completed.status === "string") {
+					this.accumulated.status = completed.status;
+				}
+				if (isPlainObject(completed.usage)) {
+					this.accumulated.usage = completed.usage;
+				}
+				if (typeof completed.output_text === "string") {
+					this.accumulated.output_text = completed.output_text;
 				}
 				// response.completed is not the assembly source: we
 				// only adopt its output when our own folding produced nothing.
 				if (
-					Array.isArray(f.output) &&
-					f.output.length > 0 &&
+					Array.isArray(completed.output) &&
+					completed.output.length > 0 &&
 					this.accumulated.output.length === 0
 				) {
-					this.accumulated.output = f.output;
+					this.accumulated.output = completed.output;
 				}
 				break;
 			}
@@ -340,8 +353,14 @@ export class ResponsesAdapter implements WireFormatAdapter {
 				break;
 			}
 			case "response.completed": {
-				if (typeof frameObj.status === "string") {
-					return { finishReason: frameObj.status };
+				// Same nested-vs-top-level shape as `accumulate()`: DeepSeek /
+				// OpenAI nest the completed response under `response`, other
+				// gateways may surface `status` at the frame's top level.
+				const completed = isPlainObject(frameObj.response)
+					? (frameObj.response as Record<string, unknown>)
+					: frameObj;
+				if (typeof completed.status === "string") {
+					return { finishReason: completed.status };
 				}
 				break;
 			}
