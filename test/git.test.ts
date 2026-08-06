@@ -14,6 +14,7 @@ import { test } from "node:test";
 import {
 	_resetGitBranchStateForTests,
 	getCachedBranch,
+	onBranchChange,
 	runGit,
 	startBranchWatcher,
 	stopBranchWatcher,
@@ -307,6 +308,57 @@ test("branch watcher keeps the last known branch when a lookup fails", async () 
 	} finally {
 		cleanup(dir);
 		cleanup(fakeDir);
+	}
+});
+
+test("branch change listener fires on first sample and on change only", async () => {
+	_resetGitBranchStateForTests();
+	const dir = makeRepo();
+	try {
+		const seen: string[] = [];
+		const unsubscribe = onBranchChange((branch) => {
+			seen.push(branch);
+		});
+		try {
+			startBranchWatcher(dir, 50);
+			try {
+				await waitForBranch("main");
+				gitIn(dir, "checkout -q -b feature");
+				await waitForBranch("feature");
+				// Let several poll ticks pass: re-samples of an unchanged
+				// branch must not re-fire the listener.
+				await sleep(200);
+				assert.deepEqual(seen, ["main", "feature"]);
+			} finally {
+				stopBranchWatcher();
+			}
+		} finally {
+			unsubscribe();
+		}
+	} finally {
+		cleanup(dir);
+	}
+});
+
+test("branch change listener stops firing after unsubscribe", async () => {
+	_resetGitBranchStateForTests();
+	const dir = makeRepo();
+	try {
+		let calls = 0;
+		const unsubscribe = onBranchChange(() => {
+			calls++;
+		});
+		unsubscribe();
+		startBranchWatcher(dir, 50);
+		try {
+			await waitForBranch("main");
+			await sleep(200);
+			assert.equal(calls, 0);
+		} finally {
+			stopBranchWatcher();
+		}
+	} finally {
+		cleanup(dir);
 	}
 });
 

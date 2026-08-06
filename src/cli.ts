@@ -20,7 +20,11 @@ import {
 	initializeUserConfig,
 	loadAppConfig,
 } from "./config.js";
-import { startBranchWatcher, stopBranchWatcher } from "./git.js";
+import {
+	onBranchChange,
+	startBranchWatcher,
+	stopBranchWatcher,
+} from "./git.js";
 import { TurnInterruptController } from "./interrupt.js";
 import { resolveDatedLogFilePath } from "./logger.js";
 import { configureHttpProxy } from "./model/http-dispatcher.js";
@@ -483,6 +487,12 @@ export async function runChatReplLoop(
 	// through a cached variable instead of spawning git on every refresh (see
 	// git.ts). Cleared on the loop's single exit path below.
 	startBranchWatcher(getCurrentWorkingDirectory(state));
+	// Repaint the bar as soon as the branch is known (or changes): the first
+	// sample lands shortly after start, well before the 5s idle refresh would
+	// pick it up, and the HEAD watch makes subsequent switches near-instant.
+	const unsubscribeBranchChange = onBranchChange(() => {
+		void refreshStatusBar();
+	});
 
 	while (true) {
 		const queuedLine = queuedLines.shift();
@@ -606,6 +616,7 @@ export async function runChatReplLoop(
 	view.stop();
 	clearInterval(statusBarRefreshTimer);
 	clearInterval(turnStatusTimer);
+	unsubscribeBranchChange();
 	stopBranchWatcher();
 	// The terminal is restored, so a plain stdout line is safe here. Print
 	// the run's cumulative agent time and billed tokens (no-op on an empty
