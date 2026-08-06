@@ -313,6 +313,61 @@ test("finalize accumulates reasoning from response.reasoning_text.delta (DeepSee
 	assert.equal(response.assistantText, "done");
 });
 
+test("finalize reads usage and status from the nested response object in response.completed (DeepSeek responses API)", () => {
+	// DeepSeek (and OpenAI) stream the finished response object NESTED under
+	// `response`: `{"type":"response.completed","response":{...,"status":
+	// "completed","usage":{...}}}`. The adapter must read usage/status from
+	// there so the status bar can show billed tokens in responses mode.
+	const adapter = new ResponsesAdapter(config());
+	for (const frame of [
+		{
+			type: "response.output_item.added",
+			item: {
+				id: "msg1",
+				type: "message",
+				role: "assistant",
+				content: [],
+			},
+		},
+		{ type: "response.output_text.delta", item_id: "msg1", delta: "ok" },
+		{
+			type: "response.completed",
+			response: {
+				id: "resp_1",
+				status: "completed",
+				usage: {
+					input_tokens: 87,
+					input_tokens_details: { cached_tokens: 0 },
+					output_tokens: 21,
+					output_tokens_details: { reasoning_tokens: 18 },
+					total_tokens: 108,
+				},
+			},
+		},
+	]) {
+		adapter.accumulate(frame);
+	}
+	const response = adapter.finalize();
+	assert.equal(response.assistantText, "ok");
+	assert.equal(response.finishReason, "stop");
+	assert.deepEqual(response.usage, {
+		input: 87,
+		output: 21,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 108,
+	});
+});
+
+test("onDelta surfaces finishReason from the nested response object in response.completed", () => {
+	const adapter = new ResponsesAdapter(config());
+	const delta = adapter.onDelta({
+		type: "response.completed",
+		response: { status: "completed" },
+	});
+	assert.deepEqual(delta, { finishReason: "completed" });
+});
+
 test("finalize accumulates reasoning from response.reasoning_summary_text.delta", () => {
 	const adapter = new ResponsesAdapter(config());
 	for (const frame of [
