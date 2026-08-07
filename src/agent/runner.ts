@@ -28,10 +28,6 @@ import {
 	renderMessagesForSummary,
 } from "./messages.js";
 
-const MUTATING_TOOL_NAMES = new Set(["write", "edit"]);
-const VERIFICATION_TOOL_NAMES = new Set(["bash"]);
-const VERIFICATION_REMINDER =
-	"You changed files in this turn. Before finishing, run the narrowest relevant verification command with `bash` if feasible, or explain what blocked validation.";
 const INTERRUPTED_TOOL_RESULT_ERROR =
 	"Tool execution was interrupted by the user before it produced output. Re-run the tool if the task still requires it.";
 const TURN_CHECKPOINT_KEEP_LAST_MESSAGES = 4;
@@ -77,7 +73,6 @@ const DEFAULT_RUNNER_OPTIONS: AgentRunnerOptions = {
 	maxSteps: 40,
 	temperature: 0.2,
 	workingDirectory: process.cwd(),
-	enableVerificationReminder: false,
 };
 const CLEAR_PROGRESS_TOOL_RESULT_MAX_CHARS = 4000;
 
@@ -178,8 +173,6 @@ export class AgentRunner {
 		let lastModelElapsedMs = 0;
 		let failureType: string | undefined;
 		let turnMessagesPersisted = false;
-		let needsVerification = false;
-		let verificationReminderSent = false;
 		let lastStep = 0;
 		let turnCheckpoint: string | null = null;
 		let lastCheckpointedTurnMessageCount = 0;
@@ -648,15 +641,6 @@ export class AgentRunner {
 						workingMessages.push(toolMessage);
 						turnMessages.push(toolMessage);
 						interruptController?.throwIfInterrupted();
-
-						if (MUTATING_TOOL_NAMES.has(toolCall.name) && result.ok) {
-							needsVerification = true;
-						} else if (
-							needsVerification &&
-							VERIFICATION_TOOL_NAMES.has(toolCall.name)
-						) {
-							needsVerification = false;
-						}
 					}
 
 					await maybeCompactWorkingMessages();
@@ -666,29 +650,6 @@ export class AgentRunner {
 				interruptController?.throwIfInterrupted();
 				const assistantText = response.assistantText?.trim() ?? "";
 				const outputText = assistantText || "No response generated.";
-
-				if (
-					needsVerification &&
-					!verificationReminderSent &&
-					this.options.enableVerificationReminder === true
-				) {
-					verificationReminderSent = true;
-					workingMessages.push(createUserMessage(VERIFICATION_REMINDER));
-					logger?.info("turn_verification_reminder_added", {
-						runId: this.options.runId,
-						sessionId: this.options.sessionId ?? null,
-						turnId,
-						step,
-					});
-					reportProgress({
-						type: "assistant_message",
-						step,
-						turnId,
-						message: "Runner note",
-						assistantText: VERIFICATION_REMINDER,
-					});
-					continue;
-				}
 
 				const assistantMessage = createAssistantMessage(outputText, undefined, {
 					reasoning: response.reasoning ?? undefined,

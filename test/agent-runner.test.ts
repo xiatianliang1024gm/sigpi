@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { z } from "zod";
 import { ConversationContext } from "../src/agent/context.js";
@@ -8,7 +7,6 @@ import {
 	TurnInterruptController,
 	TurnInterruptedError,
 } from "../src/interrupt.js";
-import { createShellRuntime } from "../src/shell.js";
 import { createDefaultToolRegistry } from "../src/tools/index.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { ExecutedToolCall, TurnProgressEvent } from "../src/types.js";
@@ -1172,92 +1170,6 @@ test("runner progress includes shell command detail", async () => {
 
 	assert.equal(shellEvent?.message, "shell pwd");
 	assert.equal(shellEvent?.detail, undefined);
-});
-
-test("runner nudges the model to verify changes before finishing", async () => {
-	const cwd = await createTempDir("sigpi-verify-");
-	const shellRuntime = createShellRuntime(
-		process.platform === "win32" ? "powershell" : "sh",
-		process.platform,
-	);
-	const verificationCommand =
-		process.platform === "win32"
-			? "if (Test-Path note.txt) { Write-Output ok } else { exit 1 }"
-			: "test -f note.txt && printf 'ok'";
-	const provider = new MockProvider((request, index) => {
-		if (index === 0) {
-			return {
-				assistantText: "I will update the file.",
-				toolCalls: [
-					{
-						id: "call_write_1",
-						name: "write",
-						arguments: {
-							file_path: "note.txt",
-							content: "updated\n",
-						},
-						rawArguments: '{"path":"note.txt","content":"updated\\n"}',
-					},
-				],
-				finishReason: "tool_calls",
-			};
-		}
-
-		if (index === 1) {
-			return {
-				assistantText: "The file has been updated.",
-				toolCalls: [],
-				finishReason: "stop",
-			};
-		}
-
-		if (index === 2) {
-			assert.equal(request.messages.at(-1)?.role, "user");
-			assert.match(
-				request.messages.at(-1)?.content ?? "",
-				/You changed files in this turn/i,
-			);
-			return {
-				assistantText: "I should verify the file change.",
-				toolCalls: [
-					{
-						id: "call_verify_1",
-						name: "bash",
-						arguments: { command: verificationCommand },
-						rawArguments: JSON.stringify({ command: verificationCommand }),
-					},
-				],
-				finishReason: "tool_calls",
-			};
-		}
-
-		return {
-			assistantText: "Verified.",
-			toolCalls: [],
-			finishReason: "stop",
-		};
-	});
-
-	const runner = new AgentRunner({
-		provider,
-		tools: createDefaultToolRegistry(shellRuntime),
-		context: new ConversationContext(),
-		systemPrompt: "You are a test agent.",
-		options: {
-			workingDirectory: cwd,
-			enableVerificationReminder: true,
-		},
-	});
-
-	const result = await runner.runTurn("update note.txt");
-
-	assert.equal(result.outputText, "Verified.");
-	assert.deepEqual(
-		result.toolExecutions.map((execution) => execution.toolCall.name),
-		["write", "bash"],
-	);
-	assert.equal(await readFile(`${cwd}/note.txt`, "utf8"), "updated\n");
-	assert.equal(provider.requests.length, 4);
 });
 
 test("summarizeToolExecutions records only file read/modify ops (ADR-0022)", () => {
