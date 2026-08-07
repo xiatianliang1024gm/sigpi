@@ -3,7 +3,7 @@ import type { AddressInfo, Socket } from "node:net";
 import OpenAI from "openai";
 import type { ModelConfig } from "../../src/config.js";
 
-export interface CapturedRequest {
+interface CapturedRequest {
 	url: string;
 	method: string;
 	headers: Record<string, string>;
@@ -34,7 +34,7 @@ export type ResponseSpec =
 	/** Reset the TCP connection without a response (simulates a network error). */
 	| { kind: "reset" };
 
-export type RequestHandler = (
+type RequestHandler = (
 	request: CapturedRequest,
 ) => ResponseSpec | Promise<ResponseSpec>;
 

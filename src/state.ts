@@ -3,15 +3,15 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
-export interface AgentState {
+interface AgentState {
 	lastModelId: string | null;
 }
 
-export interface LoadAgentStateOptions {
+interface LoadAgentStateOptions {
 	homeDir?: string;
 }
 
-export interface SaveAgentStateOptions {
+interface SaveAgentStateOptions {
 	homeDir?: string;
 }
 
@@ -23,7 +23,7 @@ function getStatePath(homeDir: string): string {
 	return path.join(getStateDir(homeDir), "state.json");
 }
 
-export async function loadAgentState(
+async function loadAgentState(
 	options: LoadAgentStateOptions = {},
 ): Promise<AgentState> {
 	const homeDir = options.homeDir ?? homedir();
@@ -57,7 +57,7 @@ export function loadAgentStateSync(
 	}
 }
 
-export async function saveAgentState(
+async function saveAgentState(
 	state: AgentState,
 	options: SaveAgentStateOptions = {},
 ): Promise<void> {

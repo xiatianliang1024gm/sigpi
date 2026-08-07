@@ -1,8 +1,5 @@
 import type { JsonValue, ToolExecutionResult } from "../types.js";
 
-const DEFAULT_BLOCK_START_MARKER = "=== CONTENT START ===";
-const DEFAULT_BLOCK_END_MARKER = "=== CONTENT END ===";
-
 export function withRendered<T extends Record<string, JsonValue>>(
 	data: T,
 	rendered: string,
@@ -34,7 +31,7 @@ export function formatToolExecutionResult(
 	return lines.join("\n");
 }
 
-export function formatToolValue(value: JsonValue): string {
+function formatToolValue(value: JsonValue): string {
 	const rendered = getRenderedText(value);
 	if (rendered) {
 		return rendered;
@@ -51,26 +48,6 @@ export function formatToolValue(value: JsonValue): string {
 	}
 
 	return formatInlineValue(value);
-}
-
-export function formatMetadataLine(label: string, value: string): string {
-	return `${label}: ${value}`;
-}
-
-export function formatRawBlock(
-	label: string,
-	content: string,
-	options: { baseEndMarker?: string; omitLabel?: boolean } = {},
-): string {
-	const baseEndMarker = options.baseEndMarker ?? DEFAULT_BLOCK_END_MARKER;
-	const endMarker = chooseUniqueMarker(content, baseEndMarker);
-	const body = content.endsWith("\n") ? content.slice(0, -1) : content;
-	const lines: string[] = [];
-	if (!options.omitLabel) {
-		lines.push(`${label}:`);
-	}
-	lines.push(DEFAULT_BLOCK_START_MARKER, body, endMarker);
-	return lines.join("\n");
 }
 
 export function joinRenderedSections(
@@ -136,17 +113,4 @@ function indentBlock(value: string): string {
 		.split("\n")
 		.map((line) => `  ${line}`)
 		.join("\n");
-}
-
-function chooseUniqueMarker(content: string, baseMarker: string): string {
-	if (!content.includes(baseMarker)) {
-		return baseMarker;
-	}
-
-	let suffix = 1;
-	while (content.includes(`${baseMarker}_${suffix}`)) {
-		suffix += 1;
-	}
-
-	return `${baseMarker}_${suffix}`;
 }

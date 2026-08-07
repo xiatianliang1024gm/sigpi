@@ -87,7 +87,7 @@ export interface SystemPromptSection {
 	content: string;
 }
 
-export interface BashToolContext {
+interface BashToolContext {
 	/** Directory where overflow output / background logs are written. */
 	outputDir: string;
 	/** Captured rc alias/function definitions written to this file (sourced as a preamble). */
@@ -346,7 +346,7 @@ export interface ModelDelta {
 	finishReason?: string | null;
 }
 
-export interface ModelRequestContext {
+interface ModelRequestContext {
 	runId?: string;
 	sessionId?: string | null;
 	turnId?: string;
@@ -519,7 +519,7 @@ export interface ExecutedToolCall {
 	result: ToolExecutionResult;
 }
 
-export type RunCompletionStatus = "completed" | "interrupted";
+type RunCompletionStatus = "completed" | "interrupted";
 export type InterruptSource = "user_escape" | "process_recovery";
 export type InterruptStage = "model" | "tool";
 
@@ -535,9 +535,9 @@ export interface RunTurnResult {
 	interruptStage: InterruptStage | null;
 }
 
-export type TurnStatus = "in_progress" | "completed" | "failed" | "interrupted";
+type TurnStatus = "in_progress" | "completed" | "failed" | "interrupted";
 
-export interface SessionTurnRecord {
+interface SessionTurnRecord {
 	startedAt: string;
 	finishedAt: string | null;
 	status: TurnStatus;
@@ -549,12 +549,12 @@ export interface SessionTurnRecord {
 	interruptStage?: InterruptStage | null;
 }
 
-export interface SessionToolExecutionEntry {
+interface SessionToolExecutionEntry {
 	toolCall: ToolCall;
 	result: ToolExecutionResult;
 }
 
-export interface SessionTurnHistoryEntry {
+interface SessionTurnHistoryEntry {
 	turnId: number;
 	startedAt: string;
 	finishedAt: string | null;

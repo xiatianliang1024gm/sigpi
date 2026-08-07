@@ -25,17 +25,6 @@ export function getNumber(value: unknown): number | null {
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-export function getBoolean(value: unknown): boolean | null {
-	return typeof value === "boolean" ? value : null;
-}
-
-export function getStringArray(value: unknown): string[] {
-	if (!Array.isArray(value)) {
-		return [];
-	}
-	return value.filter((item): item is string => typeof item === "string");
-}
-
 export function asInlineCode(value: string): string {
 	return `\`${truncate(value, 120)}\``;
 }

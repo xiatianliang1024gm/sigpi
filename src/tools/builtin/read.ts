@@ -7,7 +7,7 @@ import { ReadTracker } from "../read-tracker.js";
 import { joinRenderedSections, withRendered } from "../render.js";
 
 export const DEFAULT_READ_MAX_LINES = 2_000;
-export const DEFAULT_READ_MAX_CHARS = 50 * 1_024;
+const DEFAULT_READ_MAX_CHARS = 50 * 1_024;
 // ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------

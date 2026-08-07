@@ -160,7 +160,7 @@ export function createShellRuntime(
 	}
 }
 
-export interface ShellInvocationOptions {
+interface ShellInvocationOptions {
 	/**
 	 * Text prepended to every command (e.g. env-file source + captured rc
 	 * alias/function definitions). Runs in the same shell as the command so

@@ -169,14 +169,14 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 	}
 }
 
-export interface RunChatReplLoopOptions {
+interface RunChatReplLoopOptions {
 	state: ChatReplState;
 	store: SessionStore;
 	progressReporter?: (event: TurnProgressEvent) => void;
 	tools?: ToolRegistry;
 }
 
-export interface RunChatReplLoopDependencies {
+interface RunChatReplLoopDependencies {
 	commands: readonly ChatCommandDefinition[];
 }
 
@@ -216,7 +216,7 @@ function isTurnTerminalEvent(event: TurnProgressEvent): boolean {
  * the totals are printed as a single summary line. Token fields mirror the
  * per-turn log fields, so `inputTokens + outputTokens` is the billed figure.
  */
-export interface ReplRunStats {
+interface ReplRunStats {
 	/** Number of turns that reached a terminal event in this run. */
 	turnCount: number;
 	/** Sum of each turn's user-submit → terminal-event elapsed time, in ms. */
@@ -396,7 +396,7 @@ function formatCompactionMessage(event: TurnProgressEvent): string {
 	return event.message ?? "Context compacted.";
 }
 
-export async function runChatReplLoop(
+async function runChatReplLoop(
 	options: RunChatReplLoopOptions,
 	dependencies: RunChatReplLoopDependencies,
 ): Promise<ChatReplState> {

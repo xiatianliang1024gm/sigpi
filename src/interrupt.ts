@@ -1,6 +1,6 @@
 import type { InterruptSource, InterruptStage } from "./types.js";
 
-export type TurnInterruptState =
+type TurnInterruptState =
 	| "idle"
 	| "running:model"
 	| "running:tool"

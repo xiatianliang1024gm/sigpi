@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { formatToolExecutionResult } from "../tools/render.js";
 import type {
 	AssistantMessage,
-	JsonValue,
 	Message,
 	SystemMessage,
 	ToolCall,
@@ -67,7 +66,7 @@ export function createToolMessage(
  * placeholder for "the next pending user input" or a synthetic system
  * message don't need to mint an id.
  */
-export type MessageCharEstimateInput = {
+type MessageCharEstimateInput = {
 	role: Message["role"];
 	content: string | null;
 	toolCalls?: ToolCall[];
@@ -150,12 +149,4 @@ function truncateToolMessageContent(text: string, maxChars: number): string {
 	const omittedChars = text.length - headChars - tailChars;
 	const marker = `\n\n[tool result truncated: ${omittedChars} characters omitted; showing first ${headChars} and last ${tailChars} characters]\n\n`;
 	return `${text.slice(0, headChars)}${marker}${text.slice(text.length - tailChars)}`;
-}
-
-export function safeJsonValue(input: unknown): JsonValue {
-	try {
-		return JSON.parse(JSON.stringify(input)) as JsonValue;
-	} catch {
-		return String(input);
-	}
 }

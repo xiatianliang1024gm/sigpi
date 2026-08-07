@@ -5,13 +5,13 @@ import path from "node:path";
 import type { LoadedSkill, SkillWarning } from "../types.js";
 import { parseSkillDocument } from "./manifest.js";
 
-export interface SkillCatalogLoadResult {
+interface SkillCatalogLoadResult {
 	loadedSkills: LoadedSkill[];
 	warnings: SkillWarning[];
 	fingerprint: string | null;
 }
 
-export interface LoadSkillCatalogOptions {
+interface LoadSkillCatalogOptions {
 	/** Working directory to scan for project skills. */
 	cwd: string;
 	/** Home directory for global skill roots. Defaults to $HOME / os.homedir(). */
@@ -66,7 +66,7 @@ export async function loadSkillCatalog(
 	};
 }
 
-export function collectSkillRoots(cwd: string, homeDir: string): string[] {
+function collectSkillRoots(cwd: string, homeDir: string): string[] {
 	const projectRoots: string[] = [];
 	let dir = path.resolve(cwd);
 	for (;;) {
@@ -205,7 +205,7 @@ async function loadSkillsFromDir(
 	};
 }
 
-export function buildSkillsFingerprint(skills: LoadedSkill[]): string | null {
+function buildSkillsFingerprint(skills: LoadedSkill[]): string | null {
 	if (skills.length === 0) {
 		return null;
 	}

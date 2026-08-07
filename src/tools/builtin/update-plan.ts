@@ -21,7 +21,7 @@ const updatePlanSchema = z.object({
 
 type UpdatePlanArgs = z.infer<typeof updatePlanSchema>;
 
-export interface PlanState {
+interface PlanState {
 	explanation: string | null;
 	items: UpdatePlanArgs["plan"];
 	updatedAt: string | null;
