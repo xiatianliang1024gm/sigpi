@@ -52,7 +52,7 @@ export interface ChatCommandDefinition extends ChatCommandMetadata {
 	) => Promise<ChatCommandOutcome> | ChatCommandOutcome;
 }
 
-export type ParsedChatCommand =
+type ParsedChatCommand =
 	| {
 			kind: "command";
 			command: ChatCommandDefinition;
@@ -68,7 +68,7 @@ export type ParsedChatCommand =
 			kind: "none";
 	  };
 
-export type ChatCommandOutcome =
+type ChatCommandOutcome =
 	| {
 			action: "continue";
 	  }
@@ -81,7 +81,7 @@ export type ChatCommandOutcome =
 			input: string;
 	  };
 
-export type ChatCommandExecutionResult =
+type ChatCommandExecutionResult =
 	| {
 			kind: "handled";
 			action: ChatCommandOutcome["action"];
@@ -95,7 +95,7 @@ export type ChatCommandExecutionResult =
 			kind: "not-a-command";
 	  };
 
-export interface ChatCommandDependencies {
+interface ChatCommandDependencies {
 	attachSessionFromSelector: typeof defaultAttachSessionFromSelector;
 	attachNewSession: typeof defaultAttachNewSession;
 	getResumeAvailability: typeof defaultGetResumeAvailability;
@@ -106,7 +106,7 @@ export interface ChatCommandDependencies {
 	loadedSkills?: readonly LoadedSkill[];
 }
 
-export const DOCUMENTED_CHAT_COMMAND_NAMES = [
+const DOCUMENTED_CHAT_COMMAND_NAMES = [
 	"/summary",
 	"/compact",
 	"/model",
@@ -503,7 +503,7 @@ class ModelSelectorComponent implements Component {
 	}
 }
 
-export async function selectModelInteractive(
+async function selectModelInteractive(
 	state: ChatReplState,
 ): Promise<string | null> {
 	const tui = state.view?.getTuiInstance();

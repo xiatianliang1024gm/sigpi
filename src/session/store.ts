@@ -24,7 +24,6 @@ import type {
 	JsonValue,
 	LoadedSession,
 	PersistedSession,
-	RuntimeLogger,
 	SessionEntry,
 	SessionSummary,
 	ToolExecutionResult,
@@ -283,21 +282,12 @@ export interface SessionStore {
 }
 
 export class DiskSessionStore implements SessionStore {
-	private readonly cwd: string;
 	private readonly rootDir: string;
 	private readonly indexPath: string;
-	private readonly storagePaths: SessionStoragePaths;
-	private readonly logger?: RuntimeLogger;
 
-	constructor(args: {
-		storagePaths: SessionStoragePaths;
-		logger?: RuntimeLogger;
-	}) {
-		this.cwd = args.storagePaths.cwd;
+	constructor(args: { storagePaths: SessionStoragePaths }) {
 		this.rootDir = args.storagePaths.sessionsDir;
 		this.indexPath = args.storagePaths.indexPath;
-		this.storagePaths = args.storagePaths;
-		this.logger = args.logger;
 	}
 
 	async createSession(args: {
@@ -1062,12 +1052,12 @@ function normalizeTitle(title: string | undefined): string | null {
 	return trimmed ? trimmed : null;
 }
 
-export function deriveTitle(userInput: string): string {
+function deriveTitle(userInput: string): string {
 	const normalized = userInput.replace(/\s+/gu, " ").trim();
 	return normalized.length <= 80 ? normalized : `${normalized.slice(0, 77)}...`;
 }
 
-export function nextTurnId(turns: PersistedSession["turns"]): number {
+function nextTurnId(turns: PersistedSession["turns"]): number {
 	return (turns.at(-1)?.turnId ?? 0) + 1;
 }
 

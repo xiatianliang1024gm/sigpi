@@ -1,9 +1,6 @@
-import assert from "node:assert/strict";
 import { execSync, spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
-import type { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,20 +14,6 @@ import type {
 	ModelResponse,
 	RuntimeLogger,
 } from "../src/types.js";
-
-export interface FakeOpenAIRequest {
-	method: string;
-	url: string;
-	headers: Record<string, string | string[] | undefined>;
-	body: unknown;
-}
-
-export interface FakeOpenAIResponse {
-	status?: number;
-	headers?: Record<string, string>;
-	body?: unknown;
-	rawBody?: string;
-}
 
 export class MockProvider implements ModelProvider {
 	public readonly requests: ModelRequest[] = [];
@@ -192,77 +175,6 @@ export function createTestToolExecution(
 			ok: true,
 			data: { files: ["src/index.ts"], returned: 1 },
 			...overrides?.result,
-		},
-	};
-}
-
-export async function startFakeOpenAIServer(
-	handler: (
-		request: FakeOpenAIRequest,
-		index: number,
-	) => FakeOpenAIResponse | Promise<FakeOpenAIResponse>,
-): Promise<{
-	baseUrl: string;
-	requests: FakeOpenAIRequest[];
-	close: () => Promise<void>;
-}> {
-	const requests: FakeOpenAIRequest[] = [];
-	const sockets = new Set<Socket>();
-	const server = createServer(async (req, res) => {
-		const chunks: Buffer[] = [];
-		for await (const chunk of req) {
-			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-		}
-		const rawBody = Buffer.concat(chunks).toString("utf8");
-		const body = rawBody ? JSON.parse(rawBody) : {};
-		const requestRecord: FakeOpenAIRequest = {
-			method: req.method ?? "GET",
-			url: req.url ?? "/",
-			headers: req.headers,
-			body,
-		};
-		requests.push(requestRecord);
-		const response = await handler(requestRecord, requests.length - 1);
-		res.statusCode = response.status ?? 200;
-		for (const [key, value] of Object.entries(response.headers ?? {})) {
-			res.setHeader(key, value);
-		}
-		if (response.rawBody !== undefined) {
-			res.end(response.rawBody);
-			return;
-		}
-		res.setHeader("content-type", "application/json");
-		res.end(JSON.stringify(response.body ?? {}));
-	});
-	server.on("connection", (socket) => {
-		sockets.add(socket);
-		socket.on("close", () => {
-			sockets.delete(socket);
-		});
-	});
-
-	await new Promise<void>((resolve) => {
-		server.listen(0, "127.0.0.1", () => resolve());
-	});
-	const address = server.address();
-	assert(address && typeof address === "object");
-
-	return {
-		baseUrl: `http://127.0.0.1:${address.port}/v1`,
-		requests,
-		close: async () => {
-			for (const socket of sockets) {
-				socket.destroy();
-			}
-			await new Promise<void>((resolve, reject) => {
-				server.close((error) => {
-					if (error) {
-						reject(error);
-						return;
-					}
-					resolve();
-				});
-			});
 		},
 	};
 }

@@ -11,7 +11,7 @@ import { moveSelectedIndex } from "./tui/move-selected-index.js";
 import type { SessionSummary } from "./types.js";
 
 /** Options for {@link selectSessionInteractive}. */
-export interface SelectSessionOptions {
+interface SelectSessionOptions {
 	/**
 	 * Pi-tui Terminal to drive the picker. Defaults to a real ProcessTerminal
 	 * (process.stdin/stdout) when omitted. Tests inject a fake terminal here so
@@ -30,18 +30,18 @@ export interface SelectSessionOptions {
 
 const DEFAULT_SESSION_SELECTOR_LIMIT = 20;
 
-export interface SessionSelectorState {
+interface SessionSelectorState {
 	readonly sessions: SessionSummary[];
 	readonly selectedIndex: number;
 }
 
-export type SessionSelectorAction =
+type SessionSelectorAction =
 	| { type: "up" }
 	| { type: "down" }
 	| { type: "confirm" }
 	| { type: "cancel" };
 
-export type SessionSelectorResolution =
+type SessionSelectorResolution =
 	| { status: "selected"; sessionId: string }
 	| { status: "cancelled" };
 

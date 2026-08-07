@@ -1,12 +1,10 @@
 import type { Component } from "@earendil-works/pi-tui";
 import {
-	createEditSummary,
-	createWriteSummary,
 	type FileEditPreviewLine,
 	type FileEditSummary,
 	isFileEditSummary,
 } from "../tools/edit-summary.js";
-import type { ExecutedToolCall, JsonValue } from "../types.js";
+import type { JsonValue } from "../types.js";
 
 const RESET = "\x1B[0m";
 const DIM = "\x1B[2m";
@@ -15,7 +13,7 @@ const GREEN_BACKGROUND = "\x1B[42m";
 const BLACK_FOREGROUND = "\x1B[30m";
 const BRIGHT_WHITE_FOREGROUND = "\x1B[97m";
 
-export interface FileEditRenderOptions {
+interface FileEditRenderOptions {
 	color?: boolean;
 }
 
@@ -24,7 +22,7 @@ export interface FileEditRenderOptions {
  * {@link FileEditComponent} Pi-tui Component, so the standalone helper output
  * and the component output can never drift apart (spec #49, user story 29).
  */
-export function renderFileEditSummaryLines(
+function renderFileEditSummaryLines(
 	summary: FileEditSummary,
 	color: boolean,
 ): string[] {
@@ -54,24 +52,6 @@ export function formatFileEditSummary(
 	options: FileEditRenderOptions = {},
 ): string[] {
 	return renderFileEditSummaryLines(summary, options.color ?? true);
-}
-
-export function formatFileEditSummaries(
-	executions: readonly ExecutedToolCall[],
-	options: FileEditRenderOptions = {},
-): string[] {
-	const lines: string[] = [];
-	const component = new FileEditComponent(options);
-	for (const execution of executions) {
-		const summary = getFileEditSummary(execution);
-		if (!summary) {
-			continue;
-		}
-		component.setSummary(summary);
-		lines.push(...component.render(0));
-	}
-
-	return lines;
 }
 
 export function formatFileEditResultData(
@@ -134,22 +114,6 @@ export class FileEditComponent implements Component {
 	}
 }
 
-function getFileEditSummary(
-	execution: ExecutedToolCall,
-): FileEditSummary | null {
-	if (!execution.result.ok) {
-		return null;
-	}
-
-	const data = execution.result.data;
-	const dataSummary = getFileEditSummaryFromData(data);
-	if (dataSummary) {
-		return dataSummary;
-	}
-
-	return getFallbackSummary(execution);
-}
-
 function getFileEditSummaryFromData(
 	data: JsonValue | undefined,
 ): FileEditSummary | null {
@@ -161,41 +125,6 @@ function getFileEditSummaryFromData(
 	}
 
 	return null;
-}
-
-function getFallbackSummary(
-	execution: ExecutedToolCall,
-): FileEditSummary | null {
-	const args = execution.toolCall.arguments;
-
-	switch (execution.toolCall.name) {
-		case "write": {
-			const relativePath = getString(args.path);
-			const content = getString(args.content);
-			if (!relativePath || content === null) {
-				return null;
-			}
-			return createWriteSummary(relativePath, null, content);
-		}
-		case "edit": {
-			const relativePath = getString(args.file_path);
-			const oldString = getString(args.old_string);
-			const newString = getString(args.new_string);
-			if (!relativePath || oldString === null || newString === null) {
-				return null;
-			}
-			return createEditSummary(
-				relativePath,
-				"",
-				oldString,
-				newString,
-				Boolean(args.replace_all),
-			);
-		}
-
-		default:
-			return null;
-	}
 }
 
 function formatEditedPath(summary: FileEditSummary): string {
@@ -237,8 +166,4 @@ function formatPreviewLine(
 			? `${GREEN_BACKGROUND}${BLACK_FOREGROUND}`
 			: `${RED_BACKGROUND}${BRIGHT_WHITE_FOREGROUND}`;
 	return `${colors}${rendered}${RESET}`;
-}
-
-function getString(value: unknown): string | null {
-	return typeof value === "string" ? value : null;
 }

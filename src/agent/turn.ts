@@ -10,7 +10,7 @@ import type {
 } from "../types.js";
 import type { AgentRunner } from "./runner.js";
 
-export type TurnResult =
+type TurnResult =
 	| {
 			ok: true;
 			completionStatus: "completed" | "interrupted";

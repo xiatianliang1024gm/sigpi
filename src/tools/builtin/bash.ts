@@ -678,7 +678,7 @@ function truncateHeadTail(value: string, maxChars: number): string {
  * single file, with no pipe or redirect), return that file path. Otherwise
  * return null. Conservative: when in doubt, return null (no read recorded).
  */
-export function detectSingleFileRead(command: string): string | null {
+function detectSingleFileRead(command: string): string | null {
 	const unquoted = stripQuoted(command);
 	if (/[|]/.test(unquoted) || /[>]/.test(unquoted)) {
 		return null;

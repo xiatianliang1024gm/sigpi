@@ -5,7 +5,7 @@ import type {
 	SystemPromptSection,
 } from "./types.js";
 
-export interface SystemEnvironmentInfo {
+interface SystemEnvironmentInfo {
 	/**
 	 * Absolute path of the project (launch) directory — where the agent's file
 	 * tools and shell start.

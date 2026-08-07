@@ -3,9 +3,9 @@ import { createWriteStream, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { killProcessGroup, sanitizeWorkingDirectory } from "../shell.js";
 
-export type BackgroundTaskStatus = "running" | "done";
+type BackgroundTaskStatus = "running" | "done";
 
-export interface BackgroundTask {
+interface BackgroundTask {
 	id: string;
 	pid: number | null;
 	command: string;
@@ -21,7 +21,7 @@ export interface BackgroundTask {
 	timedOut: boolean;
 }
 
-export interface SpawnBackgroundOptions {
+interface SpawnBackgroundOptions {
 	id: string;
 	command: string;
 	/** Resolved shell invocation (executable + args) produced by `buildShellInvocation`. */

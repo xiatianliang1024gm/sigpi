@@ -206,7 +206,7 @@ export class StatusBarComponent implements Component {
  * The result is rounded to one decimal place and formatted as a string so the
  * status bar always renders a consistent `Hit(80.0%)` shape.
  */
-export function computeCacheHitRate(usage: ModelUsage): string | null {
+function computeCacheHitRate(usage: ModelUsage): string | null {
 	const input = usage.input;
 	const cacheRead = usage.cacheRead;
 	if (input <= 0 || cacheRead <= 0) {

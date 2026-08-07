@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-export const SESSION_INDEX_FILENAME = "index.json";
+const SESSION_INDEX_FILENAME = "index.json";
 
 export interface SessionStoragePaths {
 	cwd: string;

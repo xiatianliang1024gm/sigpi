@@ -6,8 +6,8 @@ import type {
 	ToolSchema,
 } from "./types.js";
 
-export const SUMMARY_PREFIX = "Conversation summary from earlier turns:\n";
-export const SUMMARY_TOKEN_PREFIX = SUMMARY_PREFIX;
+const SUMMARY_PREFIX = "Conversation summary from earlier turns:\n";
+const SUMMARY_TOKEN_PREFIX = SUMMARY_PREFIX;
 const MESSAGE_ROLE_ORDER: Message["role"][] = [
 	"system",
 	"user",
@@ -54,13 +54,13 @@ export function estimateToolSchemaTokens(
 	);
 }
 
-export function estimateSystemPromptTokens(systemPrompt: string): number {
+function estimateSystemPromptTokens(systemPrompt: string): number {
 	return Math.ceil(
 		estimateMessageChars({ role: "system", content: systemPrompt }) / 4,
 	);
 }
 
-export function estimateSummaryTokens(summary: string): number {
+function estimateSummaryTokens(summary: string): number {
 	return estimateSystemPromptTokens(`${SUMMARY_TOKEN_PREFIX}${summary}`);
 }
 
