@@ -401,13 +401,6 @@ export interface ContextManagerOptions {
 	logger?: RuntimeLogger;
 	runId?: string;
 	sessionId?: string | null;
-	/**
-	 * Registry of `session_before_compact` hooks. When supplied, every
-	 * successful compact runs the registered hooks before applying the
-	 * default summarization. A hook can cancel the compact or override
-	 * the resulting summary / firstKeptEntryId / details.
-	 */
-	compactionHooks?: import("./agent/compaction-hook.js").CompactionHookRegistry;
 }
 
 export interface ContextUpdateResult {

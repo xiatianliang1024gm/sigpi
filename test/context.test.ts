@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CompactionFailedError } from "../src/agent/compaction-error.js";
-import { createCompactionHookRegistry } from "../src/agent/compaction-hook.js";
 import {
 	ConversationContext,
 	microCompactMessages,
@@ -1238,47 +1237,6 @@ test("compactNow throws CompactionFailedError when the model returns an empty su
 		() => context.compactNow(provider, "You are a test agent.", []),
 		CompactionFailedError,
 	);
-});
-
-test("compact passes caller abort signal to compaction hooks", async () => {
-	let hookSignal: AbortSignal | null = null;
-	function captureSignal(
-		event: import("../src/agent/compaction-hook.js").CompactionHookEvent,
-	): import("../src/agent/compaction-hook.js").CompactionHookResult {
-		hookSignal = event.signal;
-		return undefined as unknown as import("../src/agent/compaction-hook.js").CompactionHookResult;
-	}
-	const hook = captureSignal;
-	const provider = new MockProvider(() => ({
-		assistantText: "summary",
-		toolCalls: [],
-		finishReason: "stop",
-	}));
-	const compactionHooks = createCompactionHookRegistry();
-	compactionHooks.register(hook);
-	const context = new ConversationContext({
-		summaryEnabled: true,
-		compactionHooks,
-	});
-
-	context.hydrateState({
-		summary: null,
-		recentMessages: [
-			{ role: "user", content: "u" },
-			{ role: "assistant", content: "a" },
-		],
-	});
-
-	const controller = new AbortController();
-	await context.compactNow(provider, "You are a test agent.", [], undefined, {
-		abortSignal: controller.signal,
-	});
-
-	assert.notEqual(hookSignal, null, "hook must have received a signal");
-	assert.equal((hookSignal as unknown as AbortSignal).aborted, false);
-
-	controller.abort();
-	assert.equal((hookSignal as unknown as AbortSignal).aborted, true);
 });
 
 test("summarize extracts only the <summary> block and drops <analysis>", async () => {

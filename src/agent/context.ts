@@ -17,7 +17,6 @@ import type {
 	SessionEntry,
 	ToolSchema,
 } from "../types.js";
-import type { CompactionHookRegistry } from "./compaction-hook.js";
 import {
 	Compactor,
 	type CompactorDeps,
@@ -43,7 +42,6 @@ export class ConversationContext {
 	private readonly options: ContextManagerOptions;
 	private readonly logger;
 	private readonly runId;
-	private readonly compactionHooks: CompactionHookRegistry | null;
 	private sessionId;
 	private summary: string | null = null;
 	private recentMessages: Message[] = [];
@@ -73,7 +71,6 @@ export class ConversationContext {
 		this.options = { ...DEFAULT_CONTEXT_OPTIONS, ...options };
 		this.logger = this.options.logger;
 		this.runId = this.options.runId;
-		this.compactionHooks = this.options.compactionHooks ?? null;
 		this.sessionId = this.options.sessionId ?? null;
 
 		const deps: CompactorDeps = {
@@ -97,7 +94,6 @@ export class ConversationContext {
 				this.options.keepRecentMessagesFloor ??
 				Compactor.DEFAULT_KEEP_RECENT_MESSAGES_FLOOR,
 			isSummaryEnabled: () => this.options.summaryEnabled,
-			getCompactionHooks: () => this.compactionHooks,
 			getRunId: () => this.runId,
 			getSessionId: () => this.sessionId,
 			getLogger: () => this.logger,
