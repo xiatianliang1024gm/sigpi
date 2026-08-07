@@ -507,14 +507,6 @@ export interface AgentRunnerOptions {
 	runId?: string;
 	sessionId?: string | null;
 	/**
-	 * Inject a follow-up user reminder when the model returns a final answer
-	 * after mutating files, prompting one extra verification step.
-	 * Defaults to `false` because the follow-up round can re-enter a
-	 * read/search loop when the working context is already near the soft
-	 * limit. Existing tests that depend on the reminder explicitly opt in.
-	 */
-	enableVerificationReminder?: boolean;
-	/**
 	 * Shared `bash` tool context (working dir + output roots). Plumbed from
 	 * the runtime so the `bash` tool can carry `cd` across commands and
 	 * write overflow/background output.
