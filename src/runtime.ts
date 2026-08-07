@@ -2,10 +2,6 @@ import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-	type CompactionHookRegistry,
-	createCompactionHookRegistry,
-} from "./agent/compaction-hook.js";
 import { ConversationContext } from "./agent/context.js";
 import { AgentRunner } from "./agent/runner.js";
 import { type AgentTurn, createAgentTurn } from "./agent/turn.js";
@@ -46,7 +42,6 @@ import type {
 export interface AgentRuntime {
 	runner: AgentRunner;
 	context: ConversationContext;
-	compactionHooks: CompactionHookRegistry;
 	logger: RuntimeLogger;
 	shellRuntime: ReturnType<typeof detectShellRuntime>;
 	workingDirectory: string;
@@ -231,7 +226,6 @@ export async function createAgentRuntime(
 			config,
 			logger: runLogger,
 		});
-	const compactionHooks = createCompactionHookRegistry();
 	const tools = createDefaultToolRegistry(shellRuntime, config.tools.bash);
 	// Holder for the *active* model so the context budget getter can track
 	// `/model switch` each turn. The context never caches a budget;
@@ -247,7 +241,6 @@ export async function createAgentRuntime(
 		logger: runLogger,
 		runId,
 		sessionId: args.sessionId ?? null,
-		compactionHooks,
 	});
 	const sessionState = await bootstrapSessionState({
 		store,
@@ -334,7 +327,6 @@ export async function createAgentRuntime(
 	return {
 		runner,
 		context: conversationContext,
-		compactionHooks,
 		logger: runtimeLogger,
 		shellRuntime,
 		workingDirectory: cwd,

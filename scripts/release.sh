@@ -95,6 +95,6 @@ git add package.json
 if [[ -n "$(git status --short --untracked-files=all -- pnpm-lock.yaml)" ]]; then
   git add pnpm-lock.yaml
 fi
-git commit -m "chore: publish $NEXT_VERSION"
+#git commit -m "chore: publish $NEXT_VERSION"
 
 echo "Published $NEXT_VERSION"

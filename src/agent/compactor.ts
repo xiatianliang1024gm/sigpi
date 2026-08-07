@@ -2,7 +2,6 @@ import { estimateMessageTokens } from "../context-window.js";
 import type {
 	ContextBudget,
 	ContextUpdateResult,
-	JsonValue,
 	Message,
 	ModelProvider,
 	ModelUsage,
@@ -12,10 +11,6 @@ import type {
 	ToolSchema,
 } from "../types.js";
 import { CompactionFailedError } from "./compaction-error.js";
-import type {
-	CompactionHookOverride,
-	CompactionHookRegistry,
-} from "./compaction-hook.js";
 import { summarize } from "./summarizer.js";
 
 const MICRO_COMPACT_KEEP_TOOL_TOKENS = 8_000;
@@ -43,7 +38,6 @@ export interface CompactorDeps {
 	// config accessors
 	getKeepRecentMessagesFloor: () => number;
 	isSummaryEnabled: () => boolean;
-	getCompactionHooks: () => CompactionHookRegistry | null;
 	getRunId: () => string | undefined;
 	getSessionId: () => string | null;
 	getLogger: () => RuntimeLogger | undefined;
@@ -158,65 +152,19 @@ export class Compactor {
 						estimatedTokens: estimatedBefore.totalTokens,
 						tokenThreshold: estimatedBefore.threshold,
 					});
-					let hookOverride: CompactionHookOverride | null = null;
-					const hooks = this.d.getCompactionHooks();
-					if (hooks && hooks.size > 0) {
-						const preparation = {
-							trigger: trigger ?? "force",
-							tokensBefore,
-							summarizedMessages: messagesToSummarize,
-							keptMessages: messages.slice(splitIndex),
-							recentMessages: [...messages],
-							previousSummary: this.d.getSummary(),
-						};
-						hookOverride = await hooks.runHooks(
-							preparation,
-							compactAbortController.signal,
-							(message, meta) =>
-								this.d
-									.getLogger()
-									?.warn(
-										message,
-										meta as Record<string, JsonValue | undefined>,
-									),
-						);
-						if (hookOverride === null) {
-							this.d
-								.getLogger()
-								?.info("context_summarization_cancelled_by_hook", {
-									runId: this.d.getRunId(),
-									sessionId: this.d.getSessionId(),
-									turnId: requestContext?.turnId,
-									trigger,
-								});
-							return {
-								summarized: false,
-								trimmed: false,
-								summary: this.d.getSummary(),
-								recentMessageCount: messages.length,
-								previousRecentMessageCount,
-								summaryChars: previousSummaryChars,
-								previousSummaryChars,
-								tokensBefore,
-								tokensAfter: estimatedBefore.totalTokens,
-								trigger,
-							};
-						}
-					}
 					try {
 						this.d.setSummary(
-							hookOverride?.summary ??
-								(await summarize(provider, {
-									systemPrompt,
-									messages: microCompactMessages(messagesToSummarize),
-									previousSummary: this.d.getSummary(),
-									instructions: options?.instructions,
-									requestContext,
-									reserveTokens: this.d.getBudget().reserveTokens,
-									runId: this.d.getRunId(),
-									sessionId: this.d.getSessionId() ?? undefined,
-									abortSignal: compactAbortController.signal,
-								})),
+							await summarize(provider, {
+								systemPrompt,
+								messages: microCompactMessages(messagesToSummarize),
+								previousSummary: this.d.getSummary(),
+								instructions: options?.instructions,
+								requestContext,
+								reserveTokens: this.d.getBudget().reserveTokens,
+								runId: this.d.getRunId(),
+								sessionId: this.d.getSessionId() ?? undefined,
+								abortSignal: compactAbortController.signal,
+							}),
 						);
 						this.d.setRecentMessages(messages.slice(splitIndex));
 						summarized = true;
