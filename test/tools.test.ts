@@ -1864,7 +1864,7 @@ test("edit allows consecutive edits after refreshing the read fingerprint", asyn
 	);
 });
 
-test("edit requires an exact CRLF/LF match and normalizes the result to LF", async () => {
+test("edit matches old_string line-ending-insensitively and keeps CRLF style", async () => {
 	const cwd = await createTempDir("sigpi-edit-crlf-");
 	await writeWorkspaceFile(cwd, "demo.txt", "alpha\r\nbeta\r\n");
 	const tracker = new ReadTracker();
@@ -1881,6 +1881,8 @@ test("edit requires an exact CRLF/LF match and normalizes the result to LF", asy
 		},
 		{ cwd },
 	);
+	// An old_string copied from the read tool's display uses LF, which must
+	// match the CRLF file on disk (the Windows failure mode from the logs).
 	const lf = await tools.execute(
 		{
 			id: "e1",
@@ -1894,28 +1896,52 @@ test("edit requires an exact CRLF/LF match and normalizes the result to LF", asy
 		},
 		{ cwd },
 	);
-	assert.equal(lf.ok, false);
-	assert.match(lf.error ?? "", /not found/i);
-	const crlf = await tools.execute(
+	assert.equal(lf.ok, true);
+	// The result keeps the file's CRLF line endings.
+	assert.equal(await readFile(path.join(cwd, "demo.txt"), "utf8"), "x\r\n");
+});
+
+test("edit with CRLF new_string adopts the file's line-ending style", async () => {
+	const cwd = await createTempDir("sigpi-edit-crlf-new-");
+	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nbeta\n");
+	const tracker = new ReadTracker();
+	const tools = new ToolRegistry([
+		createReadTool(tracker),
+		createEditTool(tracker),
+	]);
+	await tools.execute(
 		{
-			id: "e2",
+			id: "r",
+			name: "read",
+			arguments: { file_path: "demo.txt" },
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+	// LF file + CRLF new_string from a Windows-running model => LF file.
+	const lfResult = await tools.execute(
+		{
+			id: "e",
 			name: "edit",
 			arguments: {
 				file_path: "demo.txt",
-				old_string: "alpha\r\nbeta",
-				new_string: "x",
+				old_string: "alpha",
+				new_string: "ONE\r\nTWO",
 			},
 			rawArguments: "{}",
 		},
 		{ cwd },
 	);
-	assert.equal(crlf.ok, true);
-	assert.equal(await readFile(path.join(cwd, "demo.txt"), "utf8"), "x\n");
+	assert.equal(lfResult.ok, true);
+	assert.equal(
+		await readFile(path.join(cwd, "demo.txt"), "utf8"),
+		"ONE\nTWO\nbeta\n",
+	);
 });
 
-test("edit with CRLF new_string leaves the file with LF line endings", async () => {
-	const cwd = await createTempDir("sigpi-edit-crlf-new-");
-	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nbeta\n");
+test("edit on a CRLF file with CRLF new_string stays CRLF with no mixing", async () => {
+	const cwd = await createTempDir("sigpi-edit-crlf-both-");
+	await writeWorkspaceFile(cwd, "demo.txt", "alpha\r\nbeta\r\n");
 	const tracker = new ReadTracker();
 	const tools = new ToolRegistry([
 		createReadTool(tracker),
@@ -1936,7 +1962,7 @@ test("edit with CRLF new_string leaves the file with LF line endings", async () 
 			name: "edit",
 			arguments: {
 				file_path: "demo.txt",
-				old_string: "alpha",
+				old_string: "beta",
 				new_string: "ONE\r\nTWO",
 			},
 			rawArguments: "{}",
@@ -1946,7 +1972,52 @@ test("edit with CRLF new_string leaves the file with LF line endings", async () 
 	assert.equal(result.ok, true);
 	assert.equal(
 		await readFile(path.join(cwd, "demo.txt"), "utf8"),
-		"ONE\nTWO\nbeta\n",
+		"alpha\r\nONE\r\nTWO\r\n",
+	);
+});
+
+test("edit preserves a leading UTF-8 BOM and can match from the file start", async () => {
+	const cwd = await createTempDir("sigpi-edit-bom-");
+	const original = Buffer.concat([
+		Buffer.from([0xef, 0xbb, 0xbf]),
+		Buffer.from("using System;\r\nclass A {}\r\n", "utf8"),
+	]);
+	await writeFile(path.join(cwd, "demo.cs"), original);
+	const tracker = new ReadTracker();
+	const tools = new ToolRegistry([
+		createReadTool(tracker),
+		createEditTool(tracker),
+	]);
+	await tools.execute(
+		{
+			id: "r",
+			name: "read",
+			arguments: { file_path: "demo.cs" },
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+	const result = await tools.execute(
+		{
+			id: "e",
+			name: "edit",
+			arguments: {
+				file_path: "demo.cs",
+				old_string: "using System;",
+				new_string: "using System.Text;",
+			},
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+	assert.equal(result.ok, true);
+	const after = await readFile(path.join(cwd, "demo.cs"));
+	assert.equal(after[0], 0xef);
+	assert.equal(after[1], 0xbb);
+	assert.equal(after[2], 0xbf);
+	assert.equal(
+		after.toString("utf8"),
+		"\uFEFFusing System.Text;\r\nclass A {}\r\n",
 	);
 });
 
@@ -2002,7 +2073,7 @@ test("write overwrites an existing file without requiring a prior read", async (
 	assert.equal(await readFile(path.join(cwd, "demo.txt"), "utf8"), "new\n");
 });
 
-test("write normalizes CRLF content to LF", async () => {
+test("write normalizes CRLF content to LF for new files", async () => {
 	const cwd = await createTempDir("sigpi-write-crlf-");
 	const tools = new ToolRegistry([createWriteTool(new ReadTracker())]);
 	const result = await tools.execute(
@@ -2022,6 +2093,58 @@ test("write normalizes CRLF content to LF", async () => {
 		await readFile(path.join(cwd, "demo.txt"), "utf8"),
 		"one\ntwo\nthree\n",
 	);
+});
+
+test("write over an existing CRLF file keeps CRLF line endings", async () => {
+	const cwd = await createTempDir("sigpi-write-keep-crlf-");
+	await writeWorkspaceFile(cwd, "demo.txt", "old\r\ncontent\r\n");
+	const tools = new ToolRegistry([createWriteTool(new ReadTracker())]);
+	const result = await tools.execute(
+		{
+			id: "w",
+			name: "write",
+			arguments: {
+				file_path: "demo.txt",
+				content: "new\ncontent\n",
+			},
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+	assert.equal(result.ok, true);
+	// Model-emitted LF content is restyled to the existing file's CRLF.
+	assert.equal(
+		await readFile(path.join(cwd, "demo.txt"), "utf8"),
+		"new\r\ncontent\r\n",
+	);
+});
+
+test("write over an existing BOM+CRLF file preserves the BOM and CRLF", async () => {
+	const cwd = await createTempDir("sigpi-write-keep-bom-");
+	const original = Buffer.concat([
+		Buffer.from([0xef, 0xbb, 0xbf]),
+		Buffer.from("old\r\n", "utf8"),
+	]);
+	await writeFile(path.join(cwd, "demo.cs"), original);
+	const tools = new ToolRegistry([createWriteTool(new ReadTracker())]);
+	const result = await tools.execute(
+		{
+			id: "w",
+			name: "write",
+			arguments: {
+				file_path: "demo.cs",
+				content: "using System;\nclass A {}\n",
+			},
+			rawArguments: "{}",
+		},
+		{ cwd },
+	);
+	assert.equal(result.ok, true);
+	const after = await readFile(path.join(cwd, "demo.cs"));
+	assert.equal(after[0], 0xef);
+	assert.equal(after[1], 0xbb);
+	assert.equal(after[2], 0xbf);
+	assert.equal(after.toString("utf8"), "\uFEFFusing System;\r\nclass A {}\r\n");
 });
 
 test("bash cat records a read so a later edit is allowed", async () => {

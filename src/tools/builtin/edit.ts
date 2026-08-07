@@ -3,7 +3,11 @@ import { z } from "zod";
 import { asInlineCode, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
 import { createEditSummary } from "../edit-summary.js";
-import { normalizeLineEndings } from "../line-endings.js";
+import {
+	applyLineEndingStyle,
+	detectLineEndingStyle,
+	normalizeLineEndings,
+} from "../line-endings.js";
 import { resolveWorkspacePath } from "../path-utils.js";
 import type { ReadTracker } from "../read-tracker.js";
 import { ToolExecutionError } from "../registry.js";
@@ -30,8 +34,9 @@ export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 			"(2) `old_string` must appear in the file exactly; " +
 			"(3) `old_string` must appear exactly once, unless `replace_all` is true. " +
 			"No regex or fuzzy matching is used; a single character of whitespace or indentation difference is enough to miss. " +
+			"Line endings are matched leniently: CRLF, LF, and CR are treated as equivalent in `old_string`, so text copied from the read tool's display matches CRLF files on Windows. " +
+			"The result keeps the file's existing line-ending style (a CRLF file stays CRLF), and a leading UTF-8 BOM is preserved. " +
 			"When `old_string` appears more than once, supply a longer string with more surrounding context or set `replace_all: true`. " +
-			"The result is written with LF line endings (CRLF is normalized). " +
 			"To create a new file, use the write tool instead. " +
 			"To replace every occurrence, set `replace_all: true`.",
 		inputSchema: editSchema,
@@ -145,8 +150,18 @@ export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 			}
 
 			// Checks 2 & 3: match + uniqueness.
+			//
+			// Match on a normalized view of the file: a leading UTF-8 BOM is
+			// stripped (the read tool never shows it) and CRLF/CR line endings
+			// are folded to LF (the read tool displays them without endings).
+			// Everything else stays byte-exact, so matching is still strict.
 			const original = await readFile(resolved, "utf8");
-			const matchCount = countOccurrences(original, old_string);
+			const bomOffset = original.startsWith("\uFEFF") ? 1 : 0;
+			const matchContent = normalizeLineEndings(original.slice(bomOffset));
+			const normalizedOld = normalizeLineEndings(
+				old_string.startsWith("\uFEFF") ? old_string.slice(1) : old_string,
+			);
+			const matchCount = countOccurrences(matchContent, normalizedOld);
 
 			if (matchCount === 0) {
 				throw new ToolExecutionError(
@@ -189,14 +204,21 @@ export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 			}
 
 			const replacements = replace_all ? matchCount : 1;
-			const updated = replace_all
-				? original.split(old_string).join(new_string)
-				: replaceFirst(original, old_string, new_string);
+			const normalizedNew = normalizeLineEndings(new_string);
+			const updatedNormalized = replace_all
+				? matchContent.split(normalizedOld).join(normalizedNew)
+				: replaceFirst(matchContent, normalizedOld, normalizedNew);
 
-			// old_string matching stays exact, but what lands on disk is
-			// always LF: a CRLF new_string from a Windows-running model must
-			// not leave the file with mixed line endings.
-			await writeFile(resolved, normalizeLineEndings(updated), "utf8");
+			// Put the result back in the file's own encoding shape: keep the
+			// leading BOM and re-apply the file's dominant line-ending style.
+			// A CRLF new_string from a Windows-running model is folded to the
+			// file's style, so no mixed endings and no whole-file flip.
+			const style = detectLineEndingStyle(original);
+			const updated =
+				(bomOffset === 1 ? "\uFEFF" : "") +
+				applyLineEndingStyle(updatedNormalized, style);
+
+			await writeFile(resolved, updated, "utf8");
 			await tracker.recordResolved(resolved);
 
 			return withRendered(
@@ -205,9 +227,9 @@ export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 					replaceAll: replace_all,
 					editSummary: createEditSummary(
 						relative,
-						original,
-						old_string,
-						new_string,
+						matchContent,
+						normalizedOld,
+						normalizedNew,
 						replace_all,
 					),
 				},
