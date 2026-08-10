@@ -1,4 +1,4 @@
-import type { Message, ModelProvider } from "../types.js";
+import type { Message, ModelProvider, ModelUsage } from "../types.js";
 import { CompactionFailedError } from "./compaction-error.js";
 import {
 	createSystemMessage,
@@ -143,7 +143,7 @@ interface SummarizeArgs {
 export async function summarize(
 	provider: ModelProvider,
 	args: SummarizeArgs,
-): Promise<string> {
+): Promise<{ summary: string; usage?: ModelUsage }> {
 	if (args.abortSignal?.aborted) {
 		throw args.abortSignal.reason instanceof Error
 			? args.abortSignal.reason
@@ -235,7 +235,7 @@ export async function summarize(
 		);
 	}
 
-	return summaryText;
+	return { summary: summaryText, usage: response.usage };
 }
 
 /**

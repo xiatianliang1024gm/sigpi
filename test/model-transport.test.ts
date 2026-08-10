@@ -127,6 +127,37 @@ test("transport does not retry non-retryable http errors", async () => {
 	);
 });
 
+test("transport classifies a 400 context_length_exceeded error body", async () => {
+	await withServer(
+		{ stream: false },
+		() => ({
+			kind: "json",
+			status: 400,
+			body: {
+				error: {
+					code: "context_length_exceeded",
+					message: "This model's maximum context length is 128000 tokens.",
+				},
+			},
+		}),
+		async (server) => {
+			await assert.rejects(
+				() =>
+					new ModelTransport(
+						{ ...server.config, maxRetries: 0 },
+						server.client,
+					).generate(request(), nullAdapter),
+				(error) =>
+					error instanceof ModelRequestError &&
+					error.kind === "context_length_exceeded",
+			);
+			// Distinct from a plain http_error so the runner can compact and
+			// retry (ADR 0026, D3) instead of failing the turn.
+			assert.equal(server.captured.length, 1);
+		},
+	);
+});
+
 test("transport classifies a network failure and retries it", async () => {
 	await withServer(
 		{ stream: false },

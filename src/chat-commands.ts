@@ -180,14 +180,14 @@ export function createChatCommandDefinitions(
 							`Compaction failed: ${error.message} (reason: ${error.reason}).`,
 						);
 						context.writeLine(
-							"Your messages are saved. The context was trimmed if it exceeded the limit; run /compact again later to generate a summary.",
+							"Your messages are saved. Nothing was dropped — compaction only ever summarizes; fix the configuration or retry /compact when the context is smaller.",
 						);
 						return { action: "continue" };
 					}
 					throw error;
 				}
 
-				if (!result.summarized && !result.trimmed) {
+				if (!result.summarized) {
 					context.writeLine(
 						`Nothing to compact. Context window: ${formatCompactNumber(result.tokensAfter)} tokens.`,
 					);

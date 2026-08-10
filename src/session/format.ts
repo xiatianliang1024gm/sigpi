@@ -146,6 +146,12 @@ export function appendCompactionEntry(args: {
 	summarizedMessages: number;
 	triggeredBy?: "soft_limit" | "hard_limit" | "token_estimate" | "manual";
 	customInstructions?: string;
+	/**
+	 * Provider-reported usage of the summarization model call that produced
+	 * this compaction (D7). Stored on the `CompactionEntry` so resumed
+	 * sessions and diagnostics can account for the summarization cost.
+	 */
+	usage?: ModelUsage;
 }): SessionEntry[] {
 	const timestamp = args.timestamp ?? new Date().toISOString();
 	const compactionEntry: CompactionEntry = {
@@ -157,6 +163,7 @@ export function appendCompactionEntry(args: {
 		firstKeptEntryId: args.firstKeptEntryId,
 		tokensBefore: args.tokensBefore,
 		tokensAfter: args.tokensAfter,
+		usage: args.usage,
 		details: {
 			trigger: args.trigger ?? null,
 			keptMessages: args.keptMessages,

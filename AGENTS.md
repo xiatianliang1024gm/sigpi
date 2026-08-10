@@ -26,4 +26,5 @@ Key sections: `[model]` (default model + manual selection), `[models.<id>]` (per
 
 ## Agent skills
 
-Single-context layout — one `CONTEXT.md` at the repo root.
+Single-context layout — one `CONTEXT.md` at the repo root; decision records
+live in numbered files under `docs/adr/` (see `CONTEXT.md` header, ADR 0026).

@@ -178,6 +178,10 @@ const compactionEntrySchema = z.object({
 			customInstructions: z.string().min(1).optional(),
 		})
 		.optional(),
+	// Provider-reported usage of the summarization model call that produced
+	// this compaction (D7). Persisted so resumed sessions and diagnostics can
+	// account for the summarization cost.
+	usage: modelUsageSchema.optional(),
 });
 
 const sessionEntrySchema = z.discriminatedUnion("kind", [

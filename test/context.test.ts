@@ -12,9 +12,9 @@ import {
 import type { ConversationContextState, Message } from "../src/types.js";
 import { MockProvider, stripMessageIds } from "./helpers.js";
 
-test("context trimming does not leave a dangling tool message", async () => {
+test("compaction split never leaves a dangling tool message", async () => {
 	const context = new ConversationContext({
-		summaryEnabled: false,
+		summaryEnabled: true,
 	});
 
 	const assistantToolCallMessage = createAssistantMessage(null, [
@@ -32,8 +32,9 @@ test("context trimming does not leave a dangling tool message", async () => {
 		},
 	});
 
-	await context.appendMessages(
-		[
+	context.hydrateState({
+		summary: null,
+		recentMessages: [
 			{
 				role: "user",
 				content: "first message with some extra text to increase size",
@@ -45,8 +46,11 @@ test("context trimming does not leave a dangling tool message", async () => {
 				content: "final answer with enough text to force trimming",
 			},
 		],
+	});
+
+	await context.compactNow(
 		new MockProvider(() => ({
-			assistantText: "unused",
+			assistantText: "compressed summary",
 			toolCalls: [],
 			finishReason: "stop",
 		})),
@@ -54,6 +58,9 @@ test("context trimming does not leave a dangling tool message", async () => {
 		[],
 	);
 
+	// A force compact drops the pre-split window; whatever survives must not
+	// begin with a tool message (alignSplitIndex pulls the split forward past
+	// orphaned tool results).
 	const recentMessages = context.getRecentMessages();
 	assert.notEqual(recentMessages[0]?.role, "tool");
 });
@@ -103,7 +110,6 @@ test("manual compaction can summarize older messages before soft limit is reache
 	);
 
 	assert.equal(result.summarized, true);
-	assert.equal(result.trimmed, false);
 	assert.equal(result.previousRecentMessageCount, 3);
 	assert.equal(result.recentMessageCount, 1);
 	assert.equal(result.previousSummaryChars, 0);
@@ -161,7 +167,6 @@ test("manual compaction summarizes even when recent messages already exceed keep
 	);
 
 	assert.equal(result.summarized, true);
-	assert.equal(result.trimmed, false);
 	assert.equal(result.previousRecentMessageCount, 65);
 	assert.equal(result.recentMessageCount, 4);
 	assert.equal(context.getSummary(), "compressed summary");
@@ -326,7 +331,7 @@ test("context compaction counts system prompt and tool schemas in the estimate",
 	const context = new ConversationContext({
 		summaryEnabled: true,
 		getContextBudget: () => ({
-			hardContextLimit: 50,
+			hardContextLimit: 150,
 			reserveTokens: 2,
 			keepRecentTokens: 5,
 		}),
@@ -336,15 +341,15 @@ test("context compaction counts system prompt and tool schemas in the estimate",
 	context.hydrateState({
 		summary: null,
 		recentMessages: [
-			{ role: "user", content: "short request" },
-			{ role: "assistant", content: "short answer" },
+			{ role: "user", content: "x".repeat(44) },
+			{ role: "assistant", content: "x".repeat(44) },
 		],
 	});
 
-	const result = await context.appendMessages(
+	await context.appendMessages(
 		[
-			{ role: "user", content: "follow up" },
-			{ role: "assistant", content: "final answer" },
+			{ role: "user", content: "x".repeat(44) },
+			{ role: "assistant", content: "x".repeat(44) },
 		],
 		provider,
 		"A very long system prompt that takes enough room to matter for compaction decisions.",
@@ -370,9 +375,37 @@ test("context compaction counts system prompt and tool schemas in the estimate",
 		],
 	);
 
+	// The four chat messages alone (~60 tokens) sit below the 148-token soft
+	// limit; the system prompt + tool schemas are what push the request over
+	// it. The token trigger must therefore fire (and the post-compaction
+	// window must still fit — D6).
+	const result = await context.compact(
+		provider,
+		"A very long system prompt that takes enough room to matter for compaction decisions.",
+		[
+			{
+				type: "function",
+				function: {
+					name: "demo_tool",
+					description:
+						"A tool schema with enough descriptive text to contribute meaningful context size.",
+					parameters: {
+						type: "object",
+						properties: {
+							value: {
+								type: "string",
+								description:
+									"Some input text that intentionally makes the schema a bit larger.",
+							},
+						},
+					},
+				},
+			},
+		],
+	);
+
 	assert.equal(result.summarized, true);
-	assert.ok(result.tokensBefore > 50);
-	assert.ok(result.tokensAfter > 0);
+	assert.ok(result.tokensBefore > 150);
 	assert.ok(result.tokensAfter > 0);
 });
 
@@ -397,7 +430,6 @@ test("recovery checkpoint appends messages without triggering summarization", ()
 	);
 
 	assert.equal(result.summarized, false);
-	assert.equal(result.trimmed, false);
 	assert.equal(context.getSummary(), null);
 	assert.deepEqual(stripMessageIds(context.getRecentMessages()), [
 		{
@@ -928,7 +960,7 @@ test("summary request caps maxTokens at provider.maxTokens when configured", asy
 	const context = new ConversationContext({
 		summaryEnabled: true,
 		getContextBudget: () => ({
-			hardContextLimit: 50,
+			hardContextLimit: 200,
 			reserveTokens: 100,
 			keepRecentTokens: 20_000,
 		}),
@@ -963,7 +995,7 @@ test("summary request uses provider.maxTokens when it is the tightest cap", asyn
 	const context = new ConversationContext({
 		summaryEnabled: true,
 		getContextBudget: () => ({
-			hardContextLimit: 50,
+			hardContextLimit: 5_000,
 			reserveTokens: 4_000,
 			keepRecentTokens: 20_000,
 		}),
@@ -995,7 +1027,7 @@ test("summary request budget is bounded by reserve tokens when provider exposes 
 	const context = new ConversationContext({
 		summaryEnabled: true,
 		getContextBudget: () => ({
-			hardContextLimit: 50,
+			hardContextLimit: 5_000,
 			reserveTokens: 4_000,
 			keepRecentTokens: 20_000,
 		}),
@@ -1437,12 +1469,13 @@ test("budget getter follows the active model so /model switch changes the trigge
 		getContextBudget: () => activeBudget,
 	});
 
-	// ~12 messages of a few hundred chars each comfortably exceed a 90-token
-	// (100 - 10) threshold for the small model.
+	// 12 small messages (~13 tokens each) comfortably exceed the 90-token
+	// (100 - 10) threshold for the small model, while the post-compaction
+	// window (4 kept messages + system ≈ 62) still fits it (D6).
 	const messages: Message[] = [];
 	for (let i = 0; i < 6; i += 1) {
-		messages.push({ role: "user", content: "request ".repeat(40) + i });
-		messages.push({ role: "assistant", content: "answer ".repeat(40) + i });
+		messages.push({ role: "user", content: "request ".repeat(4) + i });
+		messages.push({ role: "assistant", content: "answer ".repeat(4) + i });
 	}
 	context.hydrateState({ summary: null, recentMessages: messages });
 
@@ -1472,5 +1505,4 @@ test("budget getter follows the active model so /model switch changes the trigge
 	);
 	// Large model: the expanded budget means no further compaction fires.
 	assert.equal(largeResult.summarized, false);
-	assert.equal(largeResult.trimmed, false);
 });

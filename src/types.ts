@@ -211,7 +211,6 @@ export interface TurnProgressEvent {
 	detail?: string;
 	modelElapsedMs?: number;
 	summaryCount?: number;
-	trimCount?: number;
 	failureType?: string;
 	interruptStage?: InterruptStage;
 	interruptSource?: InterruptSource;
@@ -405,7 +404,6 @@ export interface ContextManagerOptions {
 
 export interface ContextUpdateResult {
 	summarized: boolean;
-	trimmed: boolean;
 	summary: string | null;
 	recentMessageCount: number;
 	previousRecentMessageCount: number;
@@ -483,6 +481,13 @@ export interface CompactionEntry {
 	 */
 	tokensBefore?: number;
 	tokensAfter?: number;
+	/**
+	 * Provider-reported token usage of the summarize call that produced this
+	 * compaction (D7). Audit data only — surfaced in logs and telemetry, never
+	 * fed into the `lastUsage` baseline (the summarize request's token count
+	 * does not describe the next main request's window).
+	 */
+	usage?: ModelUsage;
 	details?: {
 		trigger: ContextUpdateResult["trigger"];
 		keptMessages: number;

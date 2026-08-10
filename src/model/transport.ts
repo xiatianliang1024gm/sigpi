@@ -26,6 +26,7 @@ export type RequestFailureKind =
 	| "timeout"
 	| "network_error"
 	| "http_error"
+	| "context_length_exceeded"
 	| "invalid_json"
 	| "invalid_response"
 	| "body_read_failed"
@@ -358,6 +359,29 @@ function mapSdkError(
 		}
 		const statusText = statusTextFor(status);
 		const bodyText = extractSdkErrorBody(error);
+		// The provider's "you are over the context window" signal: a 400 whose
+		// body carries `error.code === "context_length_exceeded"` in both
+		// chat-completions and responses formats. It must NOT be classified as a
+		// plain `http_error` (which kills the turn) — the runner catches it,
+		// compacts, and retries once (D3).
+		const body = error.error as unknown;
+		const errorCode =
+			body && typeof body === "object" && "code" in body
+				? (body as { code?: unknown }).code
+				: undefined;
+		if (status === 400 && errorCode === "context_length_exceeded") {
+			return new ModelRequestError(
+				`Model request exceeded the context window: ${bodyText}`,
+				"context_length_exceeded",
+				{
+					httpStatus: status,
+					httpStatusText: statusText,
+					bodyPreview: bodyText ? truncate(bodyText, 300) : undefined,
+					sdkErrorType: error.constructor.name,
+					errorCode,
+				},
+			);
+		}
 		return new ModelRequestError(
 			formatHttpErrorMessage(status, statusText, bodyText),
 			"http_error",

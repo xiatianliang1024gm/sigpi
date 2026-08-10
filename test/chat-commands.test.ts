@@ -80,7 +80,6 @@ test("executeChatCommand compacts context through the active session runtime", a
 						turn: {
 							compactContext: async () => ({
 								summarized: true,
-								trimmed: false,
 								summary: "summary",
 								recentMessageCount: 2,
 								previousRecentMessageCount: 5,
@@ -129,7 +128,6 @@ test("executeChatCommand forwards /compact <instructions> to compactContext", as
 								captured.options = options;
 								return {
 									summarized: true,
-									trimmed: false,
 									summary: "summary",
 									recentMessageCount: 2,
 									previousRecentMessageCount: 5,
@@ -169,7 +167,6 @@ test("executeChatCommand omits options.abortSignal when no interrupt signal is a
 							captured.options = options;
 							return {
 								summarized: true,
-								trimmed: false,
 								summary: "summary",
 								recentMessageCount: 2,
 								previousRecentMessageCount: 5,
@@ -211,7 +208,6 @@ test("executeChatCommand forwards an interrupt signal to /compact", async () => 
 							captured.options = options;
 							return {
 								summarized: false,
-								trimmed: false,
 								summary: null,
 								recentMessageCount: 1,
 								previousRecentMessageCount: 1,
@@ -250,7 +246,6 @@ test("executeChatCommand reports when manual compaction is a no-op", async () =>
 					turn: {
 						compactContext: async () => ({
 							summarized: false,
-							trimmed: false,
 							summary: null,
 							recentMessageCount: 1,
 							previousRecentMessageCount: 1,
