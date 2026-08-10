@@ -9,6 +9,7 @@ import {
 	TurnInterruptedError,
 } from "../src/interrupt.js";
 import { ModelRequestError } from "../src/model/transport.js";
+import { wireProgressLogging } from "../src/progress-logging.js";
 import { createDefaultToolRegistry } from "../src/tools/index.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { ExecutedToolCall, TurnProgressEvent } from "../src/types.js";
@@ -19,6 +20,16 @@ import {
 	stripMessageIds,
 	writeWorkspaceFile,
 } from "./helpers.js";
+
+/** Find a progress event of a specific type, narrowed to that type's payload. */
+function progressEventOf<K extends TurnProgressEvent["type"]>(
+	events: TurnProgressEvent[],
+	type: K,
+): Extract<TurnProgressEvent, { type: K }> | undefined {
+	return events.find((event) => event.type === type) as
+		| Extract<TurnProgressEvent, { type: K }>
+		| undefined;
+}
 
 test("returns direct model output without tools", async () => {
 	const provider = new MockProvider(() => ({
@@ -562,11 +573,9 @@ test("compacts before a request when the estimate exceeds the soft limit", async
 		tools: new ToolRegistry([]),
 		context,
 		systemPrompt: "You are a test agent.",
-		options: {
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	// One short turn (~22 tokens: 10 system + 12 message) stays below the
@@ -597,9 +606,7 @@ test("compacts before a request when the estimate exceeds the soft limit", async
 	assert.doesNotMatch(transcript, /A short but real user message/);
 	assert.match(transcript, /One more short user message/);
 
-	const compactedEvent = progressEvents.find(
-		(event) => event.type === "context_compacted",
-	);
+	const compactedEvent = progressEventOf(progressEvents, "context_compacted");
 	assert.ok(
 		compactedEvent,
 		"estimate-triggered compaction must emit context_compacted",
@@ -642,11 +649,9 @@ test("retries a provider context_length_exceeded after a forced compaction", asy
 		tools: new ToolRegistry([]),
 		context,
 		systemPrompt: "You are a test agent.",
-		options: {
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	const result = await runner.runTurn("hello");
@@ -659,9 +664,7 @@ test("retries a provider context_length_exceeded after a forced compaction", asy
 	);
 	// Requests: failed turn request, summary, retried turn request.
 	assert.equal(provider.requests.length, 3);
-	const compactedEvent = progressEvents.find(
-		(event) => event.type === "context_compacted",
-	);
+	const compactedEvent = progressEventOf(progressEvents, "context_compacted");
 	assert.ok(compactedEvent, "force compaction must emit context_compacted");
 	assert.equal(compactedEvent?.trigger, "force");
 	// The persisted window shrank from [user] to [] (the user message was
@@ -874,10 +877,10 @@ test("runner emits progress events during multi-step execution", async () => {
 		systemPrompt: "You are a test agent.",
 		options: {
 			workingDirectory: cwd,
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
 		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	const result = await runner.runTurn("find TypeScript files");
@@ -905,19 +908,18 @@ test("runner emits progress events during multi-step execution", async () => {
 		],
 	);
 	assert.equal(
-		progressEvents.find((event) => event.type === "assistant_message")
-			?.assistantText,
+		progressEventOf(progressEvents, "assistant_message")?.text,
 		"I will find the matching file first.",
 	);
 	assert.equal(
-		progressEvents.find((event) => event.type === "tool_execution_started")
-			?.message,
+		progressEventOf(progressEvents, "tool_execution_started")?.message,
 		'find files matching "src/**/*.ts"',
 	);
-	const toolFinishedEvent = progressEvents.find(
-		(event) => event.type === "tool_execution_finished",
+	const toolFinishedEvent = progressEventOf(
+		progressEvents,
+		"tool_execution_finished",
 	);
-	assert.match(toolFinishedEvent?.toolResult ?? "", /src\/demo\.ts/);
+	assert.match(toolFinishedEvent?.result ?? "", /src\/demo\.ts/);
 });
 
 test("runner progress includes structured file edit results", async () => {
@@ -958,23 +960,21 @@ test("runner progress includes structured file edit results", async () => {
 			maxSteps: 4,
 			temperature: 0,
 			workingDirectory: cwd,
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
 		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	await runner.runTurn("update demo");
 
-	const toolFinishedEvent = progressEvents.find(
-		(event) => event.type === "tool_execution_finished",
+	const toolFinishedEvent = progressEventOf(
+		progressEvents,
+		"tool_execution_finished",
 	);
 	assert.equal(toolFinishedEvent?.toolName, "write");
-	assert.equal(toolFinishedEvent?.toolResult ?? "", "ok");
-	assert.match(
-		JSON.stringify(toolFinishedEvent?.toolResultData),
-		/"editSummary"/,
-	);
+	assert.equal(toolFinishedEvent?.result ?? "", "ok");
+	assert.match(JSON.stringify(toolFinishedEvent?.data), /"editSummary"/);
 });
 
 test("runner progress includes shell command detail", async () => {
@@ -1007,22 +1007,23 @@ test("runner progress includes shell command detail", async () => {
 		tools: createDefaultToolRegistry(),
 		context: new ConversationContext(),
 		systemPrompt: "You are a test agent.",
-		options: {
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	await runner.runTurn("where am i?");
 
 	const shellEvent = progressEvents.find(
-		(event) =>
-			event.type === "tool_execution_started" && event.toolName === "bash",
+		(
+			event,
+		): event is Extract<
+			TurnProgressEvent,
+			{ type: "tool_execution_started" }
+		> => event.type === "tool_execution_started" && event.toolName === "bash",
 	);
 
 	assert.equal(shellEvent?.message, "shell pwd");
-	assert.equal(shellEvent?.detail, undefined);
 });
 
 test("summarizeToolExecutions records only file read/modify ops (ADR-0022)", () => {
@@ -1115,11 +1116,9 @@ test("turn_finished estimate uses provider usage, not the chars/4 fallback", asy
 		tools: createDefaultToolRegistry(),
 		context: new ConversationContext(),
 		systemPrompt: "You are a test agent.",
-		options: {
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	await runner.runTurn("first question");
@@ -1188,21 +1187,19 @@ test("turn_finished reports accumulated provider usage across the turn", async (
 		systemPrompt: "You are a test agent.",
 		options: {
 			workingDirectory: process.cwd(),
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-			logger,
 		},
 	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
+	});
+	wireProgressLogging(runner, logger);
 
 	const result = await runner.runTurn("do the thing");
 	assert.equal(result.outputText, "Done.");
 
-	const finished = progressEvents.find(
-		(event) => event.type === "turn_finished",
-	);
+	const finished = progressEventOf(progressEvents, "turn_finished");
 	assert.ok(finished, "expected a turn_finished event");
-	assert.deepEqual(finished.turnTokens, {
+	assert.deepEqual(finished.usage, {
 		input: 2_200,
 		output: 700,
 		cacheRead: 100,
@@ -1235,17 +1232,15 @@ test("terminal events omit turnTokens when the provider reports no usage", async
 		systemPrompt: "You are a test agent.",
 		options: {
 			workingDirectory: process.cwd(),
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
 		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	await runner.runTurn("hello");
 
-	const finished = progressEvents.find(
-		(event) => event.type === "turn_finished",
-	);
+	const finished = progressEventOf(progressEvents, "turn_finished");
 	assert.ok(finished);
-	assert.equal(finished.turnTokens, undefined);
+	assert.equal(finished.usage, null);
 });

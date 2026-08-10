@@ -18,34 +18,34 @@ import type { TurnProgressEvent } from "../src/types.js";
  */
 
 const inTurnEvents: TurnProgressEvent[] = [
-	{ type: "turn_started", turnId: "t" },
-	{ type: "step_started", step: 1, turnId: "t" },
-	{ type: "model_request_started", step: 1, turnId: "t" },
-	{ type: "model_delta", step: 1, turnId: "t", contentDelta: "x" },
-	{ type: "model_request_finished", step: 1, turnId: "t", elapsedMs: 1 },
-	{ type: "assistant_message", step: 1, turnId: "t", assistantText: "note" },
+	{ type: "turn_started", turnId: "t", userInput: "hi" },
+	{ type: "step_started", step: 1 },
+	{ type: "model_request_started", step: 1 },
+	{ type: "model_delta", step: 1, contentDelta: "x" },
+	{ type: "model_request_finished", step: 1 },
+	{ type: "assistant_message", step: 1, text: "note" },
 	{
 		type: "context_compacted",
 		step: 1,
-		turnId: "t",
 		tokensBefore: 100,
 		tokensAfter: 50,
+		trigger: "token",
 	},
-	{ type: "tool_calls_received", step: 1, turnId: "t" },
+	{ type: "tool_calls_received", step: 1, count: 1 },
 	{
 		type: "tool_execution_started",
 		step: 1,
-		turnId: "t",
 		toolName: "bash",
 		toolCallId: "tc",
+		message: "Run pwd",
 	},
 	{
 		type: "tool_execution_finished",
 		step: 1,
-		turnId: "t",
 		toolName: "bash",
 		toolCallId: "tc",
-		toolOk: true,
+		ok: true,
+		elapsedMs: 1,
 	},
 ];
 
@@ -79,6 +79,7 @@ test("tool execution maps to working, not done", () => {
 			step: 1,
 			toolName: "bash",
 			toolCallId: "tc",
+			message: "Run pwd",
 		}),
 		"working",
 	);
@@ -88,7 +89,8 @@ test("tool execution maps to working, not done", () => {
 			step: 1,
 			toolName: "bash",
 			toolCallId: "tc",
-			toolOk: true,
+			ok: true,
+			elapsedMs: 1,
 		}),
 		"working",
 	);
@@ -96,39 +98,70 @@ test("tool execution maps to working, not done", () => {
 
 test("done is only reported when the turn actually finishes", () => {
 	assert.equal(
-		getStatusEventLabel({ type: "turn_finished", turnId: "t" }),
+		getStatusEventLabel({
+			type: "turn_finished",
+			step: 1,
+			elapsedMs: 1,
+			usage: null,
+		}),
 		"done",
 	);
 });
 
 test("terminal states keep their explicit labels", () => {
 	assert.equal(
-		getStatusEventLabel({ type: "turn_interrupted", turnId: "t" }),
+		getStatusEventLabel({
+			type: "turn_interrupted",
+			step: 1,
+			elapsedMs: 1,
+			stage: "model",
+			usage: null,
+		}),
 		"interrupted",
 	);
 	assert.equal(
-		getStatusEventLabel({ type: "turn_max_steps_reached", turnId: "t" }),
+		getStatusEventLabel({
+			type: "turn_max_steps_reached",
+			step: 1,
+			elapsedMs: 1,
+			usage: null,
+		}),
 		"max steps",
 	);
 	assert.equal(
-		getStatusEventLabel({ type: "turn_failed", turnId: "t" }),
+		getStatusEventLabel({
+			type: "turn_failed",
+			step: 1,
+			elapsedMs: 1,
+			failureType: "Error",
+			message: "boom",
+			usage: null,
+		}),
 		"failed",
 	);
 	assert.equal(
-		getStatusEventLabel({ type: "context_compacted", turnId: "t" }),
+		getStatusEventLabel({
+			type: "context_compacted",
+			step: 1,
+			tokensBefore: 100,
+			tokensAfter: 50,
+			trigger: "token",
+		}),
 		"compacted",
 	);
 	assert.equal(
 		getStatusEventLabel({
 			type: "interrupt_requested",
-			interruptStage: "model",
+			stage: "model",
+			message: "cancelling",
 		}),
 		"cancelling",
 	);
 	assert.equal(
 		getStatusEventLabel({
 			type: "interrupt_requested",
-			interruptStage: "tool",
+			stage: "tool",
+			message: "waiting",
 		}),
 		"interrupt requested",
 	);

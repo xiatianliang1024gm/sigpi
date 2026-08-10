@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { estimateContextTokens } from "../context-window.js";
 import type { TurnInterruptController } from "../interrupt.js";
 import { isTurnInterruptedError, TurnInterruptedError } from "../interrupt.js";
@@ -15,13 +16,14 @@ import type {
 	ModelProvider,
 	ModelResponse,
 	ModelUsage,
-	ProgressReporter,
 	RunTurnResult,
-	RuntimeLogger,
 	ToolCall,
 	ToolSchema,
 	TurnProgressEvent,
+	TurnProgressEventMap,
+	TurnProgressPayload,
 } from "../types.js";
+import { TURN_PROGRESS_EVENTS } from "../types.js";
 import type { ConversationContext } from "./context.js";
 import {
 	createAssistantMessage,
@@ -95,7 +97,6 @@ function isContextLengthExceededError(error: unknown): boolean {
 class TurnState {
 	readonly turnId: string;
 	readonly startedAtMs: number;
-	readonly logger: RuntimeLogger | undefined;
 
 	/**
 	 * Messages produced this turn but not yet handed to the session store.
@@ -131,8 +132,6 @@ class TurnState {
 	 * usage so resumed sessions keep the ground-truth token baseline).
 	 */
 	lastResponseUsage: ModelUsage | undefined;
-	summaryCount = 0;
-	lastModelElapsedMs = 0;
 	lastStep = 0;
 
 	private readonly context: ConversationContext;
@@ -140,9 +139,7 @@ class TurnState {
 	private readonly systemPrompt: string;
 	private readonly toolSchemas: ToolSchema[];
 	private readonly getPersistContext: () => (() => Promise<void>) | undefined;
-	private readonly runId: string | undefined;
-	private readonly sessionId: string | null | undefined;
-	private readonly progress: ProgressReporter | undefined;
+	private readonly runner: AgentRunner;
 
 	constructor(args: {
 		turnId: string;
@@ -151,10 +148,7 @@ class TurnState {
 		systemPrompt: string;
 		toolSchemas: ToolSchema[];
 		getPersistContext: () => (() => Promise<void>) | undefined;
-		runId: string | undefined;
-		sessionId: string | null | undefined;
-		logger: RuntimeLogger | undefined;
-		progress: ProgressReporter | undefined;
+		runner: AgentRunner;
 	}) {
 		this.turnId = args.turnId;
 		this.startedAtMs = Date.now();
@@ -163,10 +157,7 @@ class TurnState {
 		this.systemPrompt = args.systemPrompt;
 		this.toolSchemas = args.toolSchemas;
 		this.getPersistContext = args.getPersistContext;
-		this.runId = args.runId;
-		this.sessionId = args.sessionId;
-		this.logger = args.logger;
-		this.progress = args.progress;
+		this.runner = args.runner;
 	}
 
 	accumulateUsage(usage?: ModelUsage): void {
@@ -196,9 +187,16 @@ class TurnState {
 		}).totalTokens;
 	}
 
-	reportProgress(event: TurnProgressEvent): void {
-		this.progress?.({
-			...event,
+	/**
+	 * Emit one turn-progress event, enriched with the live in-flight
+	 * request-token estimate so the status bar can show a fresh figure.
+	 */
+	emitProgress<K extends keyof TurnProgressEventMap>(
+		type: K,
+		payload: TurnProgressEventMap[K],
+	): void {
+		this.runner.emitProgress(type, {
+			...payload,
 			estimatedContextTokens: this.estimateRequestTokens(),
 		});
 	}
@@ -231,13 +229,6 @@ class TurnState {
 			return null;
 		}
 		for (const toolCall of collectUnansweredToolCalls(this.pending)) {
-			this.logger?.info("turn_interrupted_tool_result_closed", {
-				runId: this.runId,
-				sessionId: this.sessionId ?? null,
-				turnId: this.turnId,
-				toolName: toolCall.name,
-				toolCallId: toolCall.id,
-			});
 			this.pending.push(
 				createToolMessage(toolCall.id, toolCall.name, {
 					ok: false,
@@ -276,7 +267,13 @@ class TurnState {
 
 type StepOutcome = { done: true; result: RunTurnResult } | { done: false };
 
-export class AgentRunner {
+/**
+ * Drives one agent turn. Progress is reported by emitting per-phase
+ * turn-progress events (see {@link TurnProgressEventMap}); consumers — the
+ * REPL view, the runtime log — subscribe with {@link AgentRunner.onProgress}
+ * instead of the runner knowing anything about them.
+ */
+export class AgentRunner extends EventEmitter {
 	private provider: ModelProvider;
 	private readonly tools: ToolRegistry;
 	private readonly toolSchemas: ToolSchema[];
@@ -292,6 +289,7 @@ export class AgentRunner {
 		systemPrompt: string;
 		options?: Partial<AgentRunnerOptions>;
 	}) {
+		super();
 		this.provider = args.provider;
 		this.tools = args.tools;
 		this.toolSchemas = this.tools.getSchemas();
@@ -314,6 +312,40 @@ export class AgentRunner {
 		this.persistContext = persistContext;
 	}
 
+	/**
+	 * Emit one turn-progress event to subscribed listeners. The runner emits
+	 * per-phase events internally; the REPL also emits a synthetic
+	 * `interrupt_requested` here when the user presses Esc mid-turn.
+	 */
+	emitProgress<K extends keyof TurnProgressEventMap>(
+		type: K,
+		payload: TurnProgressEventMap[K] & { estimatedContextTokens?: number },
+	): void {
+		super.emit(type, payload);
+	}
+
+	/**
+	 * Subscribe to every turn-progress event. Each event is delivered with
+	 * its name tagged on (`{ type, ...payload }`), so a single listener can
+	 * switch on the phase. Returns an unsubscribe function.
+	 */
+	onProgress(listener: (event: TurnProgressEvent) => void): () => void {
+		const subscriptions = TURN_PROGRESS_EVENTS.map((type) => {
+			const handler = (payload: TurnProgressPayload): void => {
+				listener({ type, ...payload } as TurnProgressEvent);
+			};
+			super.on(type, handler);
+			return () => {
+				super.off(type, handler);
+			};
+		});
+		return () => {
+			for (const unsubscribe of subscriptions) {
+				unsubscribe();
+			}
+		};
+	}
+
 	async runTurn(
 		userInput: string,
 		interruptController?: TurnInterruptController,
@@ -325,26 +357,13 @@ export class AgentRunner {
 			systemPrompt: this.systemPrompt,
 			toolSchemas: this.toolSchemas,
 			getPersistContext: () => this.persistContext,
-			runId: this.options.runId,
-			sessionId: this.options.sessionId,
-			logger: this.options.logger,
-			progress: this.options.progressReporter,
+			runner: this,
 		});
-		const logger = turn.logger;
 
 		interruptController?.beginTurn();
 
-		logger?.info("turn_started", {
-			runId: this.options.runId,
-			sessionId: this.options.sessionId ?? null,
+		turn.emitProgress("turn_started", {
 			turnId: turn.turnId,
-			input: userInput,
-			existingContextMessages: this.context.getRecentMessages().length,
-		});
-		turn.reportProgress({
-			type: "turn_started",
-			turnId: turn.turnId,
-			message: "Starting agent loop",
 			userInput,
 		});
 
@@ -378,50 +397,18 @@ export class AgentRunner {
 			if (turn.pending.length > 0) {
 				try {
 					await turn.persistPendingMessages();
-				} catch (checkpointError) {
-					logger?.error("turn_failed_context_checkpoint_failed", {
-						runId: this.options.runId,
-						sessionId: this.options.sessionId ?? null,
-						turnId: turn.turnId,
-						error:
-							checkpointError instanceof Error
-								? checkpointError.message
-								: String(checkpointError),
-					});
+				} catch {
+					// A checkpoint failure on the failure path must not mask the
+					// original error; the turn_failed event below still fires.
 				}
 			}
 
-			const failureType = error instanceof Error ? error.name : "unknown_error";
-			logger?.error("turn_failed", {
-				runId: this.options.runId,
-				sessionId: this.options.sessionId ?? null,
-				turnId: turn.turnId,
-				toolExecutionCount: turn.toolExecutions.length,
-				summaryCount: turn.summaryCount,
-				modelElapsedMs: turn.lastModelElapsedMs,
-				turnElapsedMs: Date.now() - turn.startedAtMs,
-				failureType,
-				error: error instanceof Error ? error.message : String(error),
-				inputTokens: turn.turnUsageReported ? turn.turnUsage.input : 0,
-				outputTokens: turn.turnUsageReported ? turn.turnUsage.output : 0,
-				cacheReadTokens: turn.turnUsageReported ? turn.turnUsage.cacheRead : 0,
-				cacheWriteTokens: turn.turnUsageReported
-					? turn.turnUsage.cacheWrite
-					: 0,
-				turnTotalTokens: turn.turnUsageReported
-					? turn.turnUsage.totalTokens
-					: 0,
-			});
-			turn.reportProgress({
-				type: "turn_failed",
-				turnId: turn.turnId,
+			turn.emitProgress("turn_failed", {
+				step: turn.lastStep,
 				elapsedMs: Date.now() - turn.startedAtMs,
-				message: "Turn failed",
-				toolExecutionCount: turn.toolExecutions.length,
-				modelElapsedMs: turn.lastModelElapsedMs,
-				summaryCount: turn.summaryCount,
-				failureType,
-				turnTokens: turn.turnUsageReported ? turn.turnUsage : undefined,
+				failureType: error instanceof Error ? error.name : "unknown_error",
+				message: error instanceof Error ? error.message : String(error),
+				usage: turn.turnUsageReported ? turn.turnUsage : null,
 			});
 			throw error;
 		}
@@ -439,20 +426,7 @@ export class AgentRunner {
 	): Promise<StepOutcome> {
 		turn.lastStep = step;
 		interruptController?.throwIfInterrupted();
-		turn.logger?.debug("turn_step_started", {
-			runId: this.options.runId,
-			sessionId: this.options.sessionId ?? null,
-			turnId: turn.turnId,
-			step,
-			messageCount:
-				this.context.getRecentMessages().length + turn.pending.length,
-		});
-		turn.reportProgress({
-			type: "step_started",
-			step,
-			turnId: turn.turnId,
-			message: `Step ${step}/${this.options.maxSteps}`,
-		});
+		turn.emitProgress("step_started", { step });
 
 		const response = await this.generateResponse(
 			turn,
@@ -507,25 +481,12 @@ export class AgentRunner {
 				abortSignal: interruptController?.getAbortSignal(),
 			},
 		);
-		turn.summaryCount += Number(compacted.summarized);
 		if (compacted.summarized) {
-			turn.logger?.info("turn_context_compacted", {
-				runId: this.options.runId,
-				sessionId: this.options.sessionId ?? null,
-				turnId: turn.turnId,
+			turn.emitProgress("context_compacted", {
 				step,
-				trigger: "token",
-				summaryCount: turn.summaryCount,
-			});
-			turn.reportProgress({
-				type: "context_compacted",
-				step,
-				turnId: turn.turnId,
-				message: "Context compacted before request",
 				tokensBefore: compacted.tokensBefore,
 				tokensAfter: compacted.tokensAfter,
 				trigger: "token",
-				summaryCount: turn.summaryCount,
 			});
 		}
 	}
@@ -542,13 +503,7 @@ export class AgentRunner {
 		step: number,
 		interruptController?: TurnInterruptController,
 	): Promise<ModelResponse> {
-		const modelStartedAt = Date.now();
-		turn.reportProgress({
-			type: "model_request_started",
-			step,
-			turnId: turn.turnId,
-			message: "Requesting model",
-		});
+		turn.emitProgress("model_request_started", { step });
 		interruptController?.enterModel();
 
 		// Auto trigger (ADR 0026, D1): once per step, before the first
@@ -590,10 +545,8 @@ export class AgentRunner {
 								delta.contentDelta ||
 								delta.toolCallDelta
 							) {
-								turn.reportProgress({
-									type: "model_delta",
+								turn.emitProgress("model_delta", {
 									step,
-									turnId: turn.turnId,
 									reasoningDelta: delta.reasoningDelta,
 									contentDelta: delta.contentDelta,
 									toolCallDelta: delta.toolCallDelta,
@@ -615,15 +568,6 @@ export class AgentRunner {
 					throw error;
 				}
 				retries += 1;
-				turn.logger?.warn("turn_context_length_exceeded_retry", {
-					runId: this.options.runId,
-					sessionId: this.options.sessionId ?? null,
-					turnId: turn.turnId,
-					step,
-					retry: retries,
-					maxRetries: GENERATE_MAX_RETRIES,
-					error: error instanceof Error ? error.message : String(error),
-				});
 				const compacted = await this.context.compact(
 					this.provider,
 					this.systemPrompt,
@@ -634,17 +578,12 @@ export class AgentRunner {
 						abortSignal: interruptController?.getAbortSignal(),
 					},
 				);
-				turn.summaryCount += Number(compacted.summarized);
 				if (compacted.summarized) {
-					turn.reportProgress({
-						type: "context_compacted",
+					turn.emitProgress("context_compacted", {
 						step,
-						turnId: turn.turnId,
-						message: "Context compacted after hitting the context window limit",
 						tokensBefore: compacted.tokensBefore,
 						tokensAfter: compacted.tokensAfter,
 						trigger: "force",
-						summaryCount: turn.summaryCount,
 					});
 				}
 				// The context was compacted — retry the request with the
@@ -664,48 +603,22 @@ export class AgentRunner {
 				retries < GENERATE_MAX_RETRIES
 			) {
 				retries += 1;
-				turn.logger?.warn("turn_empty_response_retry", {
-					runId: this.options.runId,
-					sessionId: this.options.sessionId ?? null,
-					turnId: turn.turnId,
-					step,
-					retry: retries,
-					maxRetries: GENERATE_MAX_RETRIES,
-				});
-				turn.reportProgress({
-					type: "context_checkpoint",
-					step,
-					turnId: turn.turnId,
-					message: "Model returned an empty response; retrying once",
-				});
+				turn.emitProgress("context_checkpoint", { step });
 				continue;
 			}
 
-			turn.lastModelElapsedMs = Date.now() - modelStartedAt;
 			turn.lastResponseUsage = response.usage;
 			turn.accumulateUsage(response.usage);
 
-			turn.reportProgress({
-				type: "model_request_finished",
-				step,
-				turnId: turn.turnId,
-				elapsedMs: turn.lastModelElapsedMs,
-				message:
-					response.toolCalls.length > 0
-						? "Model returned tool calls"
-						: "Model returned final answer",
-			});
+			turn.emitProgress("model_request_finished", { step });
 
 			const assistantProgressText = summarizeAssistantProgressText(
 				response.assistantText,
 			);
 			if (assistantProgressText && response.toolCalls.length > 0) {
-				turn.reportProgress({
-					type: "assistant_message",
+				turn.emitProgress("assistant_message", {
 					step,
-					turnId: turn.turnId,
-					message: "Model note",
-					assistantText: assistantProgressText,
+					text: assistantProgressText,
 				});
 			}
 			return response;
@@ -729,48 +642,26 @@ export class AgentRunner {
 		);
 		interruptController?.throwIfInterrupted();
 
-		turn.logger?.info("tool_calls_received", {
-			runId: this.options.runId,
-			sessionId: this.options.sessionId ?? null,
-			turnId: turn.turnId,
+		turn.emitProgress("tool_calls_received", {
 			step,
-			toolCallCount: response.toolCalls.length,
-		});
-		turn.reportProgress({
-			type: "tool_calls_received",
-			step,
-			turnId: turn.turnId,
-			toolCallCount: response.toolCalls.length,
-			message: `Received ${response.toolCalls.length} tool call(s)`,
+			count: response.toolCalls.length,
 		});
 
 		for (const toolCall of response.toolCalls) {
 			interruptController?.throwIfInterrupted();
 			const toolStartedAt = Date.now();
 			const toolDescription = this.tools.describeProgress(toolCall);
-			turn.logger?.info("tool_execution_started", {
-				runId: this.options.runId,
-				sessionId: this.options.sessionId ?? null,
-				turnId: turn.turnId,
+			turn.emitProgress("tool_execution_started", {
 				step,
-				toolName: toolCall.name,
-				arguments: JSON.stringify(toolCall.arguments),
-			});
-			turn.reportProgress({
-				type: "tool_execution_started",
-				step,
-				turnId: turn.turnId,
 				toolName: toolCall.name,
 				toolCallId: toolCall.id,
-				toolArguments: toolCall.arguments,
+				arguments: toolCall.arguments,
 				message: toolDescription.summary,
-				detail: toolDescription.detail,
 			});
 			interruptController?.enterTool();
 			const result = await this.tools
 				.execute(toolCall, {
 					cwd: this.options.workingDirectory,
-					logger: turn.logger,
 					runId: this.options.runId,
 					sessionId: this.options.sessionId ?? null,
 					turnId: turn.turnId,
@@ -783,45 +674,18 @@ export class AgentRunner {
 
 			turn.toolExecutions.push({ toolCall, result });
 
-			if (!result.ok) {
-				turn.logger?.error("tool_execution_failed", {
-					runId: this.options.runId,
-					sessionId: this.options.sessionId ?? null,
-					turnId: turn.turnId,
-					step,
-					toolName: toolCall.name,
-					error: result.error ?? null,
-					details: result.details ? JSON.stringify(result.details) : undefined,
-					elapsedMs: Date.now() - toolStartedAt,
-				});
-			} else {
-				turn.logger?.info("tool_execution_finished", {
-					runId: this.options.runId,
-					sessionId: this.options.sessionId ?? null,
-					turnId: turn.turnId,
-					step,
-					toolName: toolCall.name,
-					ok: true,
-					elapsedMs: Date.now() - toolStartedAt,
-				});
-			}
 			const renderedToolResult = formatToolExecutionResult(
 				toolCall.name,
 				result,
 			);
-			turn.reportProgress({
-				type: "tool_execution_finished",
+			turn.emitProgress("tool_execution_finished", {
 				step,
-				turnId: turn.turnId,
 				toolName: toolCall.name,
 				toolCallId: toolCall.id,
-				toolOk: result.ok,
+				ok: result.ok,
 				elapsedMs: Date.now() - toolStartedAt,
-				message: result.ok
-					? `Tool finished: ${toolCall.name}`
-					: `Tool failed: ${toolCall.name}`,
-				toolResultData: result.data,
-				toolResult: truncateProgressToolResult(renderedToolResult),
+				result: truncateProgressToolResult(renderedToolResult),
+				data: result.data,
 			});
 
 			turn.pending.push(createToolMessage(toolCall.id, toolCall.name, result));
@@ -850,31 +714,10 @@ export class AgentRunner {
 			}),
 		);
 
-		turn.logger?.info("turn_finished", {
-			runId: this.options.runId,
-			sessionId: this.options.sessionId ?? null,
-			turnId: turn.turnId,
-			steps: step,
-			toolExecutionCount: turn.toolExecutions.length,
-			summaryCount: turn.summaryCount,
-			modelElapsedMs: turn.lastModelElapsedMs,
-			turnElapsedMs: Date.now() - turn.startedAtMs,
-			inputTokens: turn.turnUsageReported ? turn.turnUsage.input : 0,
-			outputTokens: turn.turnUsageReported ? turn.turnUsage.output : 0,
-			cacheReadTokens: turn.turnUsageReported ? turn.turnUsage.cacheRead : 0,
-			cacheWriteTokens: turn.turnUsageReported ? turn.turnUsage.cacheWrite : 0,
-			turnTotalTokens: turn.turnUsageReported ? turn.turnUsage.totalTokens : 0,
-		});
-		turn.reportProgress({
-			type: "turn_finished",
+		turn.emitProgress("turn_finished", {
 			step,
-			turnId: turn.turnId,
 			elapsedMs: Date.now() - turn.startedAtMs,
-			message: "Answer ready",
-			toolExecutionCount: turn.toolExecutions.length,
-			modelElapsedMs: turn.lastModelElapsedMs,
-			summaryCount: turn.summaryCount,
-			turnTokens: turn.turnUsageReported ? turn.turnUsage : undefined,
+			usage: turn.turnUsageReported ? turn.turnUsage : null,
 		});
 
 		return {
@@ -904,31 +747,10 @@ export class AgentRunner {
 			createAssistantMessage(outputText),
 		);
 
-		turn.logger?.warn("turn_max_steps_reached", {
-			runId: this.options.runId,
-			sessionId: this.options.sessionId ?? null,
-			turnId: turn.turnId,
-			maxSteps: this.options.maxSteps,
-			toolExecutionCount: turn.toolExecutions.length,
-			summaryCount: turn.summaryCount,
-			modelElapsedMs: turn.lastModelElapsedMs,
-			turnElapsedMs: Date.now() - turn.startedAtMs,
-			inputTokens: turn.turnUsageReported ? turn.turnUsage.input : 0,
-			outputTokens: turn.turnUsageReported ? turn.turnUsage.output : 0,
-			cacheReadTokens: turn.turnUsageReported ? turn.turnUsage.cacheRead : 0,
-			cacheWriteTokens: turn.turnUsageReported ? turn.turnUsage.cacheWrite : 0,
-			turnTotalTokens: turn.turnUsageReported ? turn.turnUsage.totalTokens : 0,
-		});
-		turn.reportProgress({
-			type: "turn_max_steps_reached",
+		turn.emitProgress("turn_max_steps_reached", {
 			step: this.options.maxSteps,
-			turnId: turn.turnId,
 			elapsedMs: Date.now() - turn.startedAtMs,
-			message: "Maximum tool-call steps reached",
-			toolExecutionCount: turn.toolExecutions.length,
-			modelElapsedMs: turn.lastModelElapsedMs,
-			summaryCount: turn.summaryCount,
-			turnTokens: turn.turnUsageReported ? turn.turnUsage : undefined,
+			usage: turn.turnUsageReported ? turn.turnUsage : null,
 		});
 
 		return {
@@ -956,35 +778,11 @@ export class AgentRunner {
 	): Promise<RunTurnResult> {
 		const contextUpdated =
 			(await turn.persistPendingMessages()) ?? turn.contextUpdateSnapshot();
-		turn.logger?.info("turn_interrupted", {
-			runId: this.options.runId,
-			sessionId: this.options.sessionId ?? null,
-			turnId: turn.turnId,
-			step: turn.lastStep || null,
-			stage,
-			source: "user_escape",
-			toolExecutionCount: turn.toolExecutions.length,
-			summaryCount: turn.summaryCount,
-			modelElapsedMs: turn.lastModelElapsedMs,
-			turnElapsedMs: Date.now() - turn.startedAtMs,
-			inputTokens: turn.turnUsageReported ? turn.turnUsage.input : 0,
-			outputTokens: turn.turnUsageReported ? turn.turnUsage.output : 0,
-			cacheReadTokens: turn.turnUsageReported ? turn.turnUsage.cacheRead : 0,
-			cacheWriteTokens: turn.turnUsageReported ? turn.turnUsage.cacheWrite : 0,
-			turnTotalTokens: turn.turnUsageReported ? turn.turnUsage.totalTokens : 0,
-		});
-		turn.reportProgress({
-			type: "turn_interrupted",
-			step: turn.lastStep || undefined,
-			turnId: turn.turnId,
+		turn.emitProgress("turn_interrupted", {
+			step: turn.lastStep,
 			elapsedMs: Date.now() - turn.startedAtMs,
-			message: "Turn interrupted",
-			toolExecutionCount: turn.toolExecutions.length,
-			modelElapsedMs: turn.lastModelElapsedMs,
-			summaryCount: turn.summaryCount,
-			interruptStage: stage,
-			interruptSource: "user_escape",
-			turnTokens: turn.turnUsageReported ? turn.turnUsage : undefined,
+			stage,
+			usage: turn.turnUsageReported ? turn.turnUsage : null,
 		});
 
 		return {

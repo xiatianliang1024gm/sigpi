@@ -139,6 +139,7 @@ test("formatStatusBarForEvent uses live context token estimate (default unit)", 
 		const status = statusLine(
 			await formatStatusBarForEvent(state, {
 				type: "model_request_finished",
+				step: 1,
 				estimatedContextTokens: 12_345,
 			}),
 		);
@@ -189,6 +190,7 @@ test("formatStatusBarForEvent uses event token estimate when available", async (
 		const status = statusLine(
 			await formatStatusBarForEvent(state, {
 				type: "model_request_finished",
+				step: 1,
 				estimatedContextTokens: 12_345,
 			}),
 		);
@@ -218,6 +220,7 @@ test("formatStatusBarForEvent recomputes from state when event has no token esti
 		const status = statusLine(
 			await formatStatusBarForEvent(state, {
 				type: "turn_started",
+				turnId: "t",
 				userInput: "hi",
 			}),
 		);
@@ -1105,7 +1108,7 @@ test("formatStatusBarForEvent threads live turn clock and keeps last-turn stats"
 		// While the turn is in flight: live clock is threaded onto the model.
 		const inFlight = await formatStatusBarForEvent(
 			state,
-			{ type: "model_delta", step: 1, turnId: "t", contentDelta: "x" },
+			{ type: "model_delta", step: 1, contentDelta: "x" },
 			{ turnStartedAt: 5_000 },
 		);
 		assert.equal(inFlight.turnStartedAt, 5_000);

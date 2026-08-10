@@ -18,11 +18,7 @@ import type { BackgroundTaskManager } from "./tools/background.js";
 import { formatCompactNumber } from "./tui/status-bar.js";
 import { defaultSelectListTheme } from "./tui/themes.js";
 import { replaySessionIntoView } from "./tui/transcript-replay.js";
-import type {
-	ContextUpdateResult,
-	LoadedSkill,
-	ProgressReporter,
-} from "./types.js";
+import type { ContextUpdateResult, LoadedSkill } from "./types.js";
 
 export interface ChatCommandMetadata {
 	name: string;
@@ -34,7 +30,6 @@ export interface ChatCommandContext {
 	getState(): ChatReplState;
 	setState(state: ChatReplState): void;
 	store: SessionStore;
-	progressReporter?: ProgressReporter;
 	writeLine(line: string): void;
 	/**
 	 * Optional abort signal sourced from the surrounding chat loop (e.g.
@@ -299,7 +294,6 @@ export function createChatCommandDefinitions(
 				const attached = await attachSessionFromSelector(
 					context.getState(),
 					context.store,
-					context.progressReporter,
 				);
 
 				if (!attached) {
@@ -326,7 +320,7 @@ export function createChatCommandDefinitions(
 			name: "/new",
 			description: "Start a fresh session",
 			handler: async (context) => {
-				const attached = await attachNewSession(context.progressReporter);
+				const attached = await attachNewSession();
 				context.setState(attached.updatedState);
 				// A fresh session has no messages: clear the previous session's
 				// transcript from the terminal (editor and status bar are kept).

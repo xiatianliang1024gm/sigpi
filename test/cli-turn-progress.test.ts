@@ -107,24 +107,16 @@ class RecordingReplView implements ReplView {
  */
 function replay(view: RecordingReplView): void {
 	const events: TurnProgressEvent[] = [
-		{ type: "model_request_started", step: 1, turnId: "t" },
+		{ type: "model_request_started", step: 1 },
 		{
 			type: "model_delta",
 			step: 1,
-			turnId: "t",
 			contentDelta: "I'll explore the repo.",
 		},
-		{
-			type: "model_request_finished",
-			step: 1,
-			turnId: "t",
-			elapsedMs: 1,
-			message: "Model returned tool calls",
-		},
+		{ type: "model_request_finished", step: 1 },
 		{
 			type: "tool_execution_started",
 			step: 1,
-			turnId: "t",
 			toolName: "bash",
 			toolCallId: "tc-bash",
 			message: "Run pwd",
@@ -132,30 +124,22 @@ function replay(view: RecordingReplView): void {
 		{
 			type: "tool_execution_finished",
 			step: 1,
-			turnId: "t",
 			toolName: "bash",
 			toolCallId: "tc-bash",
-			toolOk: true,
-			toolResult: "pwd",
+			ok: true,
+			elapsedMs: 1,
+			result: "pwd",
 		},
-		{ type: "model_request_started", step: 2, turnId: "t" },
+		{ type: "model_request_started", step: 2 },
 		{
 			type: "model_delta",
 			step: 2,
-			turnId: "t",
 			contentDelta: "Let me read the docs.",
 		},
-		{
-			type: "model_request_finished",
-			step: 2,
-			turnId: "t",
-			elapsedMs: 1,
-			message: "Model returned tool calls",
-		},
+		{ type: "model_request_finished", step: 2 },
 		{
 			type: "tool_execution_started",
 			step: 2,
-			turnId: "t",
 			toolName: "read",
 			toolCallId: "tc-read",
 			message: "Read README",
@@ -163,30 +147,22 @@ function replay(view: RecordingReplView): void {
 		{
 			type: "tool_execution_finished",
 			step: 2,
-			turnId: "t",
 			toolName: "read",
 			toolCallId: "tc-read",
-			toolOk: true,
-			toolResult: "README",
+			ok: true,
+			elapsedMs: 1,
+			result: "README",
 		},
-		{ type: "model_request_started", step: 3, turnId: "t" },
+		{ type: "model_request_started", step: 3 },
 		{
 			type: "model_delta",
 			step: 3,
-			turnId: "t",
 			contentDelta: "Now the analysis.",
 		},
-		{
-			type: "model_request_finished",
-			step: 3,
-			turnId: "t",
-			elapsedMs: 1,
-			message: "Model returned tool calls",
-		},
+		{ type: "model_request_finished", step: 3 },
 		{
 			type: "tool_execution_started",
 			step: 3,
-			turnId: "t",
 			toolName: "glob",
 			toolCallId: "tc-glob",
 			message: "Find docs",
@@ -194,27 +170,20 @@ function replay(view: RecordingReplView): void {
 		{
 			type: "tool_execution_finished",
 			step: 3,
-			turnId: "t",
 			toolName: "glob",
 			toolCallId: "tc-glob",
-			toolOk: true,
-			toolResult: "docs/adr/**/*.md",
+			ok: true,
+			elapsedMs: 1,
+			result: "docs/adr/**/*.md",
 		},
 		// Final answer — a separate model response, content only, no tool calls.
-		{ type: "model_request_started", step: 4, turnId: "t" },
+		{ type: "model_request_started", step: 4 },
 		{
 			type: "model_delta",
 			step: 4,
-			turnId: "t",
 			contentDelta: "CONCLUSION: SigPi is a readable TS agent reference impl.",
 		},
-		{
-			type: "model_request_finished",
-			step: 4,
-			turnId: "t",
-			elapsedMs: 1,
-			message: "Model returned final answer",
-		},
+		{ type: "model_request_finished", step: 4 },
 	];
 	let current: AssistantMessageView | null = null;
 	const toolLines = new Map<string, ToolLineHandle>();
@@ -259,18 +228,11 @@ test("the final conclusion is not dropped by an earlier finalize", () => {
 test("a step with no text does not emit an empty assistant bubble", () => {
 	const view = new RecordingReplView();
 	const events: TurnProgressEvent[] = [
-		{ type: "model_request_started", step: 1, turnId: "t" },
-		{
-			type: "model_request_finished",
-			step: 1,
-			turnId: "t",
-			elapsedMs: 1,
-			message: "Model returned tool calls",
-		},
+		{ type: "model_request_started", step: 1 },
+		{ type: "model_request_finished", step: 1 },
 		{
 			type: "tool_execution_started",
 			step: 1,
-			turnId: "t",
 			toolName: "bash",
 			toolCallId: "tc-bash",
 			message: "Run pwd",
@@ -278,22 +240,16 @@ test("a step with no text does not emit an empty assistant bubble", () => {
 		{
 			type: "tool_execution_finished",
 			step: 1,
-			turnId: "t",
 			toolName: "bash",
 			toolCallId: "tc-bash",
-			toolOk: true,
-			toolResult: "pwd",
+			ok: true,
+			elapsedMs: 1,
+			result: "pwd",
 		},
 		// Final answer only.
-		{ type: "model_request_started", step: 2, turnId: "t" },
-		{ type: "model_delta", step: 2, turnId: "t", contentDelta: "Done." },
-		{
-			type: "model_request_finished",
-			step: 2,
-			turnId: "t",
-			elapsedMs: 1,
-			message: "Model returned final answer",
-		},
+		{ type: "model_request_started", step: 2 },
+		{ type: "model_delta", step: 2, contentDelta: "Done." },
+		{ type: "model_request_finished", step: 2 },
 	];
 	let current: AssistantMessageView | null = null;
 	const toolLines = new Map<string, ToolLineHandle>();
@@ -316,7 +272,7 @@ test("context_compacted renders a system message highlighting the window change"
 
 	current = applyTurnProgress(
 		view,
-		{ type: "model_delta", step: 1, turnId: "t", contentDelta: "x" },
+		{ type: "model_delta", step: 1, contentDelta: "x" },
 		current,
 		toolLines,
 	);
@@ -325,8 +281,6 @@ test("context_compacted renders a system message highlighting the window change"
 		{
 			type: "context_compacted",
 			step: 1,
-			turnId: "t",
-			message: "Context compacted",
 			tokensBefore: 12_345,
 			tokensAfter: 6_789,
 			trigger: "token",
@@ -341,15 +295,13 @@ test("context_compacted renders a system message highlighting the window change"
 	]);
 });
 
-test("context_compacted without a token snapshot falls back to its message", () => {
+test("context_compacted without a token snapshot uses the plain notice", () => {
 	const view = new RecordingReplView();
 	applyTurnProgress(
 		view,
 		{
 			type: "context_compacted",
 			step: 1,
-			turnId: "t",
-			message: "Checkpoint compacted current turn",
 			tokensBefore: 0,
 			tokensAfter: 0,
 			trigger: "token",
@@ -357,7 +309,7 @@ test("context_compacted without a token snapshot falls back to its message", () 
 		null,
 		new Map(),
 	);
-	assert.deepEqual(view.ops, ["system:info:Checkpoint compacted current turn"]);
+	assert.deepEqual(view.ops, ["system:info:Context compacted."]);
 });
 
 test("interrupt_requested renders a transcript line, not just the status bar", () => {
@@ -367,8 +319,7 @@ test("interrupt_requested renders a transcript line, not just the status bar", (
 		{
 			type: "interrupt_requested",
 			message: "Cancelling current model request",
-			interruptStage: "model",
-			interruptSource: "user_escape",
+			stage: "model",
 		},
 		null,
 		new Map(),
@@ -383,7 +334,7 @@ test("turn_interrupted finalizes the assistant and renders a terminal message", 
 
 	current = applyTurnProgress(
 		view,
-		{ type: "model_delta", step: 1, turnId: "t", contentDelta: "partial" },
+		{ type: "model_delta", step: 1, contentDelta: "partial" },
 		current,
 		toolLines,
 	);
@@ -391,10 +342,10 @@ test("turn_interrupted finalizes the assistant and renders a terminal message", 
 		view,
 		{
 			type: "turn_interrupted",
-			turnId: "t",
-			message: "Turn interrupted",
-			interruptStage: "model",
-			interruptSource: "user_escape",
+			step: 1,
+			elapsedMs: 1,
+			stage: "model",
+			usage: null,
 		},
 		current,
 		toolLines,
@@ -411,9 +362,9 @@ test("repl run stats sum elapsed time and usage across turns", () => {
 	const stats = createReplRunStats();
 	accumulateTurnStats(stats, {
 		type: "turn_finished",
-		turnId: "t1",
+		step: 1,
 		elapsedMs: 12_400,
-		turnTokens: {
+		usage: {
 			input: 2_200,
 			output: 700,
 			cacheRead: 100,
@@ -423,9 +374,10 @@ test("repl run stats sum elapsed time and usage across turns", () => {
 	});
 	accumulateTurnStats(stats, {
 		type: "turn_interrupted",
-		turnId: "t2",
+		step: 1,
 		elapsedMs: 3_100,
-		turnTokens: {
+		stage: "model",
+		usage: {
 			input: 800,
 			output: 200,
 			cacheRead: 0,
@@ -448,9 +400,10 @@ test("repl run stats still count elapsed time when the provider reports no usage
 	const stats = createReplRunStats();
 	accumulateTurnStats(stats, {
 		type: "turn_finished",
-		turnId: "t1",
+		step: 1,
 		elapsedMs: 500,
-		// No `turnTokens`: the provider omitted usage on the streaming path.
+		// No `usage`: the provider omitted usage on the streaming path.
+		usage: null,
 	});
 	assert.deepEqual(stats, {
 		turnCount: 1,

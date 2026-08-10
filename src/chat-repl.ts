@@ -14,12 +14,7 @@ import {
 	StatusBarComponent,
 	type StatusBarModel,
 } from "./tui/status-bar.js";
-import type {
-	ModelUsage,
-	ProgressReporter,
-	ShellRuntime,
-	TurnProgressEvent,
-} from "./types.js";
+import type { ModelUsage, ShellRuntime, TurnProgressEvent } from "./types.js";
 
 export interface ChatReplState {
 	/** The agent runtime this REPL session is driving. Most state lives here. */
@@ -43,7 +38,6 @@ type ResumeAvailability = { ok: true } | { ok: false; message: string };
 export async function attachSessionFromSelector(
 	state: ChatReplState,
 	store: SessionStore,
-	progressReporter?: ProgressReporter,
 ): Promise<AttachSessionResult | null> {
 	const availability = getResumeAvailability(state);
 	if (!availability.ok) {
@@ -59,15 +53,13 @@ export async function attachSessionFromSelector(
 		return null;
 	}
 
-	return attachSessionById(sessionId, progressReporter);
+	return attachSessionById(sessionId);
 }
 
 export async function attachSessionById(
 	sessionId: string,
-	progressReporter?: ProgressReporter,
 ): Promise<AttachSessionResult> {
 	const runtime = await createAgentRuntime({
-		progressReporter,
 		sessionId,
 	});
 
@@ -78,11 +70,8 @@ export async function attachSessionById(
 	};
 }
 
-export async function attachNewSession(
-	progressReporter?: ProgressReporter,
-): Promise<AttachSessionResult> {
+export async function attachNewSession(): Promise<AttachSessionResult> {
 	const runtime = await createAgentRuntime({
-		progressReporter,
 		createSession: true,
 	});
 
