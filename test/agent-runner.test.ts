@@ -744,63 +744,57 @@ test("never persists an empty model response", async () => {
 	const result = await runner.runTurn("hello");
 
 	assert.equal(result.outputText, "real answer");
-	assert.equal(result.steps, 2);
-	// The empty response was re-prompted, never appended: the transcript holds
+	assert.equal(result.steps, 1);
+	// The empty response was retried, never appended: the transcript holds
 	// only the user input and the real answer.
 	assert.deepEqual(
 		stripMessageIds(context.getRecentMessages()).map((message) => message.role),
 		["user", "assistant"],
 	);
 	assert.equal(context.getRecentMessages()[1]?.content, "real answer");
-	// The retry note reaches the model on the second request.
-	assert.match(
-		JSON.stringify(provider.requests[1]?.messages ?? []),
-		/previous response was empty/,
+	// The retry is the identical request — no "please continue" note is
+	// injected; the empty response itself never reaches the provider twice
+	// with a modified payload.
+	assert.equal(provider.requests.length, 2);
+	assert.deepEqual(
+		provider.requests[1]?.messages,
+		provider.requests[0]?.messages,
 	);
 });
 
-test("retries an empty model response when the context has room", async () => {
-	const provider = new MockProvider((_request, index) => {
-		if (index < 2) {
-			return {
-				assistantText: null,
-				toolCalls: [],
-				finishReason: "stop",
-			};
-		}
-		return {
-			assistantText: "real answer after the glitch",
-			toolCalls: [],
-			finishReason: "stop",
-		};
-	});
+test("stops after one empty-response retry instead of looping", async () => {
+	const provider = new MockProvider(() => ({
+		assistantText: null,
+		toolCalls: [],
+		finishReason: "stop",
+	}));
 
+	const context = new ConversationContext();
 	const runner = new AgentRunner({
 		provider,
 		tools: new ToolRegistry([]),
-		context: new ConversationContext(),
+		context,
 		systemPrompt: "You are a test agent.",
 	});
 
 	const result = await runner.runTurn("hello");
 
-	assert.equal(result.outputText, "real answer after the glitch");
-	assert.equal(result.steps, 3);
-	// Two retries are bounded: a third empty response must end the turn.
-	const alwaysEmpty = new MockProvider(() => ({
-		assistantText: null,
-		toolCalls: [],
-		finishReason: "stop",
-	}));
-	const boundedRunner = new AgentRunner({
-		provider: alwaysEmpty,
-		tools: new ToolRegistry([]),
-		context: new ConversationContext(),
-		systemPrompt: "You are a test agent.",
-	});
-	const bounded = await boundedRunner.runTurn("hello");
-	assert.equal(bounded.outputText, "No response generated.");
-	assert.equal(bounded.steps, 3);
+	// At most one retry: the first request comes back empty, the identical
+	// request is retried once, and a second empty response ends the turn with
+	// the user-facing fallback instead of spinning.
+	assert.equal(result.outputText, "No response generated.");
+	assert.equal(result.steps, 1);
+	assert.equal(provider.requests.length, 2);
+	// The empty response itself is never persisted — only the synthesized
+	// user-facing fallback message.
+	assert.deepEqual(
+		stripMessageIds(context.getRecentMessages()).map((message) => message.role),
+		["user", "assistant"],
+	);
+	assert.equal(
+		context.getRecentMessages()[1]?.content,
+		"No response generated.",
+	);
 });
 
 test("surfaces insufficient compaction as a turn failure instead of silently dropping messages", async () => {
@@ -832,7 +826,7 @@ test("surfaces insufficient compaction as a turn failure instead of silently dro
 		provider,
 		tools: new ToolRegistry([]),
 		context,
-		systemPrompt: "A very long system prompt ".repeat(20) + "padding.",
+		systemPrompt: `A very long system prompt ${"x".repeat(500)} padding.`,
 	});
 
 	await assert.rejects(

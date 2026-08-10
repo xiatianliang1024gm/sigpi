@@ -23,22 +23,12 @@ import type {
 import type { ConversationContext } from "./context.js";
 import {
 	createAssistantMessage,
-	createSystemMessage,
 	createToolMessage,
 	createUserMessage,
 } from "./messages.js";
 
 const INTERRUPTED_TOOL_RESULT_ERROR =
 	"Tool execution was interrupted by the user before it produced output. Re-run the tool if the task still requires it.";
-const EMPTY_RESPONSE_NOTE =
-	"Your previous response was empty (no text and no tool calls). Continue the user's request with a real answer or tool call.";
-/**
- * A model response with no text and no tool calls is not a valid final answer.
- * It is usually a transient provider hiccup or a request the model could not
- * handle, so we persist the turn and re-prompt — but bounded, so a broken
- * provider cannot spin the loop forever.
- */
-const EMPTY_RESPONSE_MAX_RETRIES = 2;
 /**
  * A provider `context_length_exceeded` (400) is retried once after a forced
  * compaction (ADR 0026, D3 — "retries the original request once; a second
@@ -145,7 +135,6 @@ export class AgentRunner {
 		let lastModelElapsedMs = 0;
 		let failureType: string | undefined;
 		let lastStep = 0;
-		let emptyResponseRetries = 0;
 		/**
 		 * Messages produced this turn but not yet handed to the session store.
 		 * Persisted at the next terminal point (final answer, interrupt,
@@ -156,12 +145,6 @@ export class AgentRunner {
 		 * working copy to keep in sync.
 		 */
 		const pending: Message[] = [];
-		/**
-		 * Transient system notes injected into the request tail (empty-response
-		 * re-prompts). They shape the model's next answer but are deliberately
-		 * never persisted: they are scaffolding for this turn only.
-		 */
-		const retryNotes: Message[] = [];
 		/**
 		 * Provider-reported usage of the most recent model response in this
 		 * turn, attached to the tail assistant message when the buffer is
@@ -222,7 +205,6 @@ export class AgentRunner {
 				recentMessages: [
 					...this.context.getRecentMessages(),
 					...pending,
-					...retryNotes,
 				].filter((message) => message.role !== "system"),
 				toolSchemas: this.toolSchemas,
 				lastUsage: lastUsage?.usage ?? null,
@@ -274,7 +256,6 @@ export class AgentRunner {
 					{ usage: lastResponseUsage },
 				);
 				pending.length = 0;
-				retryNotes.length = 0;
 				lastResponseUsage = undefined;
 				await this.persistContext?.();
 				return contextUpdated;
@@ -335,6 +316,7 @@ export class AgentRunner {
 				// in the next attempt (ADR 0026, D1).
 				let response: ModelResponse;
 				let contextLengthRetries = 0;
+				let emptyResponseRetried = false;
 				for (let attempt = 0; ; attempt += 1) {
 					interruptController?.throwIfInterrupted();
 					// Auto trigger (ADR 0026, D1): once per step, before the
@@ -384,7 +366,7 @@ export class AgentRunner {
 							}
 						}
 					}
-					const messages = this.buildRequestMessages(pending, retryNotes);
+					const messages = this.buildRequestMessages(pending);
 					try {
 						response = await this.provider
 							.generate(
@@ -422,7 +404,6 @@ export class AgentRunner {
 							.finally(() => {
 								interruptController?.leaveActiveStage();
 							});
-						break;
 					} catch (error) {
 						// D3 — provider "you are over the context window":
 						// force-compact the persisted context and retry the
@@ -467,7 +448,39 @@ export class AgentRunner {
 								summaryCount,
 							});
 						}
+						// The context was compacted — retry the request with the
+						// rebuilt payload.
+						continue;
 					}
+					// A response with no text and no tool calls is degenerate:
+					// it is never persisted (ADR 0026, D5) and no "please
+					// continue" note is injected into the request. Instead the
+					// identical request is retried once (logged); a second
+					// empty response falls through and ends the turn with the
+					// user-facing "No response generated." fallback.
+					if (
+						!response.assistantText?.trim() &&
+						response.toolCalls.length === 0 &&
+						!emptyResponseRetried
+					) {
+						emptyResponseRetried = true;
+						logger?.warn("turn_empty_response_retry", {
+							runId: this.options.runId,
+							sessionId: this.options.sessionId ?? null,
+							turnId,
+							step,
+							retry: 1,
+							maxRetries: 1,
+						});
+						reportProgress({
+							type: "context_checkpoint",
+							step,
+							turnId,
+							message: "Model returned an empty response; retrying once",
+						});
+						continue;
+					}
+					break;
 				}
 				lastModelElapsedMs = Date.now() - modelStartedAt;
 				lastResponseUsage = response.usage;
@@ -613,36 +626,11 @@ export class AgentRunner {
 
 				interruptController?.throwIfInterrupted();
 				const assistantText = response.assistantText?.trim() ?? "";
+				// An empty response already got its one retry inside the
+				// request loop (logged, identical payload). If it is still
+				// empty, surface the user-facing fallback and end the turn —
+				// the degenerate response itself was never persisted.
 				const outputText = assistantText || "No response generated.";
-
-				// A model response with no text and no tool calls is not a
-				// valid final answer — ending the turn here surfaces as
-				// "No response generated." and makes the agent look like it
-				// stopped for no reason. It is never persisted (D-ADR 0026:
-				// empty assistant responses are dropped); instead re-prompt
-				// with a note, bounded so a broken provider cannot spin the
-				// loop forever.
-				if (!assistantText) {
-					if (emptyResponseRetries < EMPTY_RESPONSE_MAX_RETRIES) {
-						emptyResponseRetries += 1;
-						retryNotes.push(createSystemMessage(EMPTY_RESPONSE_NOTE));
-						logger?.warn("turn_empty_response_retry", {
-							runId: this.options.runId,
-							sessionId: this.options.sessionId ?? null,
-							turnId,
-							step,
-							retry: emptyResponseRetries,
-							maxRetries: EMPTY_RESPONSE_MAX_RETRIES,
-						});
-						reportProgress({
-							type: "context_checkpoint",
-							step,
-							turnId,
-							message: "Model returned an empty response; retrying",
-						});
-						continue;
-					}
-				}
 
 				const contextUpdated = await persistPendingMessagesAndAnswer(
 					createAssistantMessage(outputText, undefined, {
@@ -834,12 +822,9 @@ export class AgentRunner {
 		}
 	}
 
-	private buildRequestMessages(
-		pending: Message[],
-		retryNotes: Message[],
-	): Message[] {
+	private buildRequestMessages(pending: Message[]): Message[] {
 		const messages = this.context.buildMessages(this.systemPrompt);
-		messages.push(...pending, ...retryNotes);
+		messages.push(...pending);
 		return messages;
 	}
 
