@@ -8,7 +8,7 @@
 -   (`chatContainer` of per-message components: user / assistant / tool-result /
 -   compaction), rendered by Pi-tui and scrolled by Pi-tui's viewport. The input
 -   `Editor`, status footer, and a `pending` area are persistent children.
-- - **Session selector** — a modal overlay shown on startup / `/session`; replaces
+- - **Session selector** — a modal overlay shown on startup; replaces
 -   the viewport while active, then returns to the chat `TUI`.
 -
 ## Core Rules

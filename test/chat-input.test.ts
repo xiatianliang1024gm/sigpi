@@ -338,12 +338,12 @@
 // 	input.write("\r");
 // 	output.end();
 //
-// 	// Typing "/s" narrows the slash suggestions to /summary and /session;
+// 	// Typing "/s" narrows the slash suggestions to /skill;
 // 	// Enter completes the selected (first) suggestion. Under Pi-tui's
 // 	// autocomplete the menu is an overlay, so we assert the completed value.
-// 	assert.equal(await resultPromise, "/summary");
+// 	assert.equal(await resultPromise, "/skill");
 // 	const rendered = await outputText;
-// 	assert.match(getVisibleOutput(rendered), /> \/summary/);
+// 	assert.match(getVisibleOutput(rendered), /> \/skill/);
 // });
 //
 // test("readChatInput clears the live input and status bar before final echo", async () => {
@@ -581,7 +581,7 @@
 // 	assert.match(visible, /> hi/);
 // 	const finalPromptIndex = rendered.lastIndexOf("> hi");
 // 	assert.notEqual(finalPromptIndex, -1);
-// 	assert.equal(rendered.slice(finalPromptIndex).includes("/summary -"), false);
+// 	assert.equal(rendered.slice(finalPromptIndex).includes("/skill -"), false);
 // });
 //
 // test("readChatInput clears whitespace-only input and waits for content", async () => {

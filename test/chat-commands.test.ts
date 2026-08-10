@@ -13,14 +13,7 @@ import { createTempDir, waitFor } from "./helpers.js";
 test("parseChatCommand matches supported slash commands", () => {
 	const commands = createChatCommandDefinitions();
 
-	for (const value of [
-		"/compact",
-		"/model",
-		"/session",
-		"/resume",
-		"/new",
-		"/exit",
-	]) {
+	for (const value of ["/compact", "/model", "/resume", "/new", "/exit"]) {
 		const parsed = parseChatCommand(value, commands);
 		assert.equal(parsed.kind, "command");
 		assert.equal(parsed.command.name, value);
@@ -728,16 +721,7 @@ test("getChatCommandSuggestions narrows matches by prefix", () => {
 
 	assert.deepEqual(
 		getChatCommandSuggestions("/", commands, 10).map((entry) => entry.name),
-		[
-			"/compact",
-			"/model",
-			"/session",
-			"/resume",
-			"/new",
-			"/exit",
-			"/tasks",
-			"/skill",
-		],
+		["/compact", "/model", "/resume", "/new", "/exit", "/tasks", "/skill"],
 	);
 	assert.deepEqual(
 		getChatCommandSuggestions("/re", commands).map((entry) => entry.name),

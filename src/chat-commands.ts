@@ -103,7 +103,6 @@ interface ChatCommandDependencies {
 const DOCUMENTED_CHAT_COMMAND_NAMES = [
 	"/compact",
 	"/model",
-	"/session",
 	"/resume",
 	"/new",
 	"/tasks",
@@ -235,33 +234,6 @@ export function createChatCommandDefinitions(
 					context.writeLine(formatModelList(state));
 					return { action: "continue" };
 				}
-				return { action: "continue" };
-			},
-		},
-		{
-			name: "/session",
-			description: "Show current session JSON",
-			handler: (context) => {
-				const session = context.getState().runtime.turn.getCurrentSession();
-
-				if (!session) {
-					context.writeLine("(no active session)");
-					return { action: "continue" };
-				}
-
-				context.writeLine(
-					JSON.stringify(
-						{
-							sessionId: session.sessionId,
-							title: session.title,
-							updatedAt: session.updatedAt,
-							turnCount: session.turnCount,
-							lastTurn: session.lastTurn,
-						},
-						null,
-						2,
-					),
-				);
 				return { action: "continue" };
 			},
 		},
