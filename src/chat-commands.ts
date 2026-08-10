@@ -10,7 +10,6 @@ import {
 	attachSessionFromSelector as defaultAttachSessionFromSelector,
 	getResumeAvailability as defaultGetResumeAvailability,
 } from "./chat-repl.js";
-import { formatContextWindowSummary } from "./context-summary.js";
 import { createModelProvider } from "./model/provider.js";
 import type { SessionStore } from "./session/store.js";
 import { setLastModelId } from "./state.js";
@@ -102,10 +101,8 @@ interface ChatCommandDependencies {
 }
 
 const DOCUMENTED_CHAT_COMMAND_NAMES = [
-	"/summary",
 	"/compact",
 	"/model",
-	"/session",
 	"/resume",
 	"/new",
 	"/tasks",
@@ -147,14 +144,6 @@ export function createChatCommandDefinitions(
 	}));
 
 	return [
-		{
-			name: "/summary",
-			description: "Show context window summary",
-			handler: (context) => {
-				context.writeLine(formatContextWindowSummary(context.getState()));
-				return { action: "continue" };
-			},
-		},
 		{
 			name: "/compact",
 			description: "Compact current context and save the snapshot",
@@ -245,33 +234,6 @@ export function createChatCommandDefinitions(
 					context.writeLine(formatModelList(state));
 					return { action: "continue" };
 				}
-				return { action: "continue" };
-			},
-		},
-		{
-			name: "/session",
-			description: "Show current session JSON",
-			handler: (context) => {
-				const session = context.getState().runtime.turn.getCurrentSession();
-
-				if (!session) {
-					context.writeLine("(no active session)");
-					return { action: "continue" };
-				}
-
-				context.writeLine(
-					JSON.stringify(
-						{
-							sessionId: session.sessionId,
-							title: session.title,
-							updatedAt: session.updatedAt,
-							turnCount: session.turnCount,
-							lastTurn: session.lastTurn,
-						},
-						null,
-						2,
-					),
-				);
 				return { action: "continue" };
 			},
 		},

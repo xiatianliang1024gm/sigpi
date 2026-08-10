@@ -611,26 +611,6 @@ test("update_plan progress renders a concise checklist instead of JSON", () => {
 	assert.doesNotMatch(progress.detail ?? "", /"status"/);
 });
 
-test("update_plan shows activeForm for the in_progress step", () => {
-	const describePlan = updatePlanTool.describeProgress;
-	assert.ok(describePlan);
-	const progress = describePlan({
-		plan: [
-			{ step: "Inspect logging", status: "completed" },
-			{
-				step: "Patch rendering",
-				status: "in_progress",
-				activeForm: "Patching the renderer",
-			},
-			{ step: "Run tests", status: "pending" },
-		],
-	});
-
-	assert.equal(progress.summary, "[2/3] Patching the renderer");
-	assert.match(progress.detail ?? "", /🔄 Patching the renderer/);
-	assert.doesNotMatch(progress.detail ?? "", /Patch rendering/);
-});
-
 test("update_plan summary reports all steps completed when every item is done", () => {
 	const describePlan = updatePlanTool.describeProgress;
 	assert.ok(describePlan);
@@ -666,40 +646,13 @@ test("update_plan summary counts the work position: completed plus in_progress",
 		plan: [
 			{ step: "Step A", status: "completed" },
 			{ step: "Step B", status: "completed" },
-			{ step: "Step C", status: "in_progress", activeForm: "Doing C" },
+			{ step: "Step C", status: "in_progress" },
 			{ step: "Step D", status: "pending" },
 		],
 	});
 
 	// Two done, working on step three → "[3/4]", not "[2/4]".
-	assert.equal(progress.summary, "[3/4] Doing C");
-});
-
-test("update_plan accepts blank activeForm on non-active steps", async () => {
-	const tools = new ToolRegistry([createUpdatePlanTool()]);
-
-	const result = await tools.execute(
-		{
-			id: "call_plan_blank_active_form",
-			name: "update_plan",
-			arguments: {
-				plan: [
-					{ step: "Inspect code", status: "completed", activeForm: "" },
-					{
-						step: "Patch behavior",
-						status: "in_progress",
-						activeForm: "Patching behavior",
-					},
-					{ step: "Run tests", status: "pending", activeForm: "" },
-				],
-			},
-			rawArguments: "{}",
-		},
-		{ cwd: process.cwd() },
-	);
-
-	assert.equal(result.ok, true);
-	assert.equal((result.data as { rendered: string }).rendered, "ok");
+	assert.equal(progress.summary, "[3/4] Step C");
 });
 
 test("write returns edit summary for TUI display", async () => {

@@ -3,7 +3,6 @@ type PlanStatus = "pending" | "in_progress" | "completed";
 interface PlanItem {
 	step: string;
 	status: PlanStatus;
-	activeForm?: string;
 }
 
 interface PlanView {
@@ -53,8 +52,7 @@ export function formatPlanProgressSummaryLine(view: PlanView): string {
 
 	const inProgress = view.items.find((item) => item.status === "in_progress");
 	if (inProgress) {
-		const label = inProgress.activeForm?.trim() || inProgress.step;
-		return `[${done}/${total}] ${label}`;
+		return `[${done}/${total}] ${inProgress.step}`;
 	}
 
 	return `[${completed}/${total}]`;
@@ -86,7 +84,7 @@ export function parsePlanArgs(
 		) {
 			continue;
 		}
-		const item = raw as { step: string; status: string; activeForm?: unknown };
+		const item = raw as { step: string; status: string };
 		const status = item.status;
 		if (
 			status !== "pending" &&
@@ -98,9 +96,6 @@ export function parsePlanArgs(
 		items.push({
 			step: item.step,
 			status,
-			...(typeof item.activeForm === "string" && item.activeForm.trim()
-				? { activeForm: item.activeForm.trim() }
-				: {}),
 		});
 	}
 

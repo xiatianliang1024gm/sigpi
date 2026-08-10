@@ -586,7 +586,7 @@ export class ConversationContext {
 	 * from the recent window. A measured `totalTokens` covered the whole
 	 * pre-compaction request, so it no longer reflects the shrunken window,
 	 * and `messageIndex` is stale once the array has been sliced. Until the
-	 * next model response re-records usage, the status bar, `/summary`, and
+	 * next model response re-records usage, the status bar and
 	 * the runner's in-turn estimate fall back to the chars/4 estimate — the
 	 * same computation that produced `tokensAfter`.
 	 *

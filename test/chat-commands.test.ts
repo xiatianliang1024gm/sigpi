@@ -13,15 +13,7 @@ import { createTempDir, waitFor } from "./helpers.js";
 test("parseChatCommand matches supported slash commands", () => {
 	const commands = createChatCommandDefinitions();
 
-	for (const value of [
-		"/summary",
-		"/compact",
-		"/model",
-		"/session",
-		"/resume",
-		"/new",
-		"/exit",
-	]) {
+	for (const value of ["/compact", "/model", "/resume", "/new", "/exit"]) {
 		const parsed = parseChatCommand(value, commands);
 		assert.equal(parsed.kind, "command");
 		assert.equal(parsed.command.name, value);
@@ -724,88 +716,12 @@ test("/exit reports when there is no active session", async () => {
 	assert.deepEqual(outputs, ["Exiting chat (no active session)."]);
 });
 
-test("/summary reports context structure instead of recent message bodies", async () => {
-	const outputs: string[] = [];
-	await executeChatCommand("/summary", createChatCommandDefinitions(), {
-		getState: () =>
-			({
-				runtime: {
-					context: {
-						getContextBudget: () => ({
-							hardContextLimit: 200_000,
-							reserveTokens: 16384,
-							keepRecentTokens: 20_000,
-						}),
-						getSummary: () => "compressed memory",
-						getLastUsage: () => null,
-						getRecentMessages: () => [
-							{ role: "user", content: "secret user text" },
-							{ role: "assistant", content: "assistant body" },
-							{
-								role: "tool",
-								name: "read",
-								toolCallId: "call_1",
-								content: '{"ok":true}',
-							},
-						],
-					},
-					systemPromptSections: [
-						{ id: "core", label: "Core instructions", content: "Be concise." },
-						{
-							id: "tools",
-							label: "Tool guidance",
-							content: "Use tools carefully.",
-						},
-						{
-							id: "skills",
-							label: "Skill guidance",
-							content: "No skills loaded.",
-						},
-					],
-					toolSchemas: [
-						{
-							type: "function",
-							function: {
-								name: "glob",
-								description: "List files",
-								parameters: { type: "object" },
-							},
-						},
-					],
-				},
-				loadedSkillNames: [],
-			}) as never,
-		setState: () => {},
-		store: {} as never,
-		writeLine: (line: string) => outputs.push(line),
-	});
-
-	assert.equal(outputs.length, 1);
-	assert.match(outputs[0] ?? "", /Context window:/);
-	assert.match(outputs[0] ?? "", /System prompt:/);
-	assert.match(outputs[0] ?? "", /Tool definitions:/);
-	assert.match(outputs[0] ?? "", /Summary memory:/);
-	assert.match(outputs[0] ?? "", /Recent uncompressed messages:/);
-	assert.equal((outputs[0] ?? "").includes("secret user text"), false);
-	assert.equal((outputs[0] ?? "").includes("assistant body"), false);
-});
-
 test("getChatCommandSuggestions narrows matches by prefix", () => {
 	const commands = createChatCommandDefinitions();
 
 	assert.deepEqual(
 		getChatCommandSuggestions("/", commands, 10).map((entry) => entry.name),
-		[
-			"/summary",
-			"/compact",
-			"/model",
-			"/session",
-			"/resume",
-			"/new",
-			"/exit",
-			"/tasks",
-			"/skill",
-		],
+		["/compact", "/model", "/resume", "/new", "/exit", "/tasks", "/skill"],
 	);
 	assert.deepEqual(
 		getChatCommandSuggestions("/re", commands).map((entry) => entry.name),
