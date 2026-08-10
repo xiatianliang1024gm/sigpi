@@ -10,7 +10,6 @@ import {
 	attachSessionFromSelector as defaultAttachSessionFromSelector,
 	getResumeAvailability as defaultGetResumeAvailability,
 } from "./chat-repl.js";
-import { formatContextWindowSummary } from "./context-summary.js";
 import { createModelProvider } from "./model/provider.js";
 import type { SessionStore } from "./session/store.js";
 import { setLastModelId } from "./state.js";
@@ -102,7 +101,6 @@ interface ChatCommandDependencies {
 }
 
 const DOCUMENTED_CHAT_COMMAND_NAMES = [
-	"/summary",
 	"/compact",
 	"/model",
 	"/session",
@@ -147,14 +145,6 @@ export function createChatCommandDefinitions(
 	}));
 
 	return [
-		{
-			name: "/summary",
-			description: "Show context window summary",
-			handler: (context) => {
-				context.writeLine(formatContextWindowSummary(context.getState()));
-				return { action: "continue" };
-			},
-		},
 		{
 			name: "/compact",
 			description: "Compact current context and save the snapshot",

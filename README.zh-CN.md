@@ -87,7 +87,7 @@ name     = "deepseek-v4-flash"
 ## 更多
 
 - **会话**：`pnpm dev session new --title "fix login bug"` / `pnpm dev session list`
-- **聊天内命令**：`/summary`、`/compact`、`/resume`、`/model`
+- **聊天内命令**：`/compact`、`/resume`、`/model`
 - **技能（Skills）**：把一个 `SKILL.md` 放进 `.sigpi/skills/`，agent 会自动加载。遵循 [Agent Skills 规范](https://agentskills.io/specification)。
 - **日志**：`~/.sigpi/logs/agent.log`，按天轮转
 

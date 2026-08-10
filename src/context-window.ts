@@ -1,19 +1,7 @@
 import { estimateMessageChars } from "./agent/messages.js";
-import type {
-	Message,
-	ModelUsage,
-	SystemPromptSection,
-	ToolSchema,
-} from "./types.js";
+import type { Message, ModelUsage, ToolSchema } from "./types.js";
 
-const SUMMARY_PREFIX = "Conversation summary from earlier turns:\n";
-const SUMMARY_TOKEN_PREFIX = SUMMARY_PREFIX;
-const MESSAGE_ROLE_ORDER: Message["role"][] = [
-	"system",
-	"user",
-	"assistant",
-	"tool",
-];
+const SUMMARY_TOKEN_PREFIX = "Conversation summary from earlier turns:\n";
 
 /**
  * Conservative token estimate using the `chars / 4` heuristic.
@@ -48,8 +36,8 @@ export function estimateRecentMessagesTokens(
 export function estimateToolSchemaTokens(
 	schemas: readonly ToolSchema[],
 ): number {
-	return groupToolSchemas(schemas).reduce(
-		(total, group) => total + group.tokens,
+	return schemas.reduce(
+		(total, schema) => total + Math.ceil(JSON.stringify(schema).length / 4),
 		0,
 	);
 }
@@ -67,15 +55,16 @@ function estimateSummaryTokens(summary: string): number {
 /**
  * Estimate total context tokens for a request.
  *
- * When `lastUsage` and `lastUsageMessageIndex` are both supplied, the function
- * uses the provider-reported `totalTokens` as the ground-truth context size
- * for the conversation up to (and including) the message at
- * `lastUsageMessageIndex`, then adds the cost of any messages appended after
- * that index via `estimateMessageTokens`. This mirrors the way the OpenAI /
- * Responses API `usage.total_tokens` reflects the entire request payload.
+ * Prefers the provider-reported `lastUsage` as ground truth: when `lastUsage`
+ * and `lastUsageMessageIndex` are both supplied (and the index is valid), the
+ * total is `lastUsage.totalTokens` — which already covers the system prompt,
+ * summary, tool schemas and every message up to and including
+ * `lastUsageMessageIndex` — plus the chars/4 cost of messages appended after
+ * that index and any pending user input.
  *
- * When `lastUsage` is missing, falls back to a full `chars / 4` estimate over
- * system prompt + summary + recent messages + tool schemas + pending input.
+ * Only when no usable `lastUsage` exists does it fall back to a full
+ * chars/4 estimate over system prompt + summary + recent messages + tool
+ * schemas + pending input.
  */
 export function estimateContextTokens(args: {
 	systemPrompt: string;
@@ -85,23 +74,7 @@ export function estimateContextTokens(args: {
 	pendingUserInput?: string;
 	lastUsage?: ModelUsage | null;
 	lastUsageMessageIndex?: number | null;
-}): {
-	totalTokens: number;
-	systemPromptTokens: number;
-	summaryTokens: number;
-	recentMessageTokens: number;
-	toolSchemaTokens: number;
-	pendingUserInputTokens: number;
-	usedUsage: boolean;
-} {
-	const systemPromptTokens = estimateSystemPromptTokens(args.systemPrompt);
-	const summaryTokens = args.summary ? estimateSummaryTokens(args.summary) : 0;
-	const recentMessageTokens = estimateRecentMessagesTokens(args.recentMessages);
-	const toolSchemaTokens = estimateToolSchemaTokens(args.toolSchemas);
-	const pendingUserInputTokens = args.pendingUserInput
-		? estimateMessageTokens({ role: "user", content: args.pendingUserInput })
-		: 0;
-
+}): { totalTokens: number; usedUsage: boolean } {
 	if (
 		args.lastUsage &&
 		typeof args.lastUsageMessageIndex === "number" &&
@@ -110,8 +83,8 @@ export function estimateContextTokens(args: {
 	) {
 		// The provider's totalTokens already accounted for system prompt,
 		// summary, messages up to and including `lastUsageMessageIndex`,
-		// and tool schemas. We only need to add tokens for messages appended
-		// after that index plus any pending user input.
+		// and tool schemas. Only messages appended after that index plus
+		// any pending user input need estimating.
 		let trailingTokens = 0;
 		for (
 			let i = args.lastUsageMessageIndex + 1;
@@ -123,102 +96,30 @@ export function estimateContextTokens(args: {
 
 		return {
 			totalTokens:
-				args.lastUsage.totalTokens + trailingTokens + pendingUserInputTokens,
-			systemPromptTokens,
-			summaryTokens,
-			recentMessageTokens,
-			toolSchemaTokens,
-			pendingUserInputTokens,
+				args.lastUsage.totalTokens +
+				trailingTokens +
+				(args.pendingUserInput
+					? estimateMessageTokens({
+							role: "user",
+							content: args.pendingUserInput,
+						})
+					: 0),
 			usedUsage: true,
 		};
 	}
 
 	return {
 		totalTokens:
-			systemPromptTokens +
-			summaryTokens +
-			recentMessageTokens +
-			toolSchemaTokens +
-			pendingUserInputTokens,
-		systemPromptTokens,
-		summaryTokens,
-		recentMessageTokens,
-		toolSchemaTokens,
-		pendingUserInputTokens,
+			estimateSystemPromptTokens(args.systemPrompt) +
+			(args.summary ? estimateSummaryTokens(args.summary) : 0) +
+			estimateRecentMessagesTokens(args.recentMessages) +
+			estimateToolSchemaTokens(args.toolSchemas) +
+			(args.pendingUserInput
+				? estimateMessageTokens({
+						role: "user",
+						content: args.pendingUserInput,
+					})
+				: 0),
 		usedUsage: false,
-	};
-}
-
-export function estimateSystemPromptSections(
-	sections: readonly SystemPromptSection[],
-): Array<{ label: string; tokens: number }> {
-	return sections.map((section) => {
-		const tokens = estimateSystemPromptTokens(section.content);
-		return {
-			label: section.label,
-			tokens,
-		};
-	});
-}
-
-export function groupToolSchemas(
-	schemas: readonly ToolSchema[],
-): Array<{ label: string; count: number; tokens: number }> {
-	const groups = new Map<
-		string,
-		{ label: string; count: number; tokens: number }
-	>([["built_in", { label: "Built-in tools", count: 0, tokens: 0 }]]);
-
-	for (const schema of schemas) {
-		const group = groups.get("built_in");
-		if (!group) {
-			continue;
-		}
-		const chars = JSON.stringify(schema).length;
-		group.count += 1;
-		group.tokens += Math.ceil(chars / 4);
-	}
-
-	return [...groups.values()].filter((group) => group.count > 0);
-}
-
-export function summarizeRecentMessagesByRole(messages: readonly Message[]): {
-	totalTokens: number;
-	totalCount: number;
-	byRole: Array<{
-		role: Message["role"];
-		count: number;
-		tokens: number;
-	}>;
-} {
-	const byRole = new Map<
-		Message["role"],
-		{
-			role: Message["role"];
-			count: number;
-			tokens: number;
-		}
-	>();
-	let totalTokens = 0;
-
-	for (const message of messages) {
-		const tokens = estimateMessageTokens(message);
-		totalTokens += tokens;
-		const current = byRole.get(message.role) ?? {
-			role: message.role,
-			count: 0,
-			tokens: 0,
-		};
-		current.count += 1;
-		current.tokens += tokens;
-		byRole.set(message.role, current);
-	}
-
-	return {
-		totalTokens,
-		totalCount: messages.length,
-		byRole: MESSAGE_ROLE_ORDER.map((role) => byRole.get(role)).filter(
-			(role): role is NonNullable<typeof role> => role !== undefined,
-		),
 	};
 }
