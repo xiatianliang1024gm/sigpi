@@ -24,9 +24,9 @@ import * as undici from "undici";
  *      up the proxy-aware fetch with no changes to its call sites.
  */
 
-export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
+const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
 
-export interface HttpProxyStatus {
+interface HttpProxyStatus {
 	/** Whether a proxy is in effect (from config or environment). */
 	configured: boolean;
 	/** Where the proxy URL came from. */
@@ -69,7 +69,7 @@ export function getProxyStatus(): HttpProxyStatus {
 	return { ...currentProxyStatus };
 }
 
-export function parseHttpIdleTimeoutMs(value: unknown): number | undefined {
+function parseHttpIdleTimeoutMs(value: unknown): number | undefined {
 	if (typeof value === "string") {
 		const trimmed = value.trim();
 		if (trimmed.toLowerCase() === "disabled") {
@@ -107,7 +107,7 @@ let installedGlobalFetch: typeof fetch | undefined;
  * Install a proxy-aware global HTTP dispatcher for `fetch`. Idempotent: the
  * global fetch swap happens at most once.
  */
-export function configureHttpDispatcher(
+function configureHttpDispatcher(
 	idleTimeoutMs: number = DEFAULT_HTTP_IDLE_TIMEOUT_MS,
 ): void {
 	if (installedGlobalFetch !== undefined) {

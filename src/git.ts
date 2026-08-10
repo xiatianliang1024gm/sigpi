@@ -262,7 +262,7 @@ function closeHeadWatcher(): void {
 }
 
 /** Callback fired when the cached branch changes, including the first sample. */
-export type BranchChangeListener = (branch: string) => void;
+type BranchChangeListener = (branch: string) => void;
 
 /** Current subscriber; a single consumer (the CLI) keeps this a singleton. */
 let branchChangeListener: BranchChangeListener | null = null;

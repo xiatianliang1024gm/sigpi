@@ -10,7 +10,7 @@
  * to the file's style instead of leaking into the diff.
  */
 
-export type LineEndingStyle = "\r\n" | "\n" | "\r";
+type LineEndingStyle = "\r\n" | "\n" | "\r";
 
 /** Normalize CRLF and legacy CR line endings to LF. */
 export function normalizeLineEndings(value: string): string {

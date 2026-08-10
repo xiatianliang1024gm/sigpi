@@ -69,7 +69,7 @@ export interface AgentRuntime {
 	setActiveModel: (model: ModelConfig) => void;
 }
 
-export interface CreateAgentRuntimeArgs {
+interface CreateAgentRuntimeArgs {
 	progressReporter?: ProgressReporter;
 	sessionId?: string;
 	sessionTitle?: string;
@@ -79,7 +79,7 @@ export interface CreateAgentRuntimeArgs {
 	store?: SessionStore;
 }
 
-export function createRuntimeLogger(config: AppConfig): RuntimeLogger {
+function createRuntimeLogger(config: AppConfig): RuntimeLogger {
 	return createLogger(config.logging);
 }
 
@@ -88,7 +88,6 @@ export function createRuntimeSessionStore(args?: {
 	config?: Pick<AppConfig, "storage">;
 	homeDir?: string;
 	sessionsRoot?: string;
-	logger?: RuntimeLogger;
 }): SessionStore {
 	const cwd = args?.cwd ?? process.cwd();
 	const sessionsRoot =
@@ -101,11 +100,10 @@ export function createRuntimeSessionStore(args?: {
 			cwd,
 			sessionsRoot,
 		}),
-		logger: args?.logger,
 	});
 }
 
-export async function loadRuntimeSkillCatalog(args: {
+async function loadRuntimeSkillCatalog(args: {
 	cwd?: string;
 	homeDir?: string;
 	logger?: RuntimeLogger;
@@ -136,7 +134,7 @@ export async function loadRuntimeSkillCatalog(args: {
 	return catalog;
 }
 
-export async function bootstrapSessionState(args: {
+async function bootstrapSessionState(args: {
 	store: SessionStore;
 	context: ConversationContext;
 	systemPromptFingerprint: string;
@@ -224,7 +222,6 @@ export async function createAgentRuntime(
 		createRuntimeSessionStore({
 			cwd,
 			config,
-			logger: runLogger,
 		});
 	const tools = createDefaultToolRegistry(shellRuntime, config.tools.bash);
 	// Holder for the *active* model so the context budget getter can track

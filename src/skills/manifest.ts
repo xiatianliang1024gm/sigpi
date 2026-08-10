@@ -1,7 +1,7 @@
 import { parse as parseYaml } from "yaml";
 import type { SkillFrontmatter } from "../types.js";
 
-export interface ParsedSkillDocument {
+interface ParsedSkillDocument {
 	frontmatter: SkillFrontmatter;
 	/** Full parsed frontmatter, including fields sigpi does not specialize. */
 	raw: Record<string, unknown>;

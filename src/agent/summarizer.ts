@@ -112,7 +112,7 @@ Structure your response as: an <analysis>...</analysis> block where you reason a
 
 Keep every section concise but precise. Quote identifiers, file paths, and error messages verbatim. The next turn depends on your summary to resume without re-reading files — missing details cause wasted work.`;
 
-export interface SummarizeArgs {
+interface SummarizeArgs {
 	systemPrompt: string;
 	/** Messages to summarize. The caller is responsible for micro-compacting tool results first. */
 	messages: Message[];

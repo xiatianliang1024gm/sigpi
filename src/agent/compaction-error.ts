@@ -1,6 +1,6 @@
 import type { ContextUpdateResult } from "../types.js";
 
-export type CompactionFailureReason = "truncated" | "empty" | "summarize_error";
+type CompactionFailureReason = "truncated" | "empty" | "summarize_error";
 
 /**
  * Raised when conversation compaction cannot produce a summary: the model
@@ -29,10 +29,4 @@ export class CompactionFailedError extends Error {
 		this.reason = options.reason;
 		this.trigger = options.trigger ?? null;
 	}
-}
-
-export function isCompactionFailedError(
-	error: unknown,
-): error is CompactionFailedError {
-	return error instanceof CompactionFailedError;
 }

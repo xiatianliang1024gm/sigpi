@@ -242,7 +242,7 @@ export interface ModelConfig {
 	keepRecentTokens?: number;
 }
 
-export interface AgentConfig {
+interface AgentConfig {
 	maxSteps: number;
 }
 
@@ -252,7 +252,7 @@ export interface LoggingConfig {
 	maxBodyPreviewChars: number;
 }
 
-export interface StorageConfig {
+interface StorageConfig {
 	sessionsRoot: string;
 }
 
@@ -272,7 +272,7 @@ export interface RunShellConfig {
 	envFile?: string;
 }
 
-export interface ToolsConfig {
+interface ToolsConfig {
 	bash: RunShellConfig;
 }
 
@@ -302,12 +302,12 @@ interface PartialConfig {
 	tools?: PartialToolsConfig;
 }
 
-export interface LoadAppConfigOptions {
+interface LoadAppConfigOptions {
 	env?: NodeJS.ProcessEnv;
 	homeDir?: string;
 }
 
-export interface InitializeUserConfigOptions {
+interface InitializeUserConfigOptions {
 	homeDir?: string;
 	overwrite?: boolean;
 }
@@ -394,12 +394,6 @@ export function getDefaultUserConfigPath(
 
 export function getDefaultSessionsRoot(homeDir: string = os.homedir()): string {
 	return path.join(homeDir, ".sigpi", "projects");
-}
-
-export function getDefaultGlobalSkillsDir(
-	homeDir: string = os.homedir(),
-): string {
-	return path.join(homeDir, ".sigpi", "skills");
 }
 
 export function getDefaultLogFilePath(homeDir: string = os.homedir()): string {

@@ -17,7 +17,6 @@ import {
 import type {
 	ModelUsage,
 	ProgressReporter,
-	SessionSummary,
 	ShellRuntime,
 	TurnProgressEvent,
 } from "./types.js";
@@ -33,13 +32,13 @@ export interface ChatReplState {
 	view: ReplView | null;
 }
 
-export interface AttachSessionResult {
+interface AttachSessionResult {
 	updatedState: ChatReplState;
 	selectedSessionId: string;
 	warnings: string[];
 }
 
-export type ResumeAvailability = { ok: true } | { ok: false; message: string };
+type ResumeAvailability = { ok: true } | { ok: false; message: string };
 
 export async function attachSessionFromSelector(
 	state: ChatReplState,
@@ -114,26 +113,6 @@ export function getResumeAvailability(
 	return { ok: true };
 }
 
-export function getActiveSessionSummary(
-	state: ChatReplState,
-): SessionSummary | null {
-	const session = state.runtime.turn.getCurrentSession();
-	if (!session) {
-		return null;
-	}
-
-	return {
-		sessionId: session.sessionId,
-		title: session.title,
-		lastCompletedUserInput: session.lastCompletedUserInput,
-		updatedAt: session.updatedAt,
-		cwd: session.cwd,
-		turnCount: session.turnCount,
-		lastTurnStatus: session.lastTurn?.status ?? null,
-		estimatedTokens: null,
-	};
-}
-
 export async function formatStatusBar(
 	state: ChatReplState,
 ): Promise<StatusBarModel> {
@@ -188,7 +167,7 @@ export function getCurrentWorkingDirectory(state: ChatReplState): string {
  * (started at user submit, stopped at the terminal event) and the stats of
  * the most recent finished turn, which stay visible while idle.
  */
-export interface StatusBarTurnContext {
+interface StatusBarTurnContext {
 	/** Epoch ms when the current turn started; `null`/absent while idle. */
 	turnStartedAt?: number | null;
 	/** Stats of the last finished turn, shown while idle until the next turn. */
@@ -239,7 +218,7 @@ export async function formatStatusBarForEvent(
  * budget, the working directory, and the cached git branch. The result is
  * handed to {@link StatusBarComponent} for rendering.
  */
-export async function buildStatusBarModel(
+async function buildStatusBarModel(
 	state: ChatReplState,
 	usedTokens: number | null,
 	usage: ModelUsage | null,
