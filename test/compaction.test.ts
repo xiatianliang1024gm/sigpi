@@ -8,7 +8,6 @@ import {
 import {
 	createAssistantMessage,
 	createToolMessage,
-	createUserMessage,
 } from "../src/agent/messages.js";
 import { ModelRequestError } from "../src/model/transport.js";
 import type { Message, ModelUsage, ToolSchema } from "../src/types.js";

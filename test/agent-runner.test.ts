@@ -718,7 +718,7 @@ test("gives up after the context_length_exceeded retry fails instead of looping"
 });
 
 test("never persists an empty model response", async () => {
-	const provider = new MockProvider((request, index) => {
+	const provider = new MockProvider((_request, index) => {
 		if (index === 0) {
 			return {
 				assistantText: null,

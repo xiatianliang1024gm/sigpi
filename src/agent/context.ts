@@ -121,7 +121,7 @@ export class ConversationContext {
 	 */
 	async appendMessages(
 		messages: Message[],
-		provider: ModelProvider,
+		_provider: ModelProvider,
 		systemPrompt: string,
 		toolSchemas: readonly ToolSchema[],
 		requestContext?: {
