@@ -243,9 +243,7 @@ export function getStatusEventLabel(
 		case "tool_execution_finished":
 			return "working";
 		case "interrupt_requested":
-			return event.interruptStage === "model"
-				? "cancelling"
-				: "interrupt requested";
+			return event.stage === "model" ? "cancelling" : "interrupt requested";
 		case "model_request_started":
 		case "model_delta":
 			return "thinking";

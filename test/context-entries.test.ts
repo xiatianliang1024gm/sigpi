@@ -181,7 +181,7 @@ test("hydrateState restores caller-supplied entries verbatim", () => {
 			{
 				kind: "message",
 				id: seedId,
-				turnId: 1,
+				turnId: "turn-1",
 				timestamp: "2026-07-08T00:00:00.000Z",
 				message: createUserMessage("restored input", { id: seedId }),
 			},

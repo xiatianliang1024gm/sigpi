@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { z } from "zod";
+import { CompactionFailedError } from "../src/agent/compaction-error.js";
 import { ConversationContext } from "../src/agent/context.js";
 import { AgentRunner, summarizeToolExecutions } from "../src/agent/runner.js";
 import {
 	TurnInterruptController,
 	TurnInterruptedError,
 } from "../src/interrupt.js";
+import { ModelRequestError } from "../src/model/transport.js";
+import { wireProgressLogging } from "../src/progress-logging.js";
 import { createDefaultToolRegistry } from "../src/tools/index.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { ExecutedToolCall, TurnProgressEvent } from "../src/types.js";
@@ -17,6 +20,16 @@ import {
 	stripMessageIds,
 	writeWorkspaceFile,
 } from "./helpers.js";
+
+/** Find a progress event of a specific type, narrowed to that type's payload. */
+function progressEventOf<K extends TurnProgressEvent["type"]>(
+	events: TurnProgressEvent[],
+	type: K,
+): Extract<TurnProgressEvent, { type: K }> | undefined {
+	return events.find((event) => event.type === type) as
+		| Extract<TurnProgressEvent, { type: K }>
+		| undefined;
+}
 
 test("returns direct model output without tools", async () => {
 	const provider = new MockProvider(() => ({
@@ -526,12 +539,9 @@ test("closes a dangling tool call when a tool aborts mid-execution on interrupt"
 	}
 });
 
-test("summarizes older context when the token threshold is exceeded", async () => {
+test("compacts before a request when the estimate exceeds the soft limit", async () => {
 	const provider = new MockProvider((request) => {
-		const summarizing =
-			request.tools.length === 0 && request.messages.length === 3;
-
-		if (summarizing) {
+		if (request.context?.purpose === "summary") {
 			return {
 				assistantText:
 					"User asked for a long explanation; keep the key facts only.",
@@ -550,7 +560,7 @@ test("summarizes older context when the token threshold is exceeded", async () =
 	const context = new ConversationContext({
 		summaryEnabled: true,
 		getContextBudget: () => ({
-			hardContextLimit: 35,
+			hardContextLimit: 40,
 			reserveTokens: 2,
 			keepRecentTokens: 5,
 		}),
@@ -560,123 +570,159 @@ test("summarizes older context when the token threshold is exceeded", async () =
 	const progressEvents: TurnProgressEvent[] = [];
 	const runner = new AgentRunner({
 		provider,
-		tools: createDefaultToolRegistry(),
+		tools: new ToolRegistry([]),
 		context,
 		systemPrompt: "You are a test agent.",
-		options: {
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
-	const longUserMessage =
-		"A very long message that should trigger summarization when combined with the system prompt and tool definitions. ".repeat(
-			6,
-		);
-	const longSecondMessage =
-		"Another long message that should keep pressure on context. ".repeat(6);
-	await runner.runTurn(longUserMessage);
+	// One short turn (~22 tokens: 10 system + 12 message) stays below the
+	// 38-token soft limit; the second turn's persisted window
+	// (10 + 12 + 8 + 11 = 41) crosses it and must compact before the request.
+	await runner.runTurn("A short but real user message.");
+	assert.equal(
+		context.getSummary(),
+		null,
+		"a single short turn must not trigger compaction",
+	);
 	progressEvents.length = 0;
-	const second = await runner.runTurn(longSecondMessage);
 
-	assert.equal(second.contextUpdated.summarized, true);
+	const second = await runner.runTurn("One more short user message.");
+
+	// The turn continued after the pre-request compaction and produced a real
+	// answer instead of failing or stopping.
+	assert.equal(second.outputText, "final response");
 	assert.equal(
 		context.getSummary(),
 		"User asked for a long explanation; keep the key facts only.",
 	);
-	assert.ok(context.getRecentMessages().length <= 2);
+	// The split summarized the older message and kept the recent one live.
+	const transcript = context
+		.getRecentMessages()
+		.map((message) => message.content ?? "")
+		.join("\n");
+	assert.doesNotMatch(transcript, /A short but real user message/);
+	assert.match(transcript, /One more short user message/);
 
-	const compactedEvent = progressEvents.find(
-		(event) => event.type === "context_compacted",
-	);
+	const compactedEvent = progressEventOf(progressEvents, "context_compacted");
 	assert.ok(
 		compactedEvent,
-		"token-triggered compaction must emit context_compacted",
+		"estimate-triggered compaction must emit context_compacted",
 	);
 	assert.equal(compactedEvent?.trigger, "token");
-	assert.ok(
-		(compactedEvent?.tokensAfter ?? 0) < (compactedEvent?.tokensBefore ?? 0),
-		"auto compaction must shrink the context window",
-	);
+	assert.equal(typeof compactedEvent?.tokensBefore, "number");
+	assert.equal(typeof compactedEvent?.tokensAfter, "number");
+
+	// Requests: first turn, summary request, second turn.
+	assert.equal(provider.requests.length, 3);
+	assert.equal(provider.requests[1]?.context?.purpose, "summary");
 });
 
-test("continues the turn after a token-triggered compaction instead of stopping", async () => {
+test("retries a provider context_length_exceeded after a forced compaction", async () => {
 	const provider = new MockProvider((request, index) => {
 		if (request.context?.purpose === "summary") {
 			return {
-				assistantText:
-					"The user wants a long task; the agent was mid-investigation; continue from the summary.",
+				assistantText: "Compacted summary of the failed request.",
 				toolCalls: [],
 				finishReason: "stop",
 			};
 		}
-		if (index === 1) {
-			// The model returned nothing usable (provider glitch), which is
-			// what makes the turn look like it "stopped" after compaction.
-			return {
-				assistantText: null,
-				toolCalls: [],
-				finishReason: "stop",
-			};
+		if (index === 0) {
+			throw new ModelRequestError(
+				"Model request exceeded the context window",
+				"context_length_exceeded",
+			);
 		}
 		return {
-			assistantText: "final continuation answer",
+			assistantText: "recovered answer",
 			toolCalls: [],
 			finishReason: "stop",
 		};
 	});
 
-	const context = new ConversationContext({
-		summaryEnabled: true,
-		getContextBudget: () => ({
-			hardContextLimit: 400,
-			reserveTokens: 100,
-			keepRecentTokens: 5,
-		}),
-		keepRecentMessagesFloor: 2,
-	});
-
+	const context = new ConversationContext({ summaryEnabled: true });
+	const progressEvents: TurnProgressEvent[] = [];
 	const runner = new AgentRunner({
 		provider,
 		tools: new ToolRegistry([]),
 		context,
 		systemPrompt: "You are a test agent.",
 	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
+	});
 
-	const longUserMessage =
-		"A very long message that should trigger summarization when combined with the system prompt and tool definitions. ".repeat(
-			6,
-		);
-	// Seed one turn so the token threshold is crossed by the second turn.
-	await runner.runTurn(longUserMessage);
+	const result = await runner.runTurn("hello");
 
-	const result = await runner.runTurn(longUserMessage);
-
-	// The compaction happened, but the turn continued and produced a real
-	// answer instead of ending with "No response generated.".
-	assert.equal(result.outputText, "final continuation answer");
-	assert.equal(result.steps, 2);
+	// The 400 was retried after a forced compaction and the turn completed.
+	assert.equal(result.outputText, "recovered answer");
 	assert.equal(
 		context.getSummary(),
-		"The user wants a long task; the agent was mid-investigation; continue from the summary.",
+		"Compacted summary of the failed request.",
 	);
-	// The continuation's append is below the threshold again, so the final
-	// append does not re-trigger a compaction.
-	assert.equal(result.contextUpdated.summarized, false);
-	// Requests: seed turn, empty response, summarization, continuation turn.
-	assert.equal(provider.requests.length, 4);
-	const continuationRequest = provider.requests[3];
-	assert.ok(continuationRequest);
-	assert.match(
-		JSON.stringify(continuationRequest.messages),
-		/compacted mid-task/,
+	// Requests: failed turn request, summary, retried turn request.
+	assert.equal(provider.requests.length, 3);
+	const compactedEvent = progressEventOf(progressEvents, "context_compacted");
+	assert.ok(compactedEvent, "force compaction must emit context_compacted");
+	assert.equal(compactedEvent?.trigger, "force");
+	// The persisted window shrank from [user] to [] (the user message was
+	// summarized); the summary itself is counted separately in tokensAfter.
+	assert.equal(typeof compactedEvent?.tokensBefore, "number");
+	assert.equal(typeof compactedEvent?.tokensAfter, "number");
+});
+
+test("gives up after the context_length_exceeded retry fails instead of looping", async () => {
+	const provider = new MockProvider((request) => {
+		if (request.context?.purpose === "summary") {
+			return {
+				assistantText: "shrunken summary",
+				toolCalls: [],
+				finishReason: "stop",
+			};
+		}
+		throw new ModelRequestError(
+			"Model request exceeded the context window",
+			"context_length_exceeded",
+		);
+	});
+
+	const runner = new AgentRunner({
+		provider,
+		tools: new ToolRegistry([]),
+		context: new ConversationContext({ summaryEnabled: true }),
+		systemPrompt: "You are a test agent.",
+	});
+
+	await assert.rejects(
+		runner.runTurn("hello"),
+		(error) =>
+			error instanceof ModelRequestError &&
+			error.kind === "context_length_exceeded",
+	);
+
+	// Initial request + exactly one retry (ADR 0026, D3: "retries the original
+	// request once"). The forced compaction summarized the only message, so no
+	// further summary requests fire — the retry fails the turn instead of
+	// looping the compact → 400 cycle.
+	assert.equal(provider.requests.length, 3);
+	assert.equal(
+		provider.requests.filter((request) => request.context?.purpose === "turn")
+			.length,
+		2,
+	);
+	assert.equal(
+		provider.requests.filter(
+			(request) => request.context?.purpose === "summary",
+		).length,
+		1,
 	);
 });
 
-test("retries an empty model response when the context has room", async () => {
+test("never persists an empty model response", async () => {
 	const provider = new MockProvider((_request, index) => {
-		if (index < 2) {
+		if (index === 0) {
 			return {
 				assistantText: null,
 				toolCalls: [],
@@ -684,307 +730,117 @@ test("retries an empty model response when the context has room", async () => {
 			};
 		}
 		return {
-			assistantText: "real answer after the glitch",
+			assistantText: "real answer",
 			toolCalls: [],
 			finishReason: "stop",
 		};
 	});
 
+	const context = new ConversationContext();
 	const runner = new AgentRunner({
 		provider,
 		tools: new ToolRegistry([]),
-		context: new ConversationContext(),
+		context,
 		systemPrompt: "You are a test agent.",
 	});
 
 	const result = await runner.runTurn("hello");
 
-	assert.equal(result.outputText, "real answer after the glitch");
-	assert.equal(result.steps, 3);
-	// Two retries are bounded: a third empty response must end the turn.
-	const alwaysEmpty = new MockProvider(() => ({
+	assert.equal(result.outputText, "real answer");
+	assert.equal(result.steps, 1);
+	// The empty response was retried, never appended: the transcript holds
+	// only the user input and the real answer.
+	assert.deepEqual(
+		stripMessageIds(context.getRecentMessages()).map((message) => message.role),
+		["user", "assistant"],
+	);
+	assert.equal(context.getRecentMessages()[1]?.content, "real answer");
+	// The retry is the identical request — no "please continue" note is
+	// injected; the empty response itself never reaches the provider twice
+	// with a modified payload.
+	assert.equal(provider.requests.length, 2);
+	assert.deepEqual(
+		provider.requests[1]?.messages,
+		provider.requests[0]?.messages,
+	);
+});
+
+test("stops after one empty-response retry instead of looping", async () => {
+	const provider = new MockProvider(() => ({
 		assistantText: null,
 		toolCalls: [],
 		finishReason: "stop",
 	}));
-	const boundedRunner = new AgentRunner({
-		provider: alwaysEmpty,
+
+	const context = new ConversationContext();
+	const runner = new AgentRunner({
+		provider,
 		tools: new ToolRegistry([]),
-		context: new ConversationContext(),
+		context,
 		systemPrompt: "You are a test agent.",
 	});
-	const bounded = await boundedRunner.runTurn("hello");
-	assert.equal(bounded.outputText, "No response generated.");
-	assert.equal(bounded.steps, 3);
+
+	const result = await runner.runTurn("hello");
+
+	// At most one retry: the first request comes back empty, the identical
+	// request is retried once, and a second empty response ends the turn with
+	// the user-facing fallback instead of spinning.
+	assert.equal(result.outputText, "No response generated.");
+	assert.equal(result.steps, 1);
+	assert.equal(provider.requests.length, 2);
+	// The empty response itself is never persisted — only the synthesized
+	// user-facing fallback message.
+	assert.deepEqual(
+		stripMessageIds(context.getRecentMessages()).map((message) => message.role),
+		["user", "assistant"],
+	);
+	assert.equal(
+		context.getRecentMessages()[1]?.content,
+		"No response generated.",
+	);
 });
 
-test("compacts oversized in-turn tool context while preserving current goal", async () => {
-	const progressEvents: TurnProgressEvent[] = [];
-	const tools = new ToolRegistry([
-		{
-			name: "large_read",
-			description: "Return a large file-like payload",
-			inputSchema: z.object({ label: z.string() }).strict(),
-			parameters: {
-				type: "object",
-				properties: {
-					label: { type: "string" },
-				},
-				required: ["label"],
-				additionalProperties: false,
-			},
-			execute: ({ label }) => ({
-				label,
-				content: `${label}:${"x".repeat(500)}`,
-			}),
-		},
-	]);
-	const provider = new MockProvider((request, index) => {
+test("surfaces insufficient compaction as a turn failure instead of silently dropping messages", async () => {
+	const provider = new MockProvider((request) => {
 		if (request.context?.purpose === "summary") {
-			const prompt = request.messages.at(-1)?.content ?? "";
-			assert.match(prompt, /Analyze the project and explain the architecture/);
-			assert.match(prompt, /large_read/);
 			return {
-				assistantText: [
-					"## Current Goal",
-					"Analyze the project and explain the architecture.",
-					"",
-					"## Work Done This Turn",
-					"- Read several large project files.",
-					"",
-					"## Key Findings",
-					"- Large read payloads were compacted.",
-					"",
-					"## Next Step",
-					"1. Continue analysis from the recent files.",
-				].join("\n"),
+				assistantText: "summary",
 				toolCalls: [],
 				finishReason: "stop",
 			};
 		}
-
-		if (index === 0) {
-			return {
-				assistantText: null,
-				toolCalls: [
-					{
-						id: "call_1",
-						name: "large_read",
-						arguments: { label: "one" },
-						rawArguments: '{"label":"one"}',
-					},
-				],
-				finishReason: "tool_calls",
-			};
-		}
-
-		if (index === 1) {
-			return {
-				assistantText: null,
-				toolCalls: [
-					{
-						id: "call_2",
-						name: "large_read",
-						arguments: { label: "two" },
-						rawArguments: '{"label":"two"}',
-					},
-				],
-				finishReason: "tool_calls",
-			};
-		}
-
-		if (index === 2) {
-			return {
-				assistantText: null,
-				toolCalls: [
-					{
-						id: "call_3",
-						name: "large_read",
-						arguments: { label: "three" },
-						rawArguments: '{"label":"three"}',
-					},
-				],
-				finishReason: "tool_calls",
-			};
-		}
-
-		const joinedMessages = request.messages
-			.map((message) => message.content ?? "")
-			.join("\n");
-		assert.match(joinedMessages, /Current turn checkpoint/);
-		assert.match(joinedMessages, /## Current Goal/);
-		assert.match(
-			joinedMessages,
-			/Analyze the project and explain the architecture/,
+		throw new ModelRequestError(
+			"Model request exceeded the context window",
+			"context_length_exceeded",
 		);
-		assert.doesNotMatch(joinedMessages, /one:x{100}/);
-		request.messages.forEach((message, messageIndex) => {
-			if (message.role !== "tool") {
-				return;
-			}
-			const previousMessage = request.messages[messageIndex - 1];
-			assert.equal(previousMessage?.role, "assistant");
-			assert.ok(previousMessage.toolCalls?.length);
-		});
-
-		return {
-			assistantText: "Architecture summary.",
-			toolCalls: [],
-			finishReason: "stop",
-		};
 	});
+
 	const context = new ConversationContext({
 		summaryEnabled: true,
 		getContextBudget: () => ({
-			hardContextLimit: 200,
-			reserveTokens: 10,
-			keepRecentTokens: 30,
+			hardContextLimit: 80,
+			reserveTokens: 2,
+			keepRecentTokens: 5,
 		}),
 	});
+	// The system prompt alone (~130 tokens) cannot fit the 78-token soft
+	// limit, so even a forced compaction cannot satisfy the D6 post-check.
 	const runner = new AgentRunner({
 		provider,
-		tools,
+		tools: new ToolRegistry([]),
 		context,
-		systemPrompt: "You are a test agent.",
-		options: {
-			maxSteps: 5,
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-		},
+		systemPrompt: `A very long system prompt ${"x".repeat(500)} padding.`,
 	});
 
-	const result = await runner.runTurn(
-		"Analyze the project and explain the architecture",
+	await assert.rejects(
+		runner.runTurn("hello"),
+		(error) =>
+			error instanceof CompactionFailedError &&
+			error.reason === "insufficient_compaction",
 	);
 
-	assert.equal(result.outputText, "Architecture summary.");
-	assert.equal(result.toolExecutions.length, 3);
-	assert.ok(
-		provider.requests.some((request) => request.context?.purpose === "summary"),
-	);
-	const checkpointEvent = progressEvents.find(
-		(event) => event.type === "context_checkpoint",
-	);
-	assert.match(
-		checkpointEvent?.message ?? "",
-		/checkpoint compacted current turn/,
-	);
-	assert.match(
-		checkpointEvent?.detail ?? "",
-		/estimated context before checkpoint/,
-	);
-	const compactedEvent = progressEvents.find(
-		(event) => event.type === "context_compacted",
-	);
-	assert.match(
-		compactedEvent?.message ?? "",
-		/Checkpoint compacted current turn/,
-	);
-	assert.equal(typeof compactedEvent?.tokensBefore, "number");
-	assert.equal(typeof compactedEvent?.tokensAfter, "number");
-	assert.ok(
-		(compactedEvent?.tokensAfter ?? 0) < (compactedEvent?.tokensBefore ?? 0),
-		"checkpoint compaction must shrink the context window",
-	);
-});
-
-test("checkpoint goal uses prior task when the user says continue", async () => {
-	const progressEvents: TurnProgressEvent[] = [];
-	const tools = new ToolRegistry([
-		{
-			name: "large_read",
-			description: "Return a large file-like payload",
-			inputSchema: z.object({ label: z.string() }).strict(),
-			parameters: {
-				type: "object",
-				properties: {
-					label: { type: "string" },
-				},
-				required: ["label"],
-				additionalProperties: false,
-			},
-			execute: ({ label }) => ({
-				label,
-				content: `${label}:${"x".repeat(500)}`,
-			}),
-		},
-	]);
-	const context = new ConversationContext({
-		summaryEnabled: true,
-		getContextBudget: () => ({
-			hardContextLimit: 200,
-			reserveTokens: 10,
-			keepRecentTokens: 30,
-		}),
-	});
-	context.hydrateState({
-		summary:
-			"## Goal\n分析当前项目\n\n## Next Steps\n1. Continue reading source files.",
-		recentMessages: [
-			{ role: "user", content: "分析当前项目" },
-			{ role: "assistant", content: "I started inspecting the project." },
-		],
-	});
-	const provider = new MockProvider((request, index) => {
-		if (request.context?.purpose === "summary") {
-			const prompt = request.messages.at(-1)?.content ?? "";
-			// The transcript contains the user input "继续" from this turn.
-			assert.match(prompt, /继续/);
-			// The checkpoint template instructs the model to restate the goal.
-			assert.match(prompt, /## Current Goal/);
-			return {
-				assistantText: "## Current Goal\n分析当前项目",
-				toolCalls: [],
-				finishReason: "stop",
-			};
-		}
-
-		if (index < 3) {
-			const label = `read-${index + 1}`;
-			return {
-				assistantText: null,
-				toolCalls: [
-					{
-						id: `call_${index + 1}`,
-						name: "large_read",
-						arguments: { label },
-						rawArguments: JSON.stringify({ label }),
-					},
-				],
-				finishReason: "tool_calls",
-			};
-		}
-
-		return {
-			assistantText: "继续完成分析。",
-			toolCalls: [],
-			finishReason: "stop",
-		};
-	});
-	const runner = new AgentRunner({
-		provider,
-		tools,
-		context,
-		systemPrompt: "You are a test agent.",
-		options: {
-			maxSteps: 5,
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-		},
-	});
-
-	await runner.runTurn("继续");
-
-	const checkpointEvent = progressEvents.find(
-		(event) => event.type === "context_checkpoint",
-	);
-	assert.match(
-		checkpointEvent?.message ?? "",
-		/checkpoint compacted current turn/,
-	);
-	assert.doesNotMatch(checkpointEvent?.message ?? "", /继续/);
+	// D4: nothing was dropped — the user message is still in the transcript.
+	assert.equal(context.getRecentMessages().length, 1);
 });
 
 test("runner emits progress events during multi-step execution", async () => {
@@ -1021,10 +877,10 @@ test("runner emits progress events during multi-step execution", async () => {
 		systemPrompt: "You are a test agent.",
 		options: {
 			workingDirectory: cwd,
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
 		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	const result = await runner.runTurn("find TypeScript files");
@@ -1052,19 +908,18 @@ test("runner emits progress events during multi-step execution", async () => {
 		],
 	);
 	assert.equal(
-		progressEvents.find((event) => event.type === "assistant_message")
-			?.assistantText,
+		progressEventOf(progressEvents, "assistant_message")?.text,
 		"I will find the matching file first.",
 	);
 	assert.equal(
-		progressEvents.find((event) => event.type === "tool_execution_started")
-			?.message,
+		progressEventOf(progressEvents, "tool_execution_started")?.message,
 		'find files matching "src/**/*.ts"',
 	);
-	const toolFinishedEvent = progressEvents.find(
-		(event) => event.type === "tool_execution_finished",
+	const toolFinishedEvent = progressEventOf(
+		progressEvents,
+		"tool_execution_finished",
 	);
-	assert.match(toolFinishedEvent?.toolResult ?? "", /src\/demo\.ts/);
+	assert.match(toolFinishedEvent?.result ?? "", /src\/demo\.ts/);
 });
 
 test("runner progress includes structured file edit results", async () => {
@@ -1105,23 +960,21 @@ test("runner progress includes structured file edit results", async () => {
 			maxSteps: 4,
 			temperature: 0,
 			workingDirectory: cwd,
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
 		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	await runner.runTurn("update demo");
 
-	const toolFinishedEvent = progressEvents.find(
-		(event) => event.type === "tool_execution_finished",
+	const toolFinishedEvent = progressEventOf(
+		progressEvents,
+		"tool_execution_finished",
 	);
 	assert.equal(toolFinishedEvent?.toolName, "write");
-	assert.equal(toolFinishedEvent?.toolResult ?? "", "ok");
-	assert.match(
-		JSON.stringify(toolFinishedEvent?.toolResultData),
-		/"editSummary"/,
-	);
+	assert.equal(toolFinishedEvent?.result ?? "", "ok");
+	assert.match(JSON.stringify(toolFinishedEvent?.data), /"editSummary"/);
 });
 
 test("runner progress includes shell command detail", async () => {
@@ -1154,22 +1007,23 @@ test("runner progress includes shell command detail", async () => {
 		tools: createDefaultToolRegistry(),
 		context: new ConversationContext(),
 		systemPrompt: "You are a test agent.",
-		options: {
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	await runner.runTurn("where am i?");
 
 	const shellEvent = progressEvents.find(
-		(event) =>
-			event.type === "tool_execution_started" && event.toolName === "bash",
+		(
+			event,
+		): event is Extract<
+			TurnProgressEvent,
+			{ type: "tool_execution_started" }
+		> => event.type === "tool_execution_started" && event.toolName === "bash",
 	);
 
 	assert.equal(shellEvent?.message, "shell pwd");
-	assert.equal(shellEvent?.detail, undefined);
 });
 
 test("summarizeToolExecutions records only file read/modify ops (ADR-0022)", () => {
@@ -1262,11 +1116,9 @@ test("turn_finished estimate uses provider usage, not the chars/4 fallback", asy
 		tools: createDefaultToolRegistry(),
 		context: new ConversationContext(),
 		systemPrompt: "You are a test agent.",
-		options: {
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	await runner.runTurn("first question");
@@ -1335,21 +1187,19 @@ test("turn_finished reports accumulated provider usage across the turn", async (
 		systemPrompt: "You are a test agent.",
 		options: {
 			workingDirectory: process.cwd(),
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
-			logger,
 		},
 	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
+	});
+	wireProgressLogging(runner, logger);
 
 	const result = await runner.runTurn("do the thing");
 	assert.equal(result.outputText, "Done.");
 
-	const finished = progressEvents.find(
-		(event) => event.type === "turn_finished",
-	);
+	const finished = progressEventOf(progressEvents, "turn_finished");
 	assert.ok(finished, "expected a turn_finished event");
-	assert.deepEqual(finished.turnTokens, {
+	assert.deepEqual(finished.usage, {
 		input: 2_200,
 		output: 700,
 		cacheRead: 100,
@@ -1382,17 +1232,15 @@ test("terminal events omit turnTokens when the provider reports no usage", async
 		systemPrompt: "You are a test agent.",
 		options: {
 			workingDirectory: process.cwd(),
-			progressReporter: (event) => {
-				progressEvents.push(event);
-			},
 		},
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
 	});
 
 	await runner.runTurn("hello");
 
-	const finished = progressEvents.find(
-		(event) => event.type === "turn_finished",
-	);
+	const finished = progressEventOf(progressEvents, "turn_finished");
 	assert.ok(finished);
-	assert.equal(finished.turnTokens, undefined);
+	assert.equal(finished.usage, null);
 });

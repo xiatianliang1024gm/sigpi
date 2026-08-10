@@ -52,8 +52,7 @@ test("session runtime persists successful turns", async () => {
 	assert.equal(persisted.turnCount, 1);
 	assert.equal(persisted.lastCompletedUserInput, "continue task");
 	assert.equal(persisted.lastTurn?.status, "completed");
-	assert.equal(persisted.turns.length, 1);
-	assert.equal(persisted.turns[0]?.assistantOutput, "final response");
+	assert.equal(persisted.lastTurn?.assistantOutput, "final response");
 });
 
 test("session runtime persists failed-turn recovery context and can continue in-process", async () => {
@@ -118,10 +117,6 @@ test("session runtime persists failed-turn recovery context and can continue in-
 	assert.match(recent[2]?.content ?? "", /src\/demo\.ts/);
 	assert.equal(persisted.lastTurn?.status, "failed");
 	assert.equal(persisted.lastCompletedUserInput, null);
-	assert.equal(persisted.turns.length, 1);
-	assert.equal(persisted.turns[0]?.status, "failed");
-	assert.equal(persisted.turns[0]?.assistantOutput, null);
-	assert.equal(persisted.turns[0]?.toolExecutions.length, 0);
 
 	const continueProvider = new MockProvider((request) => {
 		const conversationMessages = request.messages.filter(
@@ -311,10 +306,6 @@ test("session runtime persists interrupted turns without incrementing turnCount"
 	assert.equal(persisted.lastTurn?.status, "interrupted");
 	assert.equal(persisted.lastTurn?.interruptSource, "user_escape");
 	assert.equal(persisted.lastTurn?.interruptStage, "model");
-	assert.equal(persisted.turns.length, 1);
-	assert.equal(persisted.turns[0]?.status, "interrupted");
-	assert.equal(persisted.turns[0]?.interruptSource, "user_escape");
-	assert.equal(persisted.turns[0]?.interruptStage, "model");
 	assert.deepEqual(
 		stripMessageIds(
 			deriveContextStateFromEntries(persisted.entries).recentMessages,

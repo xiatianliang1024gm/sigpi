@@ -18,11 +18,7 @@ import type { BackgroundTaskManager } from "./tools/background.js";
 import { formatCompactNumber } from "./tui/status-bar.js";
 import { defaultSelectListTheme } from "./tui/themes.js";
 import { replaySessionIntoView } from "./tui/transcript-replay.js";
-import type {
-	ContextUpdateResult,
-	LoadedSkill,
-	ProgressReporter,
-} from "./types.js";
+import type { ContextUpdateResult, LoadedSkill } from "./types.js";
 
 export interface ChatCommandMetadata {
 	name: string;
@@ -34,7 +30,6 @@ export interface ChatCommandContext {
 	getState(): ChatReplState;
 	setState(state: ChatReplState): void;
 	store: SessionStore;
-	progressReporter?: ProgressReporter;
 	writeLine(line: string): void;
 	/**
 	 * Optional abort signal sourced from the surrounding chat loop (e.g.
@@ -180,14 +175,14 @@ export function createChatCommandDefinitions(
 							`Compaction failed: ${error.message} (reason: ${error.reason}).`,
 						);
 						context.writeLine(
-							"Your messages are saved. The context was trimmed if it exceeded the limit; run /compact again later to generate a summary.",
+							"Your messages are saved. Nothing was dropped — compaction only ever summarizes; fix the configuration or retry /compact when the context is smaller.",
 						);
 						return { action: "continue" };
 					}
 					throw error;
 				}
 
-				if (!result.summarized && !result.trimmed) {
+				if (!result.summarized) {
 					context.writeLine(
 						`Nothing to compact. Context window: ${formatCompactNumber(result.tokensAfter)} tokens.`,
 					);
@@ -299,7 +294,6 @@ export function createChatCommandDefinitions(
 				const attached = await attachSessionFromSelector(
 					context.getState(),
 					context.store,
-					context.progressReporter,
 				);
 
 				if (!attached) {
@@ -314,6 +308,7 @@ export function createChatCommandDefinitions(
 				replaySessionIntoView(
 					context.getState().view,
 					attached.updatedState.runtime.session,
+					attached.updatedState.runtime.tools,
 				);
 				context.writeLine(`Attached session: ${attached.selectedSessionId}`);
 				for (const warning of attached.warnings) {
@@ -326,13 +321,14 @@ export function createChatCommandDefinitions(
 			name: "/new",
 			description: "Start a fresh session",
 			handler: async (context) => {
-				const attached = await attachNewSession(context.progressReporter);
+				const attached = await attachNewSession();
 				context.setState(attached.updatedState);
 				// A fresh session has no messages: clear the previous session's
 				// transcript from the terminal (editor and status bar are kept).
 				replaySessionIntoView(
 					context.getState().view,
 					attached.updatedState.runtime.session,
+					attached.updatedState.runtime.tools,
 				);
 				context.writeLine(`Started new session: ${attached.selectedSessionId}`);
 				for (const warning of attached.warnings) {

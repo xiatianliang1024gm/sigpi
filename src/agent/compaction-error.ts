@@ -1,17 +1,21 @@
 import type { ContextUpdateResult } from "../types.js";
 
-type CompactionFailureReason = "truncated" | "empty" | "summarize_error";
+type CompactionFailureReason =
+	| "truncated"
+	| "empty"
+	| "summarize_error"
+	| "insufficient_compaction";
 
 /**
  * Raised when conversation compaction cannot produce a summary: the model
- * output was truncated, the model returned nothing usable, or the provider
- * errored.
+ * output was truncated, the model returned nothing usable, the provider
+ * errored, or the post-compaction window still overflows the soft limit (D6).
  *
  * sigpi intentionally has no deterministic fallback summary (matching pi and
  * Claude Code). Instead the failure is surfaced to the caller, which decides
- * how to degrade: `runner.ts` catches it for automatic turns and continues
- * (tokens are already bounded by `trimToHardLimit`), while the `/compact`
- * command surfaces a clear message to the user.
+ * how to degrade: the `/compact` command surfaces a clear message to the
+ * user, and the runner lets the turn fail rather than silently dropping
+ * messages (D4 — no silent trimming, ever).
  */
 export class CompactionFailedError extends Error {
 	readonly reason: CompactionFailureReason;

@@ -20,10 +20,19 @@ The two line kinds in a turn summary. `Read <path>` for the `read` tool; `Modifi
 (modified wins, one line per path).
 
 ### Compaction
-Context compression that replaces old messages with a structured summary
-(`src/agent/summarizer.ts`, `src/agent/context.ts`). Produces the working-context checkpoint; the
-turn summary is a separate, user-facing artifact.
+The single context-compression path (ADR 0026): old messages are summarized
+when the token budget is exceeded (auto) or on `/compact` (force). Two pure
+interfaces — `decide` (pure check + split) and `execute` (summarize, returns
+`{summary, usage}`) — orchestrated by `ConversationContext.compact()`
+(`src/agent/compaction.ts`, `src/agent/context.ts`). The
+turn summary is a separate, user-facing artifact. Retired: turn checkpoint,
+`Compactor` class, `trimToHardLimit`.
 
 ## ADR Index
 
-No ADRs are currently maintained. See `AGENTS.md` for the reading path.
+- **ADR 0026** — Compaction refactor: one compaction path, two triggers, two pure
+  interfaces. `docs/adr/0026-compaction-refactor.md` (first standalone ADR file;
+  prior ADR numbers in `CONTEXT.md` are historical back-references with no files).
+  See `AGENTS.md` for the reading path.
+- **ADR 0027** — Drop turn history from the session meta file.
+  `docs/adr/0027-drop-turn-history.md`.

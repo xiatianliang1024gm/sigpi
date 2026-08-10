@@ -17,11 +17,8 @@ import type {
 	SessionEntry,
 	ToolSchema,
 } from "../types.js";
-import {
-	Compactor,
-	type CompactorDeps,
-	microCompactMessages,
-} from "./compactor.js";
+import { decide, execute, microCompactMessages } from "./compaction.js";
+import { CompactionFailedError } from "./compaction-error.js";
 
 // Re-export for backwards compatibility (tests and potential consumers)
 export { microCompactMessages };
@@ -37,6 +34,8 @@ const DEFAULT_CONTEXT_OPTIONS: ContextManagerOptions = {
 	summaryEnabled: true,
 	keepRecentMessagesFloor: 4,
 };
+
+const DEFAULT_KEEP_RECENT_MESSAGES_FLOOR = 4;
 
 export class ConversationContext {
 	private readonly options: ContextManagerOptions;
@@ -65,43 +64,12 @@ export class ConversationContext {
 	 * at or before `messageIndex` from `recentMessages`.
 	 */
 	private lastUsage: { usage: ModelUsage; messageIndex: number } | null = null;
-	private readonly compactor: Compactor;
 
 	constructor(options: Partial<ContextManagerOptions> = {}) {
 		this.options = { ...DEFAULT_CONTEXT_OPTIONS, ...options };
 		this.logger = this.options.logger;
 		this.runId = this.options.runId;
 		this.sessionId = this.options.sessionId ?? null;
-
-		const deps: CompactorDeps = {
-			getSummary: () => this.summary,
-			setSummary: (v) => {
-				this.summary = v;
-			},
-			getRecentMessages: () => this.recentMessages,
-			setRecentMessages: (v) => {
-				this.recentMessages = v;
-			},
-			getEntries: () => this.entries,
-			setEntries: (v) => {
-				this.entries = v;
-			},
-			getLastUsage: () => this.lastUsage,
-			setLastUsage: (v) => {
-				this.lastUsage = v;
-			},
-			getKeepRecentMessagesFloor: () =>
-				this.options.keepRecentMessagesFloor ??
-				Compactor.DEFAULT_KEEP_RECENT_MESSAGES_FLOOR,
-			isSummaryEnabled: () => this.options.summaryEnabled,
-			getRunId: () => this.runId,
-			getSessionId: () => this.sessionId,
-			getLogger: () => this.logger,
-			getBudget: () => this.getContextBudget(),
-			estimateRequest: (...args) => this.estimateRequest(...args),
-			recordCompactionEntry: (args) => this.recordCompaction(args),
-		};
-		this.compactor = new Compactor(deps);
 	}
 
 	bindSession(sessionId: string | null): void {
@@ -146,9 +114,14 @@ export class ConversationContext {
 		return messages;
 	}
 
+	/**
+	 * Append messages to the context state. Pure append: compaction decisions
+	 * are no longer made here (ADR 0026, D6 — `decide` runs once per request,
+	 * immediately before each `generate`, never per append).
+	 */
 	async appendMessages(
 		messages: Message[],
-		provider: ModelProvider,
+		_provider: ModelProvider,
 		systemPrompt: string,
 		toolSchemas: readonly ToolSchema[],
 		requestContext?: {
@@ -165,12 +138,14 @@ export class ConversationContext {
 			abortSignal?: AbortSignal;
 		},
 	): Promise<ContextUpdateResult> {
+		const previousRecentMessageCount = this.recentMessages.length;
+		const previousSummaryChars = this.summary?.length ?? 0;
 		const tagged = ensureMessageIds(messages);
 		this.recentMessages.push(...tagged);
 		this.entries = appendMessageEntries({
 			entries: this.entries,
 			messages: tagged,
-			turnId: parseTurnId(requestContext?.turnId),
+			turnId: requestContext?.turnId ?? null,
 			timestamp: new Date().toISOString(),
 			usage: options?.usage,
 		});
@@ -190,11 +165,27 @@ export class ConversationContext {
 			}
 		}
 
-		return this.compact(provider, systemPrompt, toolSchemas, requestContext, {
-			abortSignal: options?.abortSignal,
-		});
+		const estimated = this.estimateRequest(systemPrompt, toolSchemas);
+
+		return {
+			summarized: false,
+			summary: this.summary,
+			recentMessageCount: this.recentMessages.length,
+			previousRecentMessageCount,
+			summaryChars: this.summary?.length ?? 0,
+			previousSummaryChars,
+			tokensBefore: estimated.totalTokens,
+			tokensAfter: this.estimateRequest(systemPrompt, toolSchemas).totalTokens,
+			trigger: null,
+		};
 	}
 
+	/**
+	 * Append recovery messages (e.g. synthetic tool results that close
+	 * dangling tool calls after an interrupt) without any compaction side
+	 * effects. Recovery bypasses the model, so any prior usage no longer
+	 * reflects the recovered tail.
+	 */
 	appendRecoveryMessages(
 		messages: Message[],
 		systemPrompt: string,
@@ -203,30 +194,24 @@ export class ConversationContext {
 			turnId?: string;
 		},
 	): ContextUpdateResult {
+		const previousRecentMessageCount = this.recentMessages.length;
+		const previousSummaryChars = this.summary?.length ?? 0;
 		const tagged = ensureMessageIds(messages);
 		this.recentMessages.push(...tagged);
 		this.entries = appendMessageEntries({
 			entries: this.entries,
 			messages: tagged,
-			turnId: parseTurnId(requestContext?.turnId),
+			turnId: requestContext?.turnId ?? null,
 			timestamp: new Date().toISOString(),
 		});
 		// Recovery bypasses the model, so any prior usage no longer reflects
 		// the recovered tail.
 		this.lastUsage = null;
 
-		const previousRecentMessageCount = this.recentMessages.length;
-		const previousSummaryChars = this.summary?.length ?? 0;
 		const estimated = this.estimateRequest(systemPrompt, toolSchemas);
-		const trimmed = this.trimToHardLimit(
-			systemPrompt,
-			toolSchemas,
-			requestContext,
-		);
 
 		return {
 			summarized: false,
-			trimmed,
 			summary: this.summary,
 			recentMessageCount: this.recentMessages.length,
 			previousRecentMessageCount,
@@ -250,13 +235,11 @@ export class ConversationContext {
 			abortSignal?: AbortSignal;
 		},
 	): Promise<ContextUpdateResult> {
-		return this.compactor.compactNow(
-			provider,
-			systemPrompt,
-			toolSchemas,
-			requestContext,
-			options,
-		);
+		return this.compact(provider, systemPrompt, toolSchemas, requestContext, {
+			force: true,
+			instructions: options?.instructions,
+			abortSignal: options?.abortSignal,
+		});
 	}
 
 	getSummary(): string | null {
@@ -339,6 +322,7 @@ export class ConversationContext {
 		tokensBefore: number;
 		tokensAfter?: number;
 		customInstructions?: string;
+		usage?: ModelUsage;
 	}): void {
 		const firstKeptEntryId = this.recentMessages[0]?.id ?? null;
 		const keptMessages = this.recentMessages.length;
@@ -355,9 +339,16 @@ export class ConversationContext {
 			summarizedMessages: args.summarizedCount,
 			triggeredBy,
 			customInstructions: args.customInstructions,
+			usage: args.usage,
 		});
 	}
 
+	/**
+	 * Token snapshot of the current request shape using the best available
+	 * information (provider-reported `lastUsage` when present, else the
+	 * chars/4 heuristic). Used for `tokensBefore` / `tokensAfter` in
+	 * compaction results; the *trigger* decision lives in `decide` (D6).
+	 */
 	private estimateRequest(
 		systemPrompt: string,
 		toolSchemas: readonly ToolSchema[],
@@ -390,6 +381,21 @@ export class ConversationContext {
 		};
 	}
 
+	/**
+	 * The single compaction path (ADR 0026, D2): a thin orchestrator around
+	 * the two pure functions `decide` and `execute`. Called by the runner
+	 * once per request when the estimate exceeds the soft limit, on a
+	 * `context_length_exceeded` retry (force), and by `/compact` (force).
+	 *
+	 * 1. `decide` — pure threshold + split computation.
+	 * 2. If `shouldCompact` and `splitIndex > 0`: `execute` (summarize) then
+	 *    apply: set summary, slice recent messages, invalidate the usage
+	 *    baseline, record a `CompactionEntry` (carrying `usage`, D7).
+	 * 3. Post-compaction check (D6): re-estimates; if the window still
+	 *    overflows the soft limit after a compaction ran, throws
+	 *    `CompactionFailedError` with `reason: "insufficient_compaction"` —
+	 *    the user fixes the configuration; nothing is silently dropped (D4).
+	 */
 	async compact(
 		provider: ModelProvider,
 		systemPrompt: string,
@@ -401,28 +407,204 @@ export class ConversationContext {
 			force?: boolean;
 			instructions?: string;
 			abortSignal?: AbortSignal;
+			pendingUserInput?: string;
 		},
 	): Promise<ContextUpdateResult> {
-		return this.compactor.compact(
-			provider,
+		const previousRecentMessageCount = this.recentMessages.length;
+		const previousSummaryChars = this.summary?.length ?? 0;
+		const tokensBefore = this.estimateRequest(
 			systemPrompt,
 			toolSchemas,
-			requestContext,
-			options,
-		);
+		).totalTokens;
+		let summarized = false;
+		let summarizedCount = 0;
+		let trigger: ContextUpdateResult["trigger"] = null;
+
+		const budget = this.getContextBudget();
+		const floor =
+			this.options.keepRecentMessagesFloor ??
+			DEFAULT_KEEP_RECENT_MESSAGES_FLOOR;
+		const messages = [...this.recentMessages];
+
+		const decision = decide({
+			messages,
+			budget,
+			keepRecentFloor: floor,
+			systemPrompt,
+			toolSchemas,
+			pendingUserInput: options?.pendingUserInput,
+			force: options?.force,
+		});
+
+		let compactionInstructions: string | undefined;
+		let newSummary: string | null = null;
+		let newRecentMessages: Message[] = messages;
+		let usage: ModelUsage | undefined;
+
+		if (
+			this.options.summaryEnabled &&
+			decision.shouldCompact &&
+			decision.splitIndex > 0
+		) {
+			trigger = options?.force ? "force" : "token";
+			const messagesToSummarize = messages.slice(0, decision.splitIndex);
+			const compactAbortController = new AbortController();
+			const callerSignal = options?.abortSignal;
+			if (callerSignal) {
+				if (callerSignal.aborted) {
+					compactAbortController.abort(callerSignal.reason);
+				} else {
+					callerSignal.addEventListener(
+						"abort",
+						() => compactAbortController.abort(callerSignal.reason),
+						{ once: true },
+					);
+				}
+			}
+			this.logger?.info("context_summarization_started", {
+				runId: this.runId,
+				sessionId: this.sessionId,
+				turnId: requestContext?.turnId,
+				trigger,
+				messageCount: messagesToSummarize.length,
+				estimatedTokens: tokensBefore,
+			});
+			let result: { summary: string; usage?: ModelUsage };
+			try {
+				result = await execute({
+					provider,
+					systemPrompt,
+					messages: messagesToSummarize,
+					previousSummary: this.summary,
+					instructions: options?.instructions,
+					requestContext,
+					reserveTokens: budget.reserveTokens,
+					abortSignal: compactAbortController.signal,
+				});
+			} catch (error) {
+				this.logger?.error("context_summarization_failed", {
+					runId: this.runId,
+					sessionId: this.sessionId,
+					turnId: requestContext?.turnId,
+					trigger,
+					error: error instanceof Error ? error.message : String(error),
+					messageCount: messagesToSummarize.length,
+					estimatedTokens: tokensBefore,
+				});
+				// D4 — no fallback trimming: summarization failure is a hard
+				// error the caller surfaces (the `/compact` command or the
+				// runner's turn failure).
+				if (error instanceof CompactionFailedError) {
+					throw new CompactionFailedError(error.message, {
+						reason: error.reason,
+						trigger: trigger ?? "force",
+					});
+				}
+				throw new CompactionFailedError(
+					error instanceof Error ? error.message : String(error),
+					{ reason: "summarize_error", trigger: trigger ?? "force" },
+				);
+			}
+			newSummary = result.summary;
+			newRecentMessages = messages.slice(decision.splitIndex);
+			usage = result.usage;
+			compactionInstructions = options?.instructions?.trim() || undefined;
+			summarized = true;
+			summarizedCount = messagesToSummarize.length;
+
+			// D6 — post-compaction check: after a compaction ran, the live
+			// window must fit the soft limit. An overflow here means the
+			// configuration itself cannot fit (huge system prompt / tool
+			// schemas / recent window), so surface it as a hard error instead
+			// of silently dropping more messages or leaving it to the 400
+			// path. The context is NOT mutated on failure: the caller retries
+			// or the user fixes the configuration (D4).
+			const recheck = decide({
+				messages: newRecentMessages,
+				budget,
+				keepRecentFloor: floor,
+				systemPrompt,
+				toolSchemas,
+				pendingUserInput: options?.pendingUserInput,
+				force: false,
+			});
+			if (recheck.shouldCompact) {
+				throw new CompactionFailedError(
+					"The context still exceeds the soft limit after compaction. Increase hard_context_limit / reserve_tokens, reduce the system prompt or tool schemas, or start a new session.",
+					{ reason: "insufficient_compaction", trigger: trigger ?? "force" },
+				);
+			}
+
+			this.summary = newSummary;
+			this.recentMessages = newRecentMessages;
+			this.invalidateLastUsage();
+			const tokensAfter = this.estimateRequest(
+				systemPrompt,
+				toolSchemas,
+			).totalTokens;
+			this.recordCompaction({
+				summarizedCount,
+				trigger,
+				tokensBefore,
+				tokensAfter,
+				customInstructions: compactionInstructions,
+				usage,
+			});
+			this.logger?.info("context_summarization_finished", {
+				runId: this.runId,
+				sessionId: this.sessionId,
+				turnId: requestContext?.turnId,
+				trigger,
+				summaryChars: this.summary.length,
+				remainingMessages: this.recentMessages.length,
+				// D7 — audit data: the summarize call's provider-reported usage.
+				// Recorded on the CompactionEntry too; never a lastUsage baseline.
+				usageTokens: usage?.totalTokens ?? null,
+			});
+		}
+
+		const tokensAfter = this.estimateRequest(
+			systemPrompt,
+			toolSchemas,
+		).totalTokens;
+
+		return {
+			summarized,
+			summary: this.summary,
+			recentMessageCount: this.recentMessages.length,
+			previousRecentMessageCount,
+			summaryChars: this.summary?.length ?? 0,
+			previousSummaryChars,
+			tokensBefore,
+			tokensAfter,
+			trigger,
+		};
 	}
 
-	private trimToHardLimit(
-		systemPrompt: string,
-		toolSchemas: readonly ToolSchema[],
-		requestContext?: {
-			turnId?: string;
-		},
-	): boolean {
-		return this.compactor.trimToHardLimit(
-			systemPrompt,
-			toolSchemas,
-			requestContext,
+	/**
+	 * Drop the provider-reported usage baseline after messages were removed
+	 * from the recent window. A measured `totalTokens` covered the whole
+	 * pre-compaction request, so it no longer reflects the shrunken window,
+	 * and `messageIndex` is stale once the array has been sliced. Until the
+	 * next model response re-records usage, the status bar, `/summary`, and
+	 * the runner's in-turn estimate fall back to the chars/4 estimate — the
+	 * same computation that produced `tokensAfter`.
+	 *
+	 * Also scrubs the pre-compaction `usage` off the kept messages' entries:
+	 * those entries persist into the session stream, and `hydrateState`
+	 * would otherwise restore the stale count on resume.
+	 */
+	private invalidateLastUsage(): void {
+		this.lastUsage = null;
+		const liveIds = new Set(
+			this.recentMessages
+				.map((message) => message.id)
+				.filter((id): id is string => Boolean(id)),
+		);
+		this.entries = this.entries.map((entry) =>
+			entry.kind === "message" && entry.usage && liveIds.has(entry.id)
+				? { ...entry, usage: undefined }
+				: entry,
 		);
 	}
 }
@@ -442,10 +624,4 @@ function ensureMessageIds(messages: readonly Message[]): Message[] {
 		}
 		return { ...message, id: randomUUID() } as Message;
 	});
-}
-
-function parseTurnId(raw: string | undefined): number | null {
-	if (!raw) return null;
-	const parsed = Number.parseInt(raw, 10);
-	return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }

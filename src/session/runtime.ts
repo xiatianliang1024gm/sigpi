@@ -15,7 +15,19 @@ export class SessionRuntime {
 		private readonly context: ConversationContext,
 		private readonly store: SessionStore,
 		private session: PersistedSession,
-	) {}
+	) {
+		// Per-message persistence: the runner persists each message batch as
+		// soon as it lands (ADR 0026, D1 — no in-turn checkpoint), so the
+		// store is kept current incrementally instead of only at turn
+		// boundaries. The snapshot commit is incremental on the entry stream
+		// (`entries.slice(prevCount)`), so a mid-turn flush is cheap.
+		this.runner.setPersistContext(async () => {
+			this.session = await this.store.updateSnapshot({
+				sessionId: this.session.sessionId,
+				contextState: this.context.exportState(),
+			});
+		});
+	}
 
 	getCurrentSession(): PersistedSession {
 		return this.session;
@@ -27,7 +39,10 @@ export class SessionRuntime {
 	}): Promise<ContextUpdateResult> {
 		const updated = await this.runner.compactContext(options);
 
-		if (updated.summarized || updated.trimmed) {
+		// No `trimmed` guard: compaction either summarized (persist the new
+		// summary + entry stream) or threw (D4/D6 — nothing to persist, the
+		// context is untouched on failure).
+		if (updated.summarized) {
 			this.session = await this.store.updateSnapshot({
 				sessionId: this.session.sessionId,
 				contextState: this.context.exportState(),
@@ -53,7 +68,6 @@ export class SessionRuntime {
 					sessionId: this.session.sessionId,
 					userInput,
 					assistantOutput: null,
-					steps: result.steps,
 					toolExecutions: result.toolExecutions,
 					contextState: this.context.exportState(),
 					interruptSource: result.interruptSource ?? "user_escape",
@@ -66,7 +80,6 @@ export class SessionRuntime {
 				sessionId: this.session.sessionId,
 				userInput,
 				assistantOutput: result.outputText ?? "",
-				steps: result.steps,
 				toolExecutions: result.toolExecutions,
 				contextState: this.context.exportState(),
 			});
@@ -79,7 +92,6 @@ export class SessionRuntime {
 				userInput,
 				errorMessage,
 				assistantOutput: null,
-				steps: 0,
 				toolExecutions: [],
 				contextState: this.context.exportState(),
 			});

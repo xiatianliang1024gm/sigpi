@@ -990,6 +990,12 @@ test("buildSdkClient routes through the proxy fetch when a proxy is configured",
 		https_proxy: process.env.https_proxy,
 	};
 	try {
+		// Clear the proxy env so `configureHttpProxy` does not pick up a
+		// malformed value from the surrounding shell (e.g. `127.0.01:7078`)
+		// and fail before reaching the explicit URL below.
+		for (const key of Object.keys(proxyEnv)) {
+			delete process.env[key];
+		}
 		const status = configureHttpProxy("http://127.0.0.1:9999");
 		assert.equal(status.configured, true);
 		assert.equal(getProxyStatus().configured, true);

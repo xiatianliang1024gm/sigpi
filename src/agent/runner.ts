@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { estimateContextTokens } from "../context-window.js";
 import type { TurnInterruptController } from "../interrupt.js";
 import { isTurnInterruptedError, TurnInterruptedError } from "../interrupt.js";
+import { ModelRequestError } from "../model/transport.js";
 import { summarizeAssistantProgressText } from "../progress.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { formatToolExecutionResult } from "../tools/render.js";
@@ -9,91 +11,43 @@ import type {
 	AgentRunnerOptions,
 	ContextUpdateResult,
 	ExecutedToolCall,
+	InterruptStage,
 	Message,
 	ModelProvider,
+	ModelResponse,
 	ModelUsage,
 	RunTurnResult,
-	RuntimeLogger,
 	ToolCall,
 	ToolSchema,
 	TurnProgressEvent,
+	TurnProgressEventMap,
+	TurnProgressPayload,
 } from "../types.js";
-import { CompactionFailedError } from "./compaction-error.js";
+import { TURN_PROGRESS_EVENTS } from "../types.js";
 import type { ConversationContext } from "./context.js";
 import {
 	createAssistantMessage,
-	createSystemMessage,
 	createToolMessage,
 	createUserMessage,
-	renderMessagesForSummary,
 } from "./messages.js";
 
 const INTERRUPTED_TOOL_RESULT_ERROR =
 	"Tool execution was interrupted by the user before it produced output. Re-run the tool if the task still requires it.";
-const TURN_CHECKPOINT_KEEP_LAST_MESSAGES = 4;
-const TURN_CHECKPOINT_PREFIX =
-	"Current turn checkpoint. Earlier tool work in this same user turn was compacted:";
-const TURN_CHECKPOINT_SYSTEM_PROMPT = [
-	"You summarize an in-progress agent turn.",
-	"Do NOT continue the task. ONLY output a concise checkpoint that preserves the user's goal, work done, key findings, files inspected or changed, blockers, and next step.",
-].join(" ");
-const TURN_CHECKPOINT_PROMPT = `Create a concise checkpoint for an in-progress tool-using turn.
-
-Use this EXACT format:
-
-## Current Goal
-[Restate the user's current request exactly enough that another model can continue.]
-
-## Work Done This Turn
-- [Files read, searches run, commands executed, or edits made]
-
-## Key Findings
-- [Important facts discovered, with exact file paths, symbols, and error messages]
-
-## Next Step
-1. [What the assistant should do next]
-
-Preserve the user's current goal even if later tool results are large or distracting.`;
-const CONTEXT_COMPACTED_PREFIX =
-	"The conversation was compacted mid-task because it approached the model's token limit.";
-const CONTEXT_COMPACTED_NOTE = [
-	"The summary at the top of the conversation preserves the task state, work done, and next steps.",
-	"Continue the user's original request. If it is already fully satisfied, briefly confirm completion instead of repeating work.",
-].join(" ");
-const EMPTY_RESPONSE_NOTE =
-	"Your previous response was empty (no text and no tool calls). Continue the user's request with a real answer or tool call.";
 /**
- * A model response with no text and no tool calls is not a valid final answer.
- * It is usually a transient provider hiccup or a request the model could not
- * handle, so we persist the turn and re-prompt — but bounded, so a broken
- * provider cannot spin the loop forever.
+ * A step's model request is retried at most once, whatever the failure mode
+ * (ADR 0026: D3 — a provider `context_length_exceeded` is retried once after a
+ * forced compaction; D5 — a degenerate empty response is retried once). The
+ * budget is shared, so a retry that fails again — compaction could not shrink
+ * the window enough, or the model returned empty twice in a row — ends the
+ * turn instead of looping the compact → 400 cycle.
  */
-const EMPTY_RESPONSE_MAX_RETRIES = 2;
+const GENERATE_MAX_RETRIES = 1;
 const DEFAULT_RUNNER_OPTIONS: AgentRunnerOptions = {
 	maxSteps: 40,
 	temperature: 0.2,
 	workingDirectory: process.cwd(),
 };
 const CLEAR_PROGRESS_TOOL_RESULT_MAX_CHARS = 4000;
-
-function findTurnCheckpointSplitIndex(
-	messages: readonly Message[],
-	keepLastMessages: number,
-): number {
-	let splitIndex = Math.max(1, messages.length - keepLastMessages);
-
-	// Pull splitIndex back to an assistant message boundary so we never keep
-	// an orphan tool message without its corresponding assistant turn.
-	while (
-		splitIndex > 1 &&
-		splitIndex < messages.length &&
-		messages[splitIndex]?.role !== "assistant"
-	) {
-		splitIndex -= 1;
-	}
-
-	return splitIndex;
-}
 
 /**
  * Find assistant tool calls in `messages` that have no matching tool result.
@@ -127,13 +81,206 @@ function collectUnansweredToolCalls(messages: readonly Message[]): ToolCall[] {
 	return unanswered;
 }
 
-export class AgentRunner {
+function isContextLengthExceededError(error: unknown): boolean {
+	return (
+		error instanceof ModelRequestError &&
+		error.kind === "context_length_exceeded"
+	);
+}
+
+/**
+ * Mutable per-turn state plus the operations that read or mutate it. Bundling
+ * both lets the runner's step logic live in small flat methods instead of one
+ * deeply nested `runTurn`; every operation here is invoked at most once per
+ * turn or per step, so there is no shared-state hazard between turns.
+ */
+class TurnState {
+	readonly turnId: string;
+	readonly startedAtMs: number;
+
+	/**
+	 * Messages produced this turn but not yet handed to the session store.
+	 * Persisted at the next terminal point (final answer, interrupt,
+	 * failure, max-steps) — including the user's input, which is persisted
+	 * up-front so an interrupt never loses it. The request payload is
+	 * rebuilt from the persisted context + this buffer before every
+	 * `generate` (ADR 0026, D1), so there is no separate in-memory
+	 * working copy to keep in sync.
+	 */
+	readonly pending: Message[] = [];
+	readonly toolExecutions: ExecutedToolCall[] = [];
+	/**
+	 * Provider-reported usage summed across every model request in this
+	 * turn. Mutable fields on a `const` object: a `let` union assigned
+	 * only inside a closure would be narrowed to `never` at the terminal
+	 * read sites. The `turnUsageReported` flag tracks whether any request
+	 * reported usage, so callers can distinguish "0 tokens" from "usage
+	 * unknown".
+	 */
+	readonly turnUsage = {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+	};
+	turnUsageReported = false;
+	/**
+	 * Provider-reported usage of the most recent model response in this
+	 * turn, attached to the tail assistant message when the buffer is
+	 * persisted (D7 — the compaction entry and the session stream carry
+	 * usage so resumed sessions keep the ground-truth token baseline).
+	 */
+	lastResponseUsage: ModelUsage | undefined;
+	lastStep = 0;
+
+	private readonly context: ConversationContext;
+	private readonly getProvider: () => ModelProvider;
+	private readonly systemPrompt: string;
+	private readonly toolSchemas: ToolSchema[];
+	private readonly getPersistContext: () => (() => Promise<void>) | undefined;
+	private readonly runner: AgentRunner;
+
+	constructor(args: {
+		turnId: string;
+		context: ConversationContext;
+		getProvider: () => ModelProvider;
+		systemPrompt: string;
+		toolSchemas: ToolSchema[];
+		getPersistContext: () => (() => Promise<void>) | undefined;
+		runner: AgentRunner;
+	}) {
+		this.turnId = args.turnId;
+		this.startedAtMs = Date.now();
+		this.context = args.context;
+		this.getProvider = args.getProvider;
+		this.systemPrompt = args.systemPrompt;
+		this.toolSchemas = args.toolSchemas;
+		this.getPersistContext = args.getPersistContext;
+		this.runner = args.runner;
+	}
+
+	accumulateUsage(usage?: ModelUsage): void {
+		if (!usage) {
+			return;
+		}
+		this.turnUsageReported = true;
+		this.turnUsage.input += usage.input;
+		this.turnUsage.output += usage.output;
+		this.turnUsage.cacheRead += usage.cacheRead;
+		this.turnUsage.cacheWrite += usage.cacheWrite;
+		this.turnUsage.totalTokens += usage.totalTokens;
+	}
+
+	estimateRequestTokens(): number {
+		const lastUsage = this.context.getLastUsage();
+		return estimateContextTokens({
+			systemPrompt: this.systemPrompt,
+			summary: this.context.getSummary(),
+			recentMessages: [
+				...this.context.getRecentMessages(),
+				...this.pending,
+			].filter((message) => message.role !== "system"),
+			toolSchemas: this.toolSchemas,
+			lastUsage: lastUsage?.usage ?? null,
+			lastUsageMessageIndex: lastUsage?.messageIndex ?? null,
+		}).totalTokens;
+	}
+
+	/**
+	 * Emit one turn-progress event, enriched with the live in-flight
+	 * request-token estimate so the status bar can show a fresh figure.
+	 */
+	emitProgress<K extends keyof TurnProgressEventMap>(
+		type: K,
+		payload: TurnProgressEventMap[K],
+	): void {
+		this.runner.emitProgress(type, {
+			...payload,
+			estimatedContextTokens: this.estimateRequestTokens(),
+		});
+	}
+
+	contextUpdateSnapshot(): ContextUpdateResult {
+		const recentMessages = this.context.getRecentMessages();
+		return {
+			summarized: false,
+			summary: this.context.getSummary(),
+			recentMessageCount: recentMessages.length,
+			previousRecentMessageCount: recentMessages.length,
+			summaryChars: this.context.getSummary()?.length ?? 0,
+			previousSummaryChars: this.context.getSummary()?.length ?? 0,
+			tokensBefore: 0,
+			tokensAfter: 0,
+			trigger: null,
+		};
+	}
+
+	/**
+	 * Flush `pending` into the session store. Closes any dangling tool
+	 * calls first (a turn interrupted mid-tool leaves an assistant
+	 * tool-call message with no result; persisting that shape makes the
+	 * next request fail with a provider 400). The request-side snapshot
+	 * (`estimateRequestTokens`) excludes the flushed batch afterwards,
+	 * since it now lives in the persisted context.
+	 */
+	async persistPendingMessages(): Promise<ContextUpdateResult | null> {
+		if (this.pending.length === 0) {
+			return null;
+		}
+		for (const toolCall of collectUnansweredToolCalls(this.pending)) {
+			this.pending.push(
+				createToolMessage(toolCall.id, toolCall.name, {
+					ok: false,
+					error: INTERRUPTED_TOOL_RESULT_ERROR,
+				}),
+			);
+		}
+		const contextUpdated = await this.context.appendMessages(
+			this.pending,
+			this.getProvider(),
+			this.systemPrompt,
+			this.toolSchemas,
+			{ turnId: this.turnId },
+			{ usage: this.lastResponseUsage },
+		);
+		this.pending.length = 0;
+		this.lastResponseUsage = undefined;
+		await this.getPersistContext()?.();
+		return contextUpdated;
+	}
+
+	/** Persist the user's input as the first message of the turn. */
+	async persistUserInput(input: string): Promise<void> {
+		this.pending.push(createUserMessage(input));
+		await this.persistPendingMessages();
+	}
+
+	/** Flush the final assistant answer (plus any buffered turn messages). */
+	async persistAnswer(assistantMessage: Message): Promise<ContextUpdateResult> {
+		this.pending.push(assistantMessage);
+		return (
+			(await this.persistPendingMessages()) ?? this.contextUpdateSnapshot()
+		);
+	}
+}
+
+type StepOutcome = { done: true; result: RunTurnResult } | { done: false };
+
+/**
+ * Drives one agent turn. Progress is reported by emitting per-phase
+ * turn-progress events (see {@link TurnProgressEventMap}); consumers — the
+ * REPL view, the runtime log — subscribe with {@link AgentRunner.onProgress}
+ * instead of the runner knowing anything about them.
+ */
+export class AgentRunner extends EventEmitter {
 	private provider: ModelProvider;
 	private readonly tools: ToolRegistry;
 	private readonly toolSchemas: ToolSchema[];
 	private readonly context: ConversationContext;
 	private readonly systemPrompt: string;
 	private readonly options: AgentRunnerOptions;
+	private persistContext: (() => Promise<void>) | undefined;
 
 	constructor(args: {
 		provider: ModelProvider;
@@ -142,6 +289,7 @@ export class AgentRunner {
 		systemPrompt: string;
 		options?: Partial<AgentRunnerOptions>;
 	}) {
+		super();
 		this.provider = args.provider;
 		this.tools = args.tools;
 		this.toolSchemas = this.tools.getSchemas();
@@ -154,736 +302,84 @@ export class AgentRunner {
 		this.provider = provider;
 	}
 
+	/**
+	 * Register a callback invoked after the context is persisted to the
+	 * session store (per-message, as soon as a batch lands — not just at turn
+	 * boundaries). Wired by `SessionRuntime`; a no-op when absent (e.g.
+	 * standalone runner tests).
+	 */
+	setPersistContext(persistContext: () => Promise<void>): void {
+		this.persistContext = persistContext;
+	}
+
+	/**
+	 * Emit one turn-progress event to subscribed listeners. The runner emits
+	 * per-phase events internally; the REPL also emits a synthetic
+	 * `interrupt_requested` here when the user presses Esc mid-turn.
+	 */
+	emitProgress<K extends keyof TurnProgressEventMap>(
+		type: K,
+		payload: TurnProgressEventMap[K] & { estimatedContextTokens?: number },
+	): void {
+		super.emit(type, payload);
+	}
+
+	/**
+	 * Subscribe to every turn-progress event. Each event is delivered with
+	 * its name tagged on (`{ type, ...payload }`), so a single listener can
+	 * switch on the phase. Returns an unsubscribe function.
+	 */
+	onProgress(listener: (event: TurnProgressEvent) => void): () => void {
+		const subscriptions = TURN_PROGRESS_EVENTS.map((type) => {
+			const handler = (payload: TurnProgressPayload): void => {
+				listener({ type, ...payload } as TurnProgressEvent);
+			};
+			super.on(type, handler);
+			return () => {
+				super.off(type, handler);
+			};
+		});
+		return () => {
+			for (const unsubscribe of subscriptions) {
+				unsubscribe();
+			}
+		};
+	}
+
 	async runTurn(
 		userInput: string,
 		interruptController?: TurnInterruptController,
 	): Promise<RunTurnResult> {
-		const workingMessages = this.context.buildMessages(
-			this.systemPrompt,
-			userInput,
-		);
-		const turnMessages: Message[] = [createUserMessage(userInput)];
-		const toolExecutions: ExecutedToolCall[] = [];
-		const logger = this.options.logger;
-		const progress = this.options.progressReporter;
-		const turnStartedAt = Date.now();
-		const turnId = randomUUID();
-		let summaryCount = 0;
-		let trimCount = 0;
-		let lastModelElapsedMs = 0;
-		let failureType: string | undefined;
-		let turnMessagesPersisted = false;
-		let lastStep = 0;
-		let turnCheckpoint: string | null = null;
-		let lastCheckpointedTurnMessageCount = 0;
-		let emptyResponseRetries = 0;
-		/**
-		 * Provider-reported usage summed across every model request in this
-		 * turn (main steps plus in-turn checkpoint summaries). Mutable fields
-		 * on a `const` object: a `let` union assigned only inside a closure
-		 * would be narrowed to `never` at the terminal read sites. The
-		 * `turnUsageReported` flag tracks whether any request reported usage,
-		 * so callers can distinguish "0 tokens" from "usage unknown".
-		 */
-		const turnUsage = {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-		};
-		let turnUsageReported = false;
-		const accumulateUsage = (usage?: ModelUsage): void => {
-			if (!usage) {
-				return;
-			}
-			turnUsageReported = true;
-			turnUsage.input += usage.input;
-			turnUsage.output += usage.output;
-			turnUsage.cacheRead += usage.cacheRead;
-			turnUsage.cacheWrite += usage.cacheWrite;
-			turnUsage.totalTokens += usage.totalTokens;
-		};
+		const turn = new TurnState({
+			turnId: randomUUID(),
+			context: this.context,
+			getProvider: () => this.provider,
+			systemPrompt: this.systemPrompt,
+			toolSchemas: this.toolSchemas,
+			getPersistContext: () => this.persistContext,
+			runner: this,
+		});
 
 		interruptController?.beginTurn();
 
-		const createContextUpdateSnapshot = (): ContextUpdateResult => {
-			const recentMessages = this.context.getRecentMessages();
-			return {
-				summarized: false,
-				trimmed: false,
-				summary: this.context.getSummary(),
-				recentMessageCount: recentMessages.length,
-				previousRecentMessageCount: recentMessages.length,
-				summaryChars: this.context.getSummary()?.length ?? 0,
-				previousSummaryChars: this.context.getSummary()?.length ?? 0,
-				tokensBefore: 0,
-				tokensAfter: 0,
-			};
-		};
-
-		const checkpointTurnMessages = (): ContextUpdateResult => {
-			if (turnMessagesPersisted || turnMessages.length === 0) {
-				return createContextUpdateSnapshot();
-			}
-
-			// Esc during tool execution can leave an assistant toolCall in
-			// `turnMessages` without its matching tool result (the tool was
-			// aborted before `createToolMessage` ran). Persisting that dangling
-			// call makes the next turn send a tool call with no output, which
-			// providers reject (400 "No tool output found for tool call ...").
-			// Close the loop with a synthetic interrupted result so the
-			// recovered transcript stays a valid tool-call sequence.
-			for (const toolCall of collectUnansweredToolCalls(turnMessages)) {
-				logger?.info("turn_interrupted_tool_result_closed", {
-					runId: this.options.runId,
-					sessionId: this.options.sessionId ?? null,
-					turnId,
-					toolName: toolCall.name,
-					toolCallId: toolCall.id,
-				});
-				turnMessages.push(
-					createToolMessage(toolCall.id, toolCall.name, {
-						ok: false,
-						error: INTERRUPTED_TOOL_RESULT_ERROR,
-					}),
-				);
-			}
-
-			const checkpointUpdated = this.context.appendRecoveryMessages(
-				turnMessages,
-				this.systemPrompt,
-				this.toolSchemas,
-				{ turnId },
-			);
-			turnMessagesPersisted = true;
-			trimCount += Number(checkpointUpdated.trimmed);
-			return checkpointUpdated;
-		};
-
-		const estimateWorkingMessageTokens = (): number => {
-			const lastUsage = this.context.getLastUsage();
-			return estimateContextTokens({
-				systemPrompt: this.systemPrompt,
-				summary: this.context.getSummary(),
-				recentMessages: workingMessages.filter(
-					(message) => message.role !== "system",
-				),
-				toolSchemas: this.toolSchemas,
-				lastUsage: lastUsage?.usage ?? null,
-				lastUsageMessageIndex: lastUsage?.messageIndex ?? null,
-			}).totalTokens;
-		};
-
-		const reportProgress = (event: TurnProgressEvent): void => {
-			progress?.({
-				...event,
-				estimatedContextTokens: estimateWorkingMessageTokens(),
-			});
-		};
-
-		const maybeCompactWorkingMessages = async (): Promise<void> => {
-			if (turnMessages.length <= TURN_CHECKPOINT_KEEP_LAST_MESSAGES + 1) {
-				return;
-			}
-			if (turnMessages.length === lastCheckpointedTurnMessageCount) {
-				return;
-			}
-			const estimatedTokens = estimateWorkingMessageTokens();
-			const budget = this.context.getContextBudget();
-			const hardLimitTokens = budget.hardContextLimit - budget.reserveTokens;
-			if (estimatedTokens <= hardLimitTokens) {
-				return;
-			}
-
-			const splitIndex = findTurnCheckpointSplitIndex(
-				turnMessages,
-				TURN_CHECKPOINT_KEEP_LAST_MESSAGES,
-			);
-			const messagesToSummarize = turnMessages.slice(0, splitIndex);
-			const keptTurnMessages = turnMessages.slice(splitIndex);
-			const transcript = renderMessagesForSummary(messagesToSummarize);
-			const existingCheckpoint = turnCheckpoint
-				? `<previous-turn-checkpoint>\n${turnCheckpoint}\n</previous-turn-checkpoint>\n\n`
-				: "";
-			const response = await this.provider.generate({
-				messages: [
-					createSystemMessage(this.systemPrompt),
-					createSystemMessage(TURN_CHECKPOINT_SYSTEM_PROMPT),
-					createUserMessage(
-						[
-							existingCheckpoint,
-							`<conversation>\n${transcript}\n</conversation>`,
-							TURN_CHECKPOINT_PROMPT,
-						].join("\n\n"),
-					),
-				],
-				tools: [],
-				temperature: 0,
-				maxTokens: Math.min(
-					budget.reserveTokens,
-					this.options.maxTokens ?? Number.POSITIVE_INFINITY,
-				),
-				context: {
-					runId: this.options.runId,
-					sessionId: this.options.sessionId ?? null,
-					turnId,
-					step: lastStep,
-					purpose: "summary",
-				},
-			});
-			turnCheckpoint = response.assistantText?.trim() || turnCheckpoint;
-			accumulateUsage(response.usage);
-
-			workingMessages.length = 0;
-			workingMessages.push(
-				...this.context.buildMessages(this.systemPrompt),
-				createUserMessage(userInput),
-				createSystemMessage(`${TURN_CHECKPOINT_PREFIX}\n${turnCheckpoint}`),
-				...keptTurnMessages,
-			);
-			lastCheckpointedTurnMessageCount = turnMessages.length;
-			summaryCount += 1;
-
-			logger?.info("turn_working_context_compacted", {
-				runId: this.options.runId,
-				sessionId: this.options.sessionId ?? null,
-				turnId,
-				step: lastStep,
-				estimatedTokens,
-				remainingMessages: workingMessages.length,
-			});
-			reportProgress({
-				type: "context_checkpoint",
-				step: lastStep,
-				turnId,
-				message: `checkpoint compacted current turn;`,
-				detail: `estimated context before checkpoint: ${estimatedTokens} tokens; kept recent messages: ${keptTurnMessages.length}`,
-				summaryCount,
-			});
-			reportProgress({
-				type: "context_compacted",
-				step: lastStep,
-				turnId,
-				message: "Checkpoint compacted current turn",
-				tokensBefore: estimatedTokens,
-				tokensAfter: estimateWorkingMessageTokens(),
-				trigger: "token",
-				summaryCount,
-			});
-		};
-
-		const finishInterruptedTurn = (stage: "model" | "tool"): RunTurnResult => {
-			const contextUpdated = checkpointTurnMessages();
-			logger?.info("turn_interrupted", {
-				runId: this.options.runId,
-				sessionId: this.options.sessionId ?? null,
-				turnId,
-				step: lastStep || null,
-				stage,
-				source: "user_escape",
-				toolExecutionCount: toolExecutions.length,
-				summaryCount,
-				trimCount,
-				modelElapsedMs: lastModelElapsedMs,
-				turnElapsedMs: Date.now() - turnStartedAt,
-				inputTokens: turnUsageReported ? turnUsage.input : 0,
-				outputTokens: turnUsageReported ? turnUsage.output : 0,
-				cacheReadTokens: turnUsageReported ? turnUsage.cacheRead : 0,
-				cacheWriteTokens: turnUsageReported ? turnUsage.cacheWrite : 0,
-				turnTotalTokens: turnUsageReported ? turnUsage.totalTokens : 0,
-			});
-			reportProgress({
-				type: "turn_interrupted",
-				step: lastStep || undefined,
-				turnId,
-				elapsedMs: Date.now() - turnStartedAt,
-				message: "Turn interrupted",
-				toolExecutionCount: toolExecutions.length,
-				modelElapsedMs: lastModelElapsedMs,
-				summaryCount,
-				trimCount,
-				interruptStage: stage,
-				interruptSource: "user_escape",
-				turnTokens: turnUsageReported ? turnUsage : undefined,
-			});
-
-			return {
-				completionStatus: "interrupted",
-				outputText: null,
-				steps: lastStep,
-				toolExecutions,
-				contextSummary: this.context.getSummary(),
-				contextMessageCount: this.context.getRecentMessages().length,
-				contextUpdated,
-				interruptSource: "user_escape",
-				interruptStage: stage,
-			};
-		};
-
-		logger?.info("turn_started", {
-			runId: this.options.runId,
-			sessionId: this.options.sessionId ?? null,
-			turnId,
-			input: userInput,
-			existingContextMessages: workingMessages.length - 1,
-		});
-		reportProgress({
-			type: "turn_started",
-			turnId,
-			message: "Starting agent loop",
+		turn.emitProgress("turn_started", {
+			turnId: turn.turnId,
 			userInput,
 		});
 
+		// Persist the user's input as the first message of the turn, before any
+		// model or tool work — an interrupt at any point still leaves a valid,
+		// resumable transcript.
+		await turn.persistUserInput(userInput);
+
 		try {
 			for (let step = 1; step <= this.options.maxSteps; step += 1) {
-				lastStep = step;
-				interruptController?.throwIfInterrupted();
-				logger?.debug("turn_step_started", {
-					runId: this.options.runId,
-					sessionId: this.options.sessionId ?? null,
-					turnId,
-					step,
-					messageCount: workingMessages.length,
-				});
-				reportProgress({
-					type: "step_started",
-					step,
-					turnId,
-					message: `Step ${step}/${this.options.maxSteps}`,
-				});
-
-				const modelStartedAt = Date.now();
-				reportProgress({
-					type: "model_request_started",
-					step,
-					turnId,
-					message: "Requesting model",
-				});
-
-				interruptController?.enterModel();
-				const response = await this.provider
-					.generate(
-						{
-							messages: workingMessages,
-							tools: this.tools.getSchemas(),
-							temperature: this.options.temperature,
-							maxTokens: this.options.maxTokens,
-							context: {
-								runId: this.options.runId,
-								sessionId: this.options.sessionId ?? null,
-								turnId,
-								step,
-								purpose: "turn",
-							},
-							abortSignal: interruptController?.getAbortSignal(),
-						},
-						(delta) => {
-							if (
-								delta.reasoningDelta ||
-								delta.contentDelta ||
-								delta.toolCallDelta
-							) {
-								reportProgress({
-									type: "model_delta",
-									step,
-									turnId,
-									reasoningDelta: delta.reasoningDelta,
-									contentDelta: delta.contentDelta,
-									toolCallDelta: delta.toolCallDelta,
-								});
-							}
-						},
-					)
-					.finally(() => {
-						interruptController?.leaveActiveStage();
-					});
-				lastModelElapsedMs = Date.now() - modelStartedAt;
-				accumulateUsage(response.usage);
-
-				reportProgress({
-					type: "model_request_finished",
-					step,
-					turnId,
-					elapsedMs: lastModelElapsedMs,
-					message:
-						response.toolCalls.length > 0
-							? "Model returned tool calls"
-							: "Model returned final answer",
-				});
-
-				const assistantProgressText = summarizeAssistantProgressText(
-					response.assistantText,
-				);
-
-				if (assistantProgressText && response.toolCalls.length > 0) {
-					reportProgress({
-						type: "assistant_message",
-						step,
-						turnId,
-						message: "Model note",
-						assistantText: assistantProgressText,
-					});
-				}
-
-				if (response.toolCalls.length > 0) {
-					const assistantMessage = createAssistantMessage(
-						response.assistantText,
-						response.toolCalls,
-						{ reasoning: response.reasoning ?? undefined },
-					);
-					workingMessages.push(assistantMessage);
-					turnMessages.push(assistantMessage);
-					interruptController?.throwIfInterrupted();
-
-					logger?.info("tool_calls_received", {
-						runId: this.options.runId,
-						sessionId: this.options.sessionId ?? null,
-						turnId,
-						step,
-						toolCallCount: response.toolCalls.length,
-					});
-					reportProgress({
-						type: "tool_calls_received",
-						step,
-						turnId,
-						toolCallCount: response.toolCalls.length,
-						message: `Received ${response.toolCalls.length} tool call(s)`,
-					});
-
-					for (const toolCall of response.toolCalls) {
-						interruptController?.throwIfInterrupted();
-						const toolStartedAt = Date.now();
-						const toolDescription = this.tools.describeProgress(toolCall);
-						logger?.info("tool_execution_started", {
-							runId: this.options.runId,
-							sessionId: this.options.sessionId ?? null,
-							turnId,
-							step,
-							toolName: toolCall.name,
-							arguments: JSON.stringify(toolCall.arguments),
-						});
-						reportProgress({
-							type: "tool_execution_started",
-							step,
-							turnId,
-							toolName: toolCall.name,
-							toolCallId: toolCall.id,
-							toolArguments: toolCall.arguments,
-							message: toolDescription.summary,
-							detail: toolDescription.detail,
-						});
-						interruptController?.enterTool();
-						const result = await this.tools
-							.execute(toolCall, {
-								cwd: this.options.workingDirectory,
-								logger,
-								runId: this.options.runId,
-								sessionId: this.options.sessionId ?? null,
-								turnId,
-								abortSignal: interruptController?.getAbortSignal(),
-								bash: this.options.bashToolContext,
-							})
-							.finally(() => {
-								interruptController?.leaveActiveStage();
-							});
-
-						toolExecutions.push({ toolCall, result });
-
-						if (!result.ok) {
-							logger?.error("tool_execution_failed", {
-								runId: this.options.runId,
-								sessionId: this.options.sessionId ?? null,
-								turnId,
-								step,
-								toolName: toolCall.name,
-								error: result.error ?? null,
-								details: result.details
-									? JSON.stringify(result.details)
-									: undefined,
-								elapsedMs: Date.now() - toolStartedAt,
-							});
-						} else {
-							logger?.info("tool_execution_finished", {
-								runId: this.options.runId,
-								sessionId: this.options.sessionId ?? null,
-								turnId,
-								step,
-								toolName: toolCall.name,
-								ok: true,
-								elapsedMs: Date.now() - toolStartedAt,
-							});
-						}
-						const renderedToolResult = formatToolExecutionResult(
-							toolCall.name,
-							result,
-						);
-						reportProgress({
-							type: "tool_execution_finished",
-							step,
-							turnId,
-							toolName: toolCall.name,
-							toolCallId: toolCall.id,
-							toolOk: result.ok,
-							elapsedMs: Date.now() - toolStartedAt,
-							message: result.ok
-								? `Tool finished: ${toolCall.name}`
-								: `Tool failed: ${toolCall.name}`,
-							toolResultData: result.data,
-							toolResult: truncateProgressToolResult(renderedToolResult),
-						});
-
-						const toolMessage = createToolMessage(
-							toolCall.id,
-							toolCall.name,
-							result,
-						);
-						workingMessages.push(toolMessage);
-						turnMessages.push(toolMessage);
-						interruptController?.throwIfInterrupted();
-					}
-
-					await maybeCompactWorkingMessages();
-					continue;
-				}
-
-				interruptController?.throwIfInterrupted();
-				const assistantText = response.assistantText?.trim() ?? "";
-				const outputText = assistantText || "No response generated.";
-
-				const assistantMessage = createAssistantMessage(outputText, undefined, {
-					reasoning: response.reasoning ?? undefined,
-				});
-				turnMessages.push(assistantMessage);
-				// Mirror the tool-call branch (which pushes the assistant
-				// message into `workingMessages`): the final answer is part of
-				// the request payload, and `estimateWorkingMessageTokens`
-				// resolves `lastUsage.messageIndex` against this list. Without
-				// the push, the measured assistant message sits at an index
-				// one past the working list, the usage path is skipped, and
-				// the `turn_finished` estimate falls back to the inflated
-				// chars/4 heuristic (e.g. ~5.2K vs the provider's ~2.3K).
-				workingMessages.push(assistantMessage);
-
-				let contextUpdated: ContextUpdateResult;
-				try {
-					contextUpdated = await this.context.appendMessages(
-						turnMessages,
-						this.provider,
-						this.systemPrompt,
-						this.toolSchemas,
-						{ turnId },
-						{ usage: response.usage },
-					);
-				} catch (error) {
-					if (error instanceof CompactionFailedError) {
-						contextUpdated = this.compactionFailureUpdate(
-							error,
-							turnId,
-							logger,
-						);
-					} else {
-						throw error;
-					}
-				}
-				turnMessagesPersisted = true;
-				summaryCount += Number(contextUpdated.summarized);
-				trimCount += Number(contextUpdated.trimmed);
-
-				if (contextUpdated.summarized || contextUpdated.trimmed) {
-					reportProgress({
-						type: "context_compacted",
-						step,
-						turnId,
-						message: "Context compacted",
-						tokensBefore: contextUpdated.tokensBefore,
-						tokensAfter: contextUpdated.tokensAfter,
-						trigger: contextUpdated.trigger ?? null,
-						summaryCount,
-						trimCount,
-					});
-				}
-
-				// A model response with no text and no tool calls is not a valid
-				// final answer — ending the turn here surfaces as "No response
-				// generated." and makes the agent look like it stopped for no
-				// reason. Recover instead:
-				if (!assistantText) {
-					// If the token-triggered compaction ran, the summary above
-					// preserves the task state ("Current Work" / "Next Steps"),
-					// so rebuild the working context from it and let the model
-					// continue the task instead of stopping dead at the limit.
-					if (contextUpdated.summarized) {
-						workingMessages.length = 0;
-						workingMessages.push(
-							...this.context.buildMessages(this.systemPrompt),
-							createSystemMessage(
-								`${CONTEXT_COMPACTED_PREFIX}\n${CONTEXT_COMPACTED_NOTE}`,
-							),
-						);
-						turnMessages.length = 0;
-						turnMessagesPersisted = false;
-						lastCheckpointedTurnMessageCount = 0;
-						logger?.info("turn_continued_after_compaction", {
-							runId: this.options.runId,
-							sessionId: this.options.sessionId ?? null,
-							turnId,
-							step,
-							summaryCount,
-							trimCount,
-							recentMessageCount: this.context.getRecentMessages().length,
-						});
-						reportProgress({
-							type: "context_checkpoint",
-							step,
-							turnId,
-							message: "Context compacted; continuing task",
-							detail: `kept ${this.context.getRecentMessages().length} recent messages; continuing from the summary`,
-							summaryCount,
-							trimCount,
-						});
-						continue;
-					}
-
-					// No compaction ran, so the context had room — this was a
-					// transient provider hiccup. Re-prompt, bounded.
-					if (emptyResponseRetries < EMPTY_RESPONSE_MAX_RETRIES) {
-						emptyResponseRetries += 1;
-						workingMessages.push(createSystemMessage(EMPTY_RESPONSE_NOTE));
-						turnMessages.length = 0;
-						turnMessagesPersisted = false;
-						logger?.warn("turn_empty_response_retry", {
-							runId: this.options.runId,
-							sessionId: this.options.sessionId ?? null,
-							turnId,
-							step,
-							retry: emptyResponseRetries,
-							maxRetries: EMPTY_RESPONSE_MAX_RETRIES,
-						});
-						reportProgress({
-							type: "context_checkpoint",
-							step,
-							turnId,
-							message: "Model returned an empty response; retrying",
-						});
-						continue;
-					}
-				}
-
-				logger?.info("turn_finished", {
-					runId: this.options.runId,
-					sessionId: this.options.sessionId ?? null,
-					turnId,
-					steps: step,
-					toolExecutionCount: toolExecutions.length,
-					summaryCount,
-					trimCount,
-					modelElapsedMs: lastModelElapsedMs,
-					turnElapsedMs: Date.now() - turnStartedAt,
-					inputTokens: turnUsageReported ? turnUsage.input : 0,
-					outputTokens: turnUsageReported ? turnUsage.output : 0,
-					cacheReadTokens: turnUsageReported ? turnUsage.cacheRead : 0,
-					cacheWriteTokens: turnUsageReported ? turnUsage.cacheWrite : 0,
-					turnTotalTokens: turnUsageReported ? turnUsage.totalTokens : 0,
-				});
-				reportProgress({
-					type: "turn_finished",
-					step,
-					turnId,
-					elapsedMs: Date.now() - turnStartedAt,
-					message: "Answer ready",
-					toolExecutionCount: toolExecutions.length,
-					modelElapsedMs: lastModelElapsedMs,
-					summaryCount,
-					trimCount,
-					turnTokens: turnUsageReported ? turnUsage : undefined,
-				});
-
-				return {
-					completionStatus: "completed",
-					outputText,
-					steps: step,
-					toolExecutions,
-					contextSummary: this.context.getSummary(),
-					contextMessageCount: this.context.getRecentMessages().length,
-					contextUpdated,
-					interruptSource: null,
-					interruptStage: null,
-				};
-			}
-
-			const outputText = buildMaxStepsFallbackAnswer(
-				toolExecutions,
-				this.options.maxSteps,
-				turnCheckpoint,
-			);
-			// No reasoning to attach: this branch fires only when the loop
-			// exhausted `maxSteps` and the last `response` from the inner loop
-			// is out of scope. The fallback answer is synthesized locally and
-			// has no associated chain-of-thought.
-			turnMessages.push(createAssistantMessage(outputText));
-
-			let contextUpdated: ContextUpdateResult;
-			try {
-				contextUpdated = await this.context.appendMessages(
-					turnMessages,
-					this.provider,
-					this.systemPrompt,
-					this.toolSchemas,
-					{ turnId },
-					{ usage: undefined },
-				);
-			} catch (error) {
-				if (error instanceof CompactionFailedError) {
-					contextUpdated = this.compactionFailureUpdate(error, turnId, logger);
-				} else {
-					throw error;
+				const outcome = await this.runStep(turn, step, interruptController);
+				if (outcome.done) {
+					return outcome.result;
 				}
 			}
-			turnMessagesPersisted = true;
-			summaryCount += Number(contextUpdated.summarized);
-			trimCount += Number(contextUpdated.trimmed);
-
-			logger?.warn("turn_max_steps_reached", {
-				runId: this.options.runId,
-				sessionId: this.options.sessionId ?? null,
-				turnId,
-				maxSteps: this.options.maxSteps,
-				toolExecutionCount: toolExecutions.length,
-				summaryCount,
-				trimCount,
-				modelElapsedMs: lastModelElapsedMs,
-				turnElapsedMs: Date.now() - turnStartedAt,
-				inputTokens: turnUsageReported ? turnUsage.input : 0,
-				outputTokens: turnUsageReported ? turnUsage.output : 0,
-				cacheReadTokens: turnUsageReported ? turnUsage.cacheRead : 0,
-				cacheWriteTokens: turnUsageReported ? turnUsage.cacheWrite : 0,
-				turnTotalTokens: turnUsageReported ? turnUsage.totalTokens : 0,
-			});
-			reportProgress({
-				type: "turn_max_steps_reached",
-				step: this.options.maxSteps,
-				turnId,
-				elapsedMs: Date.now() - turnStartedAt,
-				message: "Maximum tool-call steps reached",
-				toolExecutionCount: toolExecutions.length,
-				modelElapsedMs: lastModelElapsedMs,
-				summaryCount,
-				trimCount,
-				turnTokens: turnUsageReported ? turnUsage : undefined,
-			});
-
-			return {
-				completionStatus: "completed",
-				outputText,
-				steps: this.options.maxSteps,
-				toolExecutions,
-				contextSummary: this.context.getSummary(),
-				contextMessageCount: this.context.getRecentMessages().length,
-				contextUpdated,
-				interruptSource: null,
-				interruptStage: null,
-			};
+			return await this.finishMaxStepsTurn(turn);
 		} catch (error) {
 			if (
 				isTurnInterruptedError(error) ||
@@ -895,89 +391,410 @@ export class AgentRunner {
 						: (interruptController?.getInterruptedStage() ??
 							interruptController?.getActiveStage() ??
 							"tool");
-				return finishInterruptedTurn(stage);
+				return this.finishInterruptedTurn(turn, stage);
 			}
 
-			if (!turnMessagesPersisted && turnMessages.length > 0) {
+			if (turn.pending.length > 0) {
 				try {
-					checkpointTurnMessages();
-				} catch (checkpointError) {
-					logger?.error("turn_failed_context_checkpoint_failed", {
-						runId: this.options.runId,
-						sessionId: this.options.sessionId ?? null,
-						turnId,
-						error:
-							checkpointError instanceof Error
-								? checkpointError.message
-								: String(checkpointError),
-					});
+					await turn.persistPendingMessages();
+				} catch {
+					// A checkpoint failure on the failure path must not mask the
+					// original error; the turn_failed event below still fires.
 				}
 			}
 
-			failureType = error instanceof Error ? error.name : "unknown_error";
-			logger?.error("turn_failed", {
-				runId: this.options.runId,
-				sessionId: this.options.sessionId ?? null,
-				turnId,
-				toolExecutionCount: toolExecutions.length,
-				summaryCount,
-				trimCount,
-				modelElapsedMs: lastModelElapsedMs,
-				turnElapsedMs: Date.now() - turnStartedAt,
-				failureType,
-				error: error instanceof Error ? error.message : String(error),
-				inputTokens: turnUsageReported ? turnUsage.input : 0,
-				outputTokens: turnUsageReported ? turnUsage.output : 0,
-				cacheReadTokens: turnUsageReported ? turnUsage.cacheRead : 0,
-				cacheWriteTokens: turnUsageReported ? turnUsage.cacheWrite : 0,
-				turnTotalTokens: turnUsageReported ? turnUsage.totalTokens : 0,
-			});
-			reportProgress({
-				type: "turn_failed",
-				turnId,
-				elapsedMs: Date.now() - turnStartedAt,
-				message: "Turn failed",
-				toolExecutionCount: toolExecutions.length,
-				modelElapsedMs: lastModelElapsedMs,
-				summaryCount,
-				trimCount,
-				failureType,
-				turnTokens: turnUsageReported ? turnUsage : undefined,
+			turn.emitProgress("turn_failed", {
+				step: turn.lastStep,
+				elapsedMs: Date.now() - turn.startedAtMs,
+				failureType: error instanceof Error ? error.name : "unknown_error",
+				message: error instanceof Error ? error.message : String(error),
+				usage: turn.turnUsageReported ? turn.turnUsage : null,
 			});
 			throw error;
 		}
 	}
 
 	/**
-	 * Build the fallback {@link ContextUpdateResult} when compaction itself
-	 * fails, so the turn still completes with the messages persisted
-	 * untrimmed. Shared by the normal-completion and max-steps paths.
+	 * One agent-loop step: request the model, then either finish the turn with
+	 * the final answer (early return) or execute the requested tool calls and
+	 * let the loop continue.
 	 */
-	private compactionFailureUpdate(
-		error: CompactionFailedError,
-		turnId: string,
-		logger: RuntimeLogger | undefined,
-	): ContextUpdateResult {
-		logger?.warn("turn_compaction_failed", {
-			runId: this.options.runId,
-			sessionId: this.options.sessionId ?? null,
-			turnId,
-			reason: error.reason,
-			trigger: error.trigger,
-			error: error.message,
+	private async runStep(
+		turn: TurnState,
+		step: number,
+		interruptController?: TurnInterruptController,
+	): Promise<StepOutcome> {
+		turn.lastStep = step;
+		interruptController?.throwIfInterrupted();
+		turn.emitProgress("step_started", { step });
+
+		const response = await this.generateResponse(
+			turn,
+			step,
+			interruptController,
+		);
+
+		if (response.toolCalls.length === 0) {
+			return {
+				done: true,
+				result: await this.finishAnswerTurn(
+					turn,
+					step,
+					response,
+					interruptController,
+				),
+			};
+		}
+
+		await this.executeToolCalls(turn, response, step, interruptController);
+		return { done: false };
+	}
+
+	/**
+	 * Auto trigger (ADR 0026, D1): once per step, before the first request,
+	 * the full request-shape estimate (persisted context + buffered turn
+	 * messages + system + tools) over the soft limit compacts. The actual
+	 * split decision stays in `decide`; if the overshoot lives only in the
+	 * buffered turn messages (which compaction never touches), `compact`
+	 * reports `summarized: false` and the request proceeds.
+	 */
+	private async maybeAutoCompactBeforeRequest(
+		turn: TurnState,
+		step: number,
+		interruptController?: TurnInterruptController,
+	): Promise<void> {
+		const budget = this.context.getContextBudget();
+		const softLimit = Math.max(
+			0,
+			budget.hardContextLimit - budget.reserveTokens,
+		);
+		if (turn.estimateRequestTokens() <= softLimit) {
+			return;
+		}
+		const compacted = await this.context.compact(
+			this.provider,
+			this.systemPrompt,
+			this.toolSchemas,
+			{ turnId: turn.turnId },
+			{
+				force: false,
+				abortSignal: interruptController?.getAbortSignal(),
+			},
+		);
+		if (compacted.summarized) {
+			turn.emitProgress("context_compacted", {
+				step,
+				tokensBefore: compacted.tokensBefore,
+				tokensAfter: compacted.tokensAfter,
+				trigger: "token",
+			});
+		}
+	}
+
+	/**
+	 * One model request per step, with the retry policy folded in:
+	 * auto-compaction before the first attempt (ADR 0026, D1) and a single
+	 * shared retry for both failure modes — `context_length_exceeded`
+	 * (force-compact + retry, D3) and an empty response (retry, D5). Records
+	 * usage + progress once a response lands.
+	 */
+	private async generateResponse(
+		turn: TurnState,
+		step: number,
+		interruptController?: TurnInterruptController,
+	): Promise<ModelResponse> {
+		turn.emitProgress("model_request_started", { step });
+		interruptController?.enterModel();
+
+		// Auto trigger (ADR 0026, D1): once per step, before the first
+		// request (see `maybeAutoCompactBeforeRequest`).
+		interruptController?.throwIfInterrupted();
+		await this.maybeAutoCompactBeforeRequest(turn, step, interruptController);
+
+		// One request, one retry — whatever the failure mode (D3 / D5); see
+		// GENERATE_MAX_RETRIES. A retry that fails again ends the turn.
+		let retries = 0;
+		while (true) {
+			interruptController?.throwIfInterrupted();
+			// The payload is rebuilt from the persisted context + `pending`
+			// before every generate, so a mid-turn compaction (pre-request
+			// estimate or a provider `context_length_exceeded` retry) is
+			// automatically reflected in the next attempt (ADR 0026, D1).
+			const messages = this.buildRequestMessages(turn.pending);
+			let response: ModelResponse;
+			try {
+				response = await this.provider
+					.generate(
+						{
+							messages,
+							tools: this.tools.getSchemas(),
+							temperature: this.options.temperature,
+							maxTokens: this.options.maxTokens,
+							context: {
+								runId: this.options.runId,
+								sessionId: this.options.sessionId ?? null,
+								turnId: turn.turnId,
+								step,
+								purpose: "turn",
+							},
+							abortSignal: interruptController?.getAbortSignal(),
+						},
+						(delta) => {
+							if (
+								delta.reasoningDelta ||
+								delta.contentDelta ||
+								delta.toolCallDelta
+							) {
+								turn.emitProgress("model_delta", {
+									step,
+									reasoningDelta: delta.reasoningDelta,
+									contentDelta: delta.contentDelta,
+									toolCallDelta: delta.toolCallDelta,
+								});
+							}
+						},
+					)
+					.finally(() => {
+						interruptController?.leaveActiveStage();
+					});
+			} catch (error) {
+				// D3 — provider "you are over the context window":
+				// force-compact the persisted context and retry the same
+				// step. Other failures propagate unchanged.
+				if (!isContextLengthExceededError(error)) {
+					throw error;
+				}
+				if (retries >= GENERATE_MAX_RETRIES) {
+					throw error;
+				}
+				retries += 1;
+				const compacted = await this.context.compact(
+					this.provider,
+					this.systemPrompt,
+					this.toolSchemas,
+					{ turnId: turn.turnId },
+					{
+						force: true,
+						abortSignal: interruptController?.getAbortSignal(),
+					},
+				);
+				if (compacted.summarized) {
+					turn.emitProgress("context_compacted", {
+						step,
+						tokensBefore: compacted.tokensBefore,
+						tokensAfter: compacted.tokensAfter,
+						trigger: "force",
+					});
+				}
+				// The context was compacted — retry the request with the
+				// rebuilt payload.
+				continue;
+			}
+			// A response with no text and no tool calls is degenerate:
+			// it is never persisted (ADR 0026, D5) and no "please
+			// continue" note is injected into the request. Instead the
+			// identical request is retried while the shared retry budget
+			// (GENERATE_MAX_RETRIES) allows it; once spent, the empty
+			// response falls through and ends the turn with the
+			// user-facing "No response generated." fallback.
+			if (
+				!response.assistantText?.trim() &&
+				response.toolCalls.length === 0 &&
+				retries < GENERATE_MAX_RETRIES
+			) {
+				retries += 1;
+				turn.emitProgress("context_checkpoint", { step });
+				continue;
+			}
+
+			turn.lastResponseUsage = response.usage;
+			turn.accumulateUsage(response.usage);
+
+			turn.emitProgress("model_request_finished", { step });
+
+			const assistantProgressText = summarizeAssistantProgressText(
+				response.assistantText,
+			);
+			if (assistantProgressText && response.toolCalls.length > 0) {
+				turn.emitProgress("assistant_message", {
+					step,
+					text: assistantProgressText,
+				});
+			}
+			return response;
+		}
+	}
+
+	/**
+	 * Persist the assistant tool-call message, then run each tool call in
+	 * order, feeding the result back into the buffer for the next step.
+	 */
+	private async executeToolCalls(
+		turn: TurnState,
+		response: ModelResponse,
+		step: number,
+		interruptController?: TurnInterruptController,
+	): Promise<void> {
+		turn.pending.push(
+			createAssistantMessage(response.assistantText, response.toolCalls, {
+				reasoning: response.reasoning ?? undefined,
+			}),
+		);
+		interruptController?.throwIfInterrupted();
+
+		turn.emitProgress("tool_calls_received", {
+			step,
+			count: response.toolCalls.length,
 		});
-		const recentMessageCount = this.context.getRecentMessages().length;
+
+		for (const toolCall of response.toolCalls) {
+			interruptController?.throwIfInterrupted();
+			const toolStartedAt = Date.now();
+			const toolDescription = this.tools.describeProgress(toolCall);
+			turn.emitProgress("tool_execution_started", {
+				step,
+				toolName: toolCall.name,
+				toolCallId: toolCall.id,
+				arguments: toolCall.arguments,
+				message: toolDescription.summary,
+			});
+			interruptController?.enterTool();
+			const result = await this.tools
+				.execute(toolCall, {
+					cwd: this.options.workingDirectory,
+					runId: this.options.runId,
+					sessionId: this.options.sessionId ?? null,
+					turnId: turn.turnId,
+					abortSignal: interruptController?.getAbortSignal(),
+					bash: this.options.bashToolContext,
+				})
+				.finally(() => {
+					interruptController?.leaveActiveStage();
+				});
+
+			turn.toolExecutions.push({ toolCall, result });
+
+			const renderedToolResult = formatToolExecutionResult(
+				toolCall.name,
+				result,
+			);
+			turn.emitProgress("tool_execution_finished", {
+				step,
+				toolName: toolCall.name,
+				toolCallId: toolCall.id,
+				ok: result.ok,
+				elapsedMs: Date.now() - toolStartedAt,
+				result: truncateProgressToolResult(renderedToolResult),
+				data: result.data,
+			});
+
+			turn.pending.push(createToolMessage(toolCall.id, toolCall.name, result));
+			interruptController?.throwIfInterrupted();
+		}
+	}
+
+	/** Persist the model's final answer and report the completed turn. */
+	private async finishAnswerTurn(
+		turn: TurnState,
+		step: number,
+		response: ModelResponse,
+		interruptController?: TurnInterruptController,
+	): Promise<RunTurnResult> {
+		interruptController?.throwIfInterrupted();
+		const assistantText = response.assistantText?.trim() ?? "";
+		// An empty response already got its one retry inside the request
+		// loop (logged, identical payload). If it is still empty, surface the
+		// user-facing fallback and end the turn — the degenerate response
+		// itself was never persisted.
+		const outputText = assistantText || "No response generated.";
+
+		const contextUpdated = await turn.persistAnswer(
+			createAssistantMessage(outputText, undefined, {
+				reasoning: response.reasoning ?? undefined,
+			}),
+		);
+
+		turn.emitProgress("turn_finished", {
+			step,
+			elapsedMs: Date.now() - turn.startedAtMs,
+			usage: turn.turnUsageReported ? turn.turnUsage : null,
+		});
+
 		return {
-			summarized: false,
-			trimmed: true,
-			summary: this.context.getSummary(),
-			recentMessageCount,
-			previousRecentMessageCount: recentMessageCount,
-			summaryChars: this.context.getSummary()?.length ?? 0,
-			previousSummaryChars: this.context.getSummary()?.length ?? 0,
-			tokensBefore: 0,
-			tokensAfter: 0,
-			trigger: error.trigger,
+			completionStatus: "completed",
+			outputText,
+			steps: step,
+			toolExecutions: turn.toolExecutions,
+			contextSummary: this.context.getSummary(),
+			contextMessageCount: this.context.getRecentMessages().length,
+			contextUpdated,
+			interruptSource: null,
+			interruptStage: null,
+		};
+	}
+
+	/** The step loop exhausted `maxSteps`: synthesize the fallback answer. */
+	private async finishMaxStepsTurn(turn: TurnState): Promise<RunTurnResult> {
+		const outputText = buildMaxStepsFallbackAnswer(
+			turn.toolExecutions,
+			this.options.maxSteps,
+		);
+		// No reasoning to attach: this branch fires only when the loop
+		// exhausted `maxSteps` and the last `response` from the inner loop
+		// is out of scope. The fallback answer is synthesized locally and
+		// has no associated chain-of-thought.
+		const contextUpdated = await turn.persistAnswer(
+			createAssistantMessage(outputText),
+		);
+
+		turn.emitProgress("turn_max_steps_reached", {
+			step: this.options.maxSteps,
+			elapsedMs: Date.now() - turn.startedAtMs,
+			usage: turn.turnUsageReported ? turn.turnUsage : null,
+		});
+
+		return {
+			completionStatus: "completed",
+			outputText,
+			steps: this.options.maxSteps,
+			toolExecutions: turn.toolExecutions,
+			contextSummary: this.context.getSummary(),
+			contextMessageCount: this.context.getRecentMessages().length,
+			contextUpdated,
+			interruptSource: null,
+			interruptStage: null,
+		};
+	}
+
+	private buildRequestMessages(pending: Message[]): Message[] {
+		const messages = this.context.buildMessages(this.systemPrompt);
+		messages.push(...pending);
+		return messages;
+	}
+
+	private async finishInterruptedTurn(
+		turn: TurnState,
+		stage: InterruptStage,
+	): Promise<RunTurnResult> {
+		const contextUpdated =
+			(await turn.persistPendingMessages()) ?? turn.contextUpdateSnapshot();
+		turn.emitProgress("turn_interrupted", {
+			step: turn.lastStep,
+			elapsedMs: Date.now() - turn.startedAtMs,
+			stage,
+			usage: turn.turnUsageReported ? turn.turnUsage : null,
+		});
+
+		return {
+			completionStatus: "interrupted",
+			outputText: null,
+			steps: turn.lastStep,
+			toolExecutions: turn.toolExecutions,
+			contextSummary: this.context.getSummary(),
+			contextMessageCount: this.context.getRecentMessages().length,
+			contextUpdated,
+			interruptSource: "user_escape",
+			interruptStage: stage,
 		};
 	}
 
@@ -998,7 +815,6 @@ export class AgentRunner {
 function buildMaxStepsFallbackAnswer(
 	toolExecutions: readonly ExecutedToolCall[],
 	maxSteps: number,
-	checkpoint: string | null,
 ): string {
 	const facts = summarizeToolExecutions(toolExecutions).slice(0, 20);
 	const factLines =
@@ -1010,10 +826,6 @@ function buildMaxStepsFallbackAnswer(
 		`I reached the maximum tool-call steps (${maxSteps}) before the task was complete, so the work is not finished. Type 'go on' to continue from where this left off.`,
 		...factLines,
 	];
-
-	if (checkpoint) {
-		lines.push("", "Turn checkpoint:", checkpoint);
-	}
 
 	return lines.join("\n");
 }

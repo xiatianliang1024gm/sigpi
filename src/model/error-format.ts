@@ -36,6 +36,8 @@ function formatRequestError(
 			return "The request was cancelled.";
 		case "http_error":
 			return formatHttpError(status, fallback);
+		case "context_length_exceeded":
+			return "The model request exceeded its context window. Run /compact (or enable compaction in your config) to shrink the conversation, then retry — or raise hard_context_limit / reserve_tokens.";
 		case "empty_response":
 			return "The model returned an empty response. Check that base_url points at a chat/completions endpoint.";
 		case "invalid_json":

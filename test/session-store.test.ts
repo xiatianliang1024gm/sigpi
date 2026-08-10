@@ -60,7 +60,6 @@ test("session store persists and restores session state", async () => {
 		sessionId: created.sessionId,
 		userInput: "inspect repo",
 		assistantOutput: "done",
-		steps: 2,
 		toolExecutions: [
 			createTestToolExecution({
 				toolCall: {
@@ -100,13 +99,6 @@ test("session store persists and restores session state", async () => {
 		"summary",
 	);
 	assert.equal(loaded.session.lastTurn?.status, "completed");
-	assert.equal(loaded.session.turns.length, 1);
-	assert.equal(loaded.session.turns[0]?.status, "completed");
-	assert.equal(loaded.session.turns[0]?.steps, 2);
-	assert.equal(loaded.session.turns[0]?.toolExecutions.length, 1);
-	assert.deepEqual(loaded.session.turns[0]?.toolExecutions[0]?.result.data, {
-		matches: ["src/index.ts:1"],
-	});
 	const derivedState = sessionToContextState(loaded.session);
 	assert.equal(derivedState.summary, "summary");
 	assert.deepEqual(stripMessageIds(derivedState.recentMessages), [
@@ -134,7 +126,6 @@ test("session store round-trips provider usage on assistant message entries", as
 		sessionId: created.sessionId,
 		userInput: "inspect repo",
 		assistantOutput: "done",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -146,7 +137,7 @@ test("session store round-trips provider usage on assistant message entries", as
 				{
 					id: "user-1",
 					kind: "message",
-					turnId: 1,
+					turnId: "turn-1",
 					timestamp: "2024-01-01T00:00:00Z",
 					message: {
 						role: "user",
@@ -157,7 +148,7 @@ test("session store round-trips provider usage on assistant message entries", as
 				{
 					id: "assistant-1",
 					kind: "message",
-					turnId: 1,
+					turnId: "turn-1",
 					timestamp: "2024-01-01T00:00:01Z",
 					message: {
 						role: "assistant",
@@ -269,9 +260,6 @@ test("session load marks in-progress turn as interrupted", async () => {
 	});
 
 	assert.equal(loaded.session.lastTurn?.status, "interrupted");
-	assert.equal(loaded.session.turns.length, 1);
-	assert.equal(loaded.session.turns[0]?.status, "interrupted");
-	assert.equal(loaded.session.turns[0]?.userInput, "unfinished task");
 	assert.match(
 		loaded.warnings[0] ?? "",
 		/restored the last completed turn only/i,
@@ -354,7 +342,6 @@ test("session summary estimates tokens from persisted entries", async () => {
 		sessionId: session.sessionId,
 		userInput: "what is the meaning of life in forty two words",
 		assistantOutput: "forty two",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -428,19 +415,6 @@ test("session store normalizes legacy UTC timestamps on read", async () => {
 					toolExecutionCount: 0,
 					errorMessage: null,
 				},
-				turns: [
-					{
-						turnId: 1,
-						startedAt: "2026-05-22T00:03:00.000Z",
-						finishedAt: "2026-05-22T00:04:00.000Z",
-						status: "completed",
-						userInput: "latest question",
-						assistantOutput: "latest answer",
-						steps: 1,
-						toolExecutions: [],
-						errorMessage: null,
-					},
-				],
 			},
 			null,
 			2,
@@ -453,7 +427,6 @@ test("session store normalizes legacy UTC timestamps on read", async () => {
 	assert.equal(loaded.updatedAt.endsWith("Z"), false);
 	assert.equal(loaded.lastTurn?.startedAt.endsWith("Z"), false);
 	assert.equal(loaded.lastTurn?.finishedAt?.endsWith("Z"), false);
-	assert.equal(loaded.turns[0]?.startedAt.endsWith("Z"), false);
 });
 
 test("session store can update the recovery snapshot without adding a turn", async () => {
@@ -519,7 +492,7 @@ test("markTurnFailed can persist a failed-turn recovery snapshot", async () => {
 				{
 					id: "user-1",
 					kind: "message",
-					turnId: 1,
+					turnId: "turn-1",
 					timestamp: "2024-01-01T00:00:00Z",
 					message: {
 						role: "user",
@@ -530,7 +503,7 @@ test("markTurnFailed can persist a failed-turn recovery snapshot", async () => {
 				{
 					id: "assistant-1",
 					kind: "message",
-					turnId: 1,
+					turnId: "turn-1",
 					timestamp: "2024-01-01T00:00:01Z",
 					message: {
 						role: "assistant",
@@ -553,8 +526,6 @@ test("markTurnFailed can persist a failed-turn recovery snapshot", async () => {
 	const persisted = await store.getSession(session.sessionId);
 	assert.equal(persisted.turnCount, 0);
 	assert.equal(persisted.lastTurn?.status, "failed");
-	assert.equal(persisted.turns.length, 1);
-	assert.equal(persisted.turns[0]?.status, "failed");
 	assert.deepEqual(
 		stripMessageIds(
 			deriveContextStateFromEntries(persisted.entries).recentMessages,
@@ -599,7 +570,6 @@ test("session list exposes last completed user input in summaries", async () => 
 		sessionId: session.sessionId,
 		userInput: "find parser regression",
 		assistantOutput: "done",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -645,22 +615,6 @@ test("session files are written to the expected store path", async () => {
 	assert.equal(storagePaths.projectKey, createProjectKey(cwd));
 });
 
-test("new sessions initialize with empty turn history", async () => {
-	const cwd = await createTempDir("sigpi-session-empty-history-");
-	const store = createTestSessionStore({ cwd, homeDir: cwd });
-	const fingerprint = createSystemPromptFingerprint("system prompt");
-
-	const session = await store.createSession({
-		cwd,
-		systemPromptFingerprint: fingerprint,
-		loadedSkillNames: [],
-		skillsFingerprint: null,
-	});
-
-	assert.equal(session.version, 4);
-	assert.deepEqual(session.turns, []);
-});
-
 test("untitled sessions derive their title from the first completed user input", async () => {
 	const cwd = await createTempDir("sigpi-session-derived-title-");
 	const store = createTestSessionStore({ cwd, homeDir: cwd });
@@ -680,7 +634,6 @@ test("untitled sessions derive their title from the first completed user input",
 		userInput:
 			"investigate why the parser drops the last token in the config loader",
 		assistantOutput: "done",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -723,7 +676,6 @@ test("pruneEmptySessions removes session files that never recorded any turns", a
 		sessionId: active.sessionId,
 		userInput: "keep me",
 		assistantOutput: "done",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -746,7 +698,7 @@ test("pruneEmptySessions removes session files that never recorded any turns", a
 	);
 });
 
-test("session history preserves completed turns even when snapshot changes", async () => {
+test("session store keeps the entry stream append-only across snapshot changes", async () => {
 	const cwd = await createTempDir("sigpi-session-history-");
 	const store = createTestSessionStore({ cwd, homeDir: cwd });
 	const fingerprint = createSystemPromptFingerprint("system prompt");
@@ -765,7 +717,6 @@ test("session history preserves completed turns even when snapshot changes", asy
 		sessionId: session.sessionId,
 		userInput: "first turn",
 		assistantOutput: "first answer",
-		steps: 1,
 		toolExecutions: [createTestToolExecution()],
 		contextState: {
 			summary: null,
@@ -784,7 +735,6 @@ test("session history preserves completed turns even when snapshot changes", asy
 		sessionId: session.sessionId,
 		userInput: "second turn",
 		assistantOutput: "second answer",
-		steps: 3,
 		toolExecutions: [
 			createTestToolExecution({
 				toolCall: {
@@ -816,9 +766,6 @@ test("session history preserves completed turns even when snapshot changes", asy
 		{ role: "user", content: "second turn" },
 		{ role: "assistant", content: "second answer" },
 	]);
-	assert.equal(persisted.turns.length, 2);
-	assert.equal(persisted.turns[0]?.userInput, "first turn");
-	assert.equal(persisted.turns[1]?.userInput, "second turn");
 });
 
 test("session restore warns when loaded skills change but still succeeds", async () => {
@@ -934,7 +881,6 @@ test("session store appends transcript deltas across turns instead of rewriting"
 		sessionId: created.sessionId,
 		userInput: "first task",
 		assistantOutput: "first answer",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -954,7 +900,6 @@ test("session store appends transcript deltas across turns instead of rewriting"
 		sessionId: created.sessionId,
 		userInput: "second task",
 		assistantOutput: "second answer",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -984,7 +929,6 @@ test("session store appends transcript deltas across turns instead of rewriting"
 		sessionId: created.sessionId,
 		userInput: "third task",
 		assistantOutput: "third answer",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -1033,7 +977,6 @@ test("session store tolerates a single torn transcript line on read", async () =
 		sessionId: created.sessionId,
 		userInput: "task",
 		assistantOutput: "answer",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,

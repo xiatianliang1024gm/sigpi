@@ -14,6 +14,7 @@ import {
 import { buildSystemPrompt, buildSystemPromptSections } from "./defaults.js";
 import { createChildLogger, createLogger } from "./logger.js";
 import { createModelProvider } from "./model/provider.js";
+import { wireProgressLogging } from "./progress-logging.js";
 import { resolveSessionStoragePaths } from "./session/paths.js";
 import {
 	hydrateRuntimeFromSession,
@@ -32,7 +33,6 @@ import type {
 	LoadedSession,
 	LoadedSkill,
 	PersistedSession,
-	ProgressReporter,
 	RuntimeLogger,
 	SkillWarning,
 	SystemPromptSection,
@@ -70,7 +70,6 @@ export interface AgentRuntime {
 }
 
 interface CreateAgentRuntimeArgs {
-	progressReporter?: ProgressReporter;
 	sessionId?: string;
 	sessionTitle?: string;
 	createSession?: boolean;
@@ -290,13 +289,13 @@ export async function createAgentRuntime(
 		options: {
 			maxSteps: config.agent.maxSteps,
 			workingDirectory: cwd,
-			logger: runtimeLogger,
-			progressReporter: args.progressReporter,
 			runId,
 			sessionId: sessionState.session?.sessionId ?? null,
 			bashToolContext,
 		},
 	});
+	// Turn-progress events → dated log file (the runner itself only emits).
+	wireProgressLogging(runner, runtimeLogger);
 
 	const sessionRuntime = sessionState.session
 		? new SessionRuntime(

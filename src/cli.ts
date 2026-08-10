@@ -29,7 +29,6 @@ import { TurnInterruptController } from "./interrupt.js";
 import { resolveDatedLogFilePath } from "./logger.js";
 import { configureHttpProxy } from "./model/http-dispatcher.js";
 import { createAgentRuntime, createRuntimeSessionStore } from "./runtime.js";
-import { formatSessionDetails } from "./session/format.js";
 import type { SessionStore } from "./session/store.js";
 import { detectShellRuntime } from "./shell.js";
 import type { ToolRegistry } from "./tools/registry.js";
@@ -46,7 +45,11 @@ import {
 	type LastTurnStats,
 } from "./tui/status-bar.js";
 import { replaySessionIntoView } from "./tui/transcript-replay.js";
-import type { JsonValue, TurnProgressEvent } from "./types.js";
+import type {
+	JsonValue,
+	TurnProgressEvent,
+	TurnTerminalEvent,
+} from "./types.js";
 
 /**
  * Resolve the effective config for the current working directory. The global
@@ -73,7 +76,6 @@ function printUsage(): void {
 	console.log("  pnpm dev config validate");
 	console.log("  pnpm dev session new [--title <title>]");
 	console.log("  pnpm dev session list");
-	console.log("  pnpm dev session show <id>");
 	console.log("");
 	console.log(`User config: ${getDefaultUserConfigPath()}`);
 	console.log("");
@@ -93,9 +95,6 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		config.model.proxy,
 		config.model.timeoutMs,
 	);
-	const progressReporter = (event: TurnProgressEvent) => {
-		activeStatusBarProgressListener?.(event);
-	};
 	const cleanupStore = createRuntimeSessionStore({
 		cwd: process.cwd(),
 		config,
@@ -113,7 +112,6 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 	const shouldCreateSession = !resolvedSessionId;
 	const runtime = await createAgentRuntime({
 		config,
-		progressReporter,
 		sessionId: resolvedSessionId,
 		createSession: shouldCreateSession,
 		sessionTitle: parsed.sessionTitle,
@@ -147,7 +145,6 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		{
 			state,
 			store: runtime.store,
-			progressReporter,
 			tools: runtime.tools,
 		},
 		{
@@ -172,7 +169,6 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 interface RunChatReplLoopOptions {
 	state: ChatReplState;
 	store: SessionStore;
-	progressReporter?: (event: TurnProgressEvent) => void;
 	tools?: ToolRegistry;
 }
 
@@ -201,7 +197,9 @@ const STATUS_BAR_REFRESH_INTERVAL_MS = 5_000;
 const TURN_STATUS_REFRESH_INTERVAL_MS = 1_000;
 
 /** The turn events that end a turn and carry final elapsed/token stats. */
-function isTurnTerminalEvent(event: TurnProgressEvent): boolean {
+function isTurnTerminalEvent(
+	event: TurnProgressEvent,
+): event is TurnTerminalEvent {
 	return (
 		event.type === "turn_finished" ||
 		event.type === "turn_interrupted" ||
@@ -247,11 +245,11 @@ export function createReplRunStats(): ReplRunStats {
  */
 export function accumulateTurnStats(
 	stats: ReplRunStats,
-	event: TurnProgressEvent,
+	event: TurnTerminalEvent,
 ): ReplRunStats {
 	stats.turnCount += 1;
-	stats.elapsedMs += event.elapsedMs ?? 0;
-	const tokens = event.turnTokens;
+	stats.elapsedMs += event.elapsedMs;
+	const tokens = event.usage;
 	if (tokens) {
 		stats.inputTokens += tokens.input;
 		stats.outputTokens += tokens.output;
@@ -279,10 +277,6 @@ export function formatReplRunSummary(stats: ReplRunStats): string | null {
 	}
 	return line;
 }
-
-let activeStatusBarProgressListener:
-	| ((event: TurnProgressEvent) => void)
-	| null = null;
 
 /**
  * Apply one turn-progress event to the persistent REPL view. Returns the
@@ -346,11 +340,11 @@ export function applyTurnProgress(
 		const handle = toolLines.get(id);
 		if (handle) {
 			toolLines.delete(id);
-			if (event.toolOk === true) {
+			if (event.ok === true) {
 				handle.finish();
 			} else {
 				handle.finish();
-				const errorMsg = event.toolResult ?? event.message ?? "failed";
+				const errorMsg = event.result ?? "failed";
 				view.appendSystem(errorMsg, "error");
 			}
 		}
@@ -381,19 +375,18 @@ export function applyTurnProgress(
 
 /**
  * Render a compaction notice that highlights the context-window size change
- * (the number users actually care about) instead of a verbose recap. Falls
- * back to the event's own message when no token snapshot is available.
+ * (the number users actually care about) instead of a verbose recap. The
+ * token snapshot is always present on `context_compacted`, so this is the
+ * primary branch.
  */
-function formatCompactionMessage(event: TurnProgressEvent): string {
+function formatCompactionMessage(
+	event: Extract<TurnProgressEvent, { type: "context_compacted" }>,
+): string {
 	const { tokensBefore, tokensAfter } = event;
-	if (
-		typeof tokensBefore === "number" &&
-		typeof tokensAfter === "number" &&
-		(tokensBefore > 0 || tokensAfter > 0)
-	) {
+	if (tokensBefore > 0 || tokensAfter > 0) {
 		return `Context compacted: context window ${formatCompactNumber(tokensBefore)} → ${formatCompactNumber(tokensAfter)} tokens.`;
 	}
-	return event.message ?? "Context compacted.";
+	return "Context compacted.";
 }
 
 async function runChatReplLoop(
@@ -413,7 +406,7 @@ async function runChatReplLoop(
 	// `--continue`), replay its message stream into the terminal so the
 	// conversation history is visible in place. A fresh session has no
 	// entries, so this is a no-op there.
-	replaySessionIntoView(state.view, state.runtime.session);
+	replaySessionIntoView(state.view, state.runtime.session, state.runtime.tools);
 
 	const readInput = (): Promise<string | null> => view.readInput();
 	const writeLine = (line: string) => view.writeLine(line);
@@ -451,11 +444,11 @@ async function runChatReplLoop(
 			turnStartedAt = null;
 			lastTurnStats = {
 				label: getStatusEventLabel(event) ?? "done",
-				elapsedMs: event.elapsedMs ?? 0,
+				elapsedMs: event.elapsedMs,
 				// Cumulative provider-reported usage across the turn's model
 				// requests (every tool step re-sends the context, so this
 				// billing figure runs well above the bar's left segment).
-				tokens: event.turnTokens ?? null,
+				tokens: event.usage,
 			};
 			accumulateTurnStats(runStats, event);
 		}
@@ -467,7 +460,10 @@ async function runChatReplLoop(
 			toolLines,
 		);
 	};
-	activeStatusBarProgressListener = viewProgressListener;
+	// Subscribe the live view to the runner's turn-progress events. `setState`
+	// below re-subscribes when `/new` or `/resume` swaps in a new runtime.
+	let unsubscribeProgress =
+		state.runtime.runner.onProgress(viewProgressListener);
 
 	// Idle refresh: keep the bar honest between turns (see the constant's
 	// doc comment). Cleared on the loop's single exit path below.
@@ -518,6 +514,11 @@ async function runChatReplLoop(
 				// ProcessTerminal on process.stdin (whose stop() pauses
 				// stdin and freezes the REPL).
 				state = { ...updatedState, view };
+				// A new runtime (e.g. /new, /resume) comes with a new runner
+				// that has no listeners; re-subscribe the view to it.
+				unsubscribeProgress();
+				unsubscribeProgress =
+					updatedState.runtime.runner.onProgress(viewProgressListener);
 				latestProgressEvent = null;
 				// The state changed (e.g. /model, /new, /resume): the previous
 				// turn's clock/stats no longer apply to the new context.
@@ -530,7 +531,6 @@ async function runChatReplLoop(
 				void refreshStatusBar();
 			},
 			store: options.store,
-			progressReporter: viewProgressListener,
 			writeLine,
 		});
 
@@ -578,19 +578,12 @@ async function runChatReplLoop(
 				interrupt.stage === "model"
 					? "Cancelling current model request"
 					: "Interrupt requested; waiting for current tool to finish";
-			if (options.progressReporter) {
-				const event = {
-					type: "interrupt_requested",
-					message,
-					interruptStage: interrupt.stage ?? undefined,
-					interruptSource: "user_escape",
-				} satisfies TurnProgressEvent;
-				latestProgressEvent = event;
-				void refreshStatusBar(event);
-				options.progressReporter(event);
-				return;
-			}
-			writeLine(`[agent] ${message}`);
+			// Feed the synthetic event through the same listener pipeline as
+			// the runner's own events (status bar + transcript line).
+			state.runtime.runner.emitProgress("interrupt_requested", {
+				message,
+				stage: interrupt.stage ?? undefined,
+			});
 		});
 
 		const turn = await state.runtime.turn.runTurn(
@@ -654,20 +647,6 @@ async function runSessionCommand(args: string[]): Promise<void> {
 	if (subcommand === "list") {
 		const sessions = await store.listSessions();
 		console.log(JSON.stringify(sessions, null, 2));
-		return;
-	}
-
-	if (subcommand === "show") {
-		const sessionId = rest[0]?.trim();
-
-		if (!sessionId) {
-			throw new Error(
-				"Missing session id. Example: pnpm dev session show <id>",
-			);
-		}
-
-		const session = await store.getSession(sessionId);
-		console.log(JSON.stringify(formatSessionDetails(session), null, 2));
 		return;
 	}
 

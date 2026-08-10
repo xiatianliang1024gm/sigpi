@@ -21,12 +21,10 @@ import type {
 	ExecutedToolCall,
 	InterruptSource,
 	InterruptStage,
-	JsonValue,
 	LoadedSession,
 	PersistedSession,
 	SessionEntry,
 	SessionSummary,
-	ToolExecutionResult,
 } from "../types.js";
 import {
 	deriveContextStateFromEntries,
@@ -67,17 +65,6 @@ const toolMessageSchema = z.object({
 	id: z.string().min(1),
 });
 
-const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-	z.union([
-		z.string(),
-		z.number(),
-		z.boolean(),
-		z.null(),
-		z.array(jsonValueSchema),
-		z.record(jsonValueSchema),
-	]),
-);
-
 const turnStatusSchema = z.enum([
 	"in_progress",
 	"completed",
@@ -100,35 +87,6 @@ const sessionTurnRecordSchema = z.object({
 	interruptStage: z.enum(["model", "tool"]).nullable().optional(),
 });
 
-const toolExecutionResultSchema: z.ZodType<ToolExecutionResult> = z.object({
-	ok: z.boolean(),
-	data: jsonValueSchema.optional(),
-	error: z.string().optional(),
-	details: jsonValueSchema.optional(),
-});
-
-const sessionToolExecutionEntrySchema: z.ZodType<ExecutedToolCall> = z.object({
-	toolCall: toolCallSchema,
-	result: toolExecutionResultSchema,
-});
-
-const sessionTurnHistoryEntrySchema = z.object({
-	turnId: z.number().int().positive(),
-	startedAt: z.string().min(1),
-	finishedAt: z.string().nullable(),
-	status: turnStatusSchema,
-	userInput: z.string(),
-	assistantOutput: z.string().nullable(),
-	steps: z.number().int().nonnegative(),
-	toolExecutions: z.array(sessionToolExecutionEntrySchema),
-	errorMessage: z.string().nullable(),
-	interruptSource: z
-		.enum(["user_escape", "process_recovery"])
-		.nullable()
-		.optional(),
-	interruptStage: z.enum(["model", "tool"]).nullable().optional(),
-});
-
 const modelUsageSchema = z.object({
 	input: z.number().int().nonnegative(),
 	output: z.number().int().nonnegative(),
@@ -140,7 +98,7 @@ const modelUsageSchema = z.object({
 const messageEntrySchema = z.object({
 	kind: z.literal("message"),
 	id: z.string().min(1),
-	turnId: z.number().int().nullable(),
+	turnId: z.string().nullable(),
 	timestamp: z.string().min(1),
 	// Persisted message entries never include system messages — those are
 	// synthesized by `buildMessages` on every request. User / assistant /
@@ -178,6 +136,10 @@ const compactionEntrySchema = z.object({
 			customInstructions: z.string().min(1).optional(),
 		})
 		.optional(),
+	// Provider-reported usage of the summarization model call that produced
+	// this compaction (D7). Persisted so resumed sessions and diagnostics can
+	// account for the summarization cost.
+	usage: modelUsageSchema.optional(),
 });
 
 const sessionEntrySchema = z.discriminatedUnion("kind", [
@@ -199,7 +161,6 @@ const persistedSessionSchema = z.object({
 	turnCount: z.number().int().nonnegative(),
 	lastCompletedUserInput: z.string().nullable(),
 	lastTurn: sessionTurnRecordSchema.nullable(),
-	turns: z.array(sessionTurnHistoryEntrySchema),
 });
 
 const sessionHeaderSchema = persistedSessionSchema
@@ -252,7 +213,6 @@ export interface SessionStore {
 		sessionId: string;
 		userInput: string;
 		assistantOutput: string;
-		steps: number;
 		toolExecutions: ExecutedToolCall[];
 		contextState: ConversationContextState;
 	}): Promise<PersistedSession>;
@@ -261,14 +221,12 @@ export interface SessionStore {
 		userInput: string;
 		errorMessage: string;
 		assistantOutput?: string | null;
-		steps?: number;
 		toolExecutions?: ExecutedToolCall[];
 		contextState?: ConversationContextState;
 	}): Promise<PersistedSession>;
 	markTurnInterrupted(args: {
 		sessionId: string;
 		userInput: string;
-		steps?: number;
 		toolExecutions?: ExecutedToolCall[];
 		contextState?: ConversationContextState;
 		assistantOutput?: string | null;
@@ -312,7 +270,6 @@ export class DiskSessionStore implements SessionStore {
 			turnCount: 0,
 			lastCompletedUserInput: null,
 			lastTurn: null,
-			turns: [],
 		};
 
 		await this.writeSession(session);
@@ -342,7 +299,6 @@ export class DiskSessionStore implements SessionStore {
 
 		if (session.lastTurn?.status === "in_progress") {
 			const interruptedAt = formatLocalTimestamp(new Date());
-			const turnId = nextTurnId(session.turns);
 			normalized = {
 				...session,
 				updatedAt: interruptedAt,
@@ -356,24 +312,6 @@ export class DiskSessionStore implements SessionStore {
 					interruptSource: "process_recovery",
 					interruptStage: null,
 				},
-				turns: [
-					...session.turns,
-					{
-						turnId,
-						startedAt: session.lastTurn.startedAt,
-						finishedAt: session.lastTurn.finishedAt ?? interruptedAt,
-						status: "interrupted",
-						userInput: session.lastTurn.userInput,
-						assistantOutput: session.lastTurn.assistantOutput,
-						steps: 0,
-						toolExecutions: [],
-						errorMessage:
-							session.lastTurn.errorMessage ??
-							"Session resumed after interruption.",
-						interruptSource: "process_recovery",
-						interruptStage: null,
-					},
-				],
 			};
 			warnings.push(
 				"Previous run was interrupted. Restored the last completed turn only; re-run the unfinished request manually.",
@@ -494,7 +432,6 @@ export class DiskSessionStore implements SessionStore {
 		sessionId: string;
 		userInput: string;
 		assistantOutput: string;
-		steps: number;
 		toolExecutions: ExecutedToolCall[];
 		contextState: ConversationContextState;
 	}): Promise<PersistedSession> {
@@ -502,7 +439,6 @@ export class DiskSessionStore implements SessionStore {
 		const finishedAt = formatLocalTimestamp(new Date());
 		const title = session.title ?? deriveTitle(args.userInput);
 		const startedAt = session.lastTurn?.startedAt ?? finishedAt;
-		const turnId = nextTurnId(session.turns);
 		const entries = resolveEntriesForPersist({
 			session,
 			contextState: args.contextState,
@@ -526,22 +462,6 @@ export class DiskSessionStore implements SessionStore {
 				interruptSource: null,
 				interruptStage: null,
 			},
-			turns: [
-				...session.turns,
-				{
-					turnId,
-					startedAt,
-					finishedAt,
-					status: "completed",
-					userInput: args.userInput,
-					assistantOutput: args.assistantOutput,
-					steps: args.steps,
-					toolExecutions: args.toolExecutions,
-					errorMessage: null,
-					interruptSource: null,
-					interruptStage: null,
-				},
-			],
 		};
 
 		return this.commit(updated);
@@ -572,7 +492,6 @@ export class DiskSessionStore implements SessionStore {
 		userInput: string;
 		errorMessage: string;
 		assistantOutput?: string | null;
-		steps?: number;
 		toolExecutions?: ExecutedToolCall[];
 		contextState?: ConversationContextState;
 	}): Promise<PersistedSession> {
@@ -584,7 +503,6 @@ export class DiskSessionStore implements SessionStore {
 			args.assistantOutput ?? session.lastTurn?.assistantOutput ?? null;
 		const toolExecutionCount =
 			args.toolExecutions?.length ?? session.lastTurn?.toolExecutionCount ?? 0;
-		const turnId = nextTurnId(session.turns);
 		const entries = resolveEntriesForPersist({
 			session,
 			contextState: args.contextState,
@@ -617,22 +535,6 @@ export class DiskSessionStore implements SessionStore {
 						interruptSource: null,
 						interruptStage: null,
 					},
-			turns: [
-				...session.turns,
-				{
-					turnId,
-					startedAt,
-					finishedAt,
-					status: "failed",
-					userInput,
-					assistantOutput,
-					steps: args.steps ?? 0,
-					toolExecutions: args.toolExecutions ?? [],
-					errorMessage: args.errorMessage,
-					interruptSource: null,
-					interruptStage: null,
-				},
-			],
 		};
 
 		return this.commit(updated);
@@ -641,7 +543,6 @@ export class DiskSessionStore implements SessionStore {
 	async markTurnInterrupted(args: {
 		sessionId: string;
 		userInput: string;
-		steps?: number;
 		toolExecutions?: ExecutedToolCall[];
 		contextState?: ConversationContextState;
 		assistantOutput?: string | null;
@@ -655,7 +556,6 @@ export class DiskSessionStore implements SessionStore {
 		const toolExecutionCount =
 			args.toolExecutions?.length ?? session.lastTurn?.toolExecutionCount ?? 0;
 		const assistantOutput = args.assistantOutput ?? null;
-		const turnId = nextTurnId(session.turns);
 		const entries = resolveEntriesForPersist({
 			session,
 			contextState: args.contextState,
@@ -676,22 +576,6 @@ export class DiskSessionStore implements SessionStore {
 				interruptSource: args.interruptSource,
 				interruptStage: args.interruptStage,
 			},
-			turns: [
-				...session.turns,
-				{
-					turnId,
-					startedAt,
-					finishedAt,
-					status: "interrupted",
-					userInput,
-					assistantOutput,
-					steps: args.steps ?? 0,
-					toolExecutions: args.toolExecutions ?? [],
-					errorMessage: null,
-					interruptSource: args.interruptSource,
-					interruptStage: args.interruptStage,
-				},
-			],
 		};
 
 		return this.commit(updated);
@@ -1028,13 +912,6 @@ function normalizePersistedSessionTimestamps(
 						: null,
 				}
 			: null,
-		turns: session.turns.map((turn) => ({
-			...turn,
-			startedAt: normalizeTimestampString(turn.startedAt),
-			finishedAt: turn.finishedAt
-				? normalizeTimestampString(turn.finishedAt)
-				: null,
-		})),
 	};
 }
 
@@ -1057,14 +934,9 @@ function deriveTitle(userInput: string): string {
 	return normalized.length <= 80 ? normalized : `${normalized.slice(0, 77)}...`;
 }
 
-function nextTurnId(turns: PersistedSession["turns"]): number {
-	return (turns.at(-1)?.turnId ?? 0) + 1;
-}
-
 function isEmptySession(session: PersistedSession): boolean {
 	if (
 		session.turnCount !== 0 ||
-		session.turns.length !== 0 ||
 		session.lastTurn !== null ||
 		session.entries.length !== 0 ||
 		session.lastCompletedUserInput !== null

@@ -120,6 +120,13 @@ export class AssistantMessageComponent implements Component {
  * A single tool-call line in the activity log. Two-phase lifecycle:
  * phase 1 shows the label (tool summary), phase 2 appends the outcome inline.
  * Replaces the retired {@link ToolResultMessageComponent}.
+ *
+ * The label is the human-readable summary of the tool call (e.g.
+ * `shell git status` for bash, `search files mentioning "foo"` for grep).
+ * The live REPL gets this from `describeProgress`; the transcript replay
+ * (`buildTranscriptComponents`) reconstructs it from the persisted
+ * `ToolCall.arguments` via the same `describeProgress` so `--continue` /
+ * `--session <id>` shows the same line the user saw during the turn.
  */
 export class ToolLineComponent implements Component {
 	private readonly label: string;

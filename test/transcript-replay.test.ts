@@ -8,7 +8,7 @@ function userEntry(content: string): SessionEntry {
 	return {
 		kind: "message",
 		id: `m-${content}`,
-		turnId: 1,
+		turnId: "turn-1",
 		timestamp: "2026-05-22T00:01:00.000Z",
 		message: { role: "user", content, id: `m-${content}` },
 	};
@@ -21,7 +21,7 @@ function assistantEntry(
 	return {
 		kind: "message",
 		id: `m-a-${content ?? "none"}`,
-		turnId: 1,
+		turnId: "turn-1",
 		timestamp: "2026-05-22T00:02:00.000Z",
 		message: {
 			role: "assistant",
@@ -36,7 +36,7 @@ function toolEntry(name: string, content: string): SessionEntry {
 	return {
 		kind: "message",
 		id: `m-t-${name}`,
-		turnId: 1,
+		turnId: "turn-1",
 		timestamp: "2026-05-22T00:03:00.000Z",
 		message: { role: "tool", name, toolCallId: "call-1", content, id: "m-t" },
 	};
@@ -78,6 +78,83 @@ test("buildTranscriptComponents maps user/assistant/tool messages to transcript 
 	assert.ok(lines.some((line) => line.includes("hi there")));
 	assert.ok(lines.some((line) => line.includes("⎿ bash")));
 	assert.ok(lines.some((line) => line.includes("done")));
+});
+
+test("buildTranscriptComponents renders the tool call arguments (not the result) on the tool line", () => {
+	// The tool message's `content` is the rendered *result* (what the model
+	// saw back). The tool line in the transcript should show the *call
+	// arguments* — the same `describeProgress` summary the live REPL showed
+	// during the turn — not the result body.
+	const mockTools = {
+		describeProgress: (call: {
+			name: string;
+			arguments: Record<string, unknown>;
+		}) => {
+			if (call.name === "bash") {
+				return { summary: `shell ${String(call.arguments.command ?? "")}` };
+			}
+			return { summary: `tool ${call.name}` };
+		},
+	} as unknown as Parameters<typeof buildTranscriptComponents>[1];
+
+	const components = buildTranscriptComponents(
+		[
+			{
+				kind: "message",
+				id: "m-a",
+				turnId: "turn-1",
+				timestamp: "2026-05-22T00:02:00.000Z",
+				message: {
+					role: "assistant",
+					content: null,
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "bash",
+							arguments: { command: "git status" },
+							rawArguments: '{"command":"git status"}',
+						},
+					],
+					id: "m-a",
+				},
+			},
+			toolEntry(
+				"bash",
+				"On branch main\nnothing to commit, working tree clean",
+			),
+		],
+		mockTools,
+	);
+
+	const lines = renderLines(components);
+	const toolLineIndex = lines.findIndex((line) => line.includes("⎿"));
+	assert.ok(toolLineIndex >= 0, "tool line should be present");
+	const toolLine = lines[toolLineIndex];
+	assert.ok(
+		toolLine.includes("git status"),
+		`tool line should show the call arguments, got: ${toolLine}`,
+	);
+	assert.ok(
+		!toolLine.includes("nothing to commit"),
+		"tool line must not show the tool result",
+	);
+	assert.ok(
+		!lines.some((line) => line.includes("nothing to commit")),
+		"tool result body must not appear anywhere in the replayed transcript",
+	);
+});
+
+test("buildTranscriptComponents falls back to the tool name when the originating call is missing", () => {
+	// After compaction the assistant turn that issued the tool call may be
+	// dropped, leaving an orphan tool message. The replay should still
+	// render a tool line using the bare tool name.
+	const components = buildTranscriptComponents([toolEntry("bash", "ok: true")]);
+
+	const lines = renderLines(components);
+	assert.ok(
+		lines.some((line) => line.includes("⎿ bash")),
+		"orphan tool message should still render a tool line",
+	);
 });
 
 test("buildTranscriptComponents renders failed tool messages with their error", () => {

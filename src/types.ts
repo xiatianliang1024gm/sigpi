@@ -165,76 +165,142 @@ export interface RuntimeLogger {
 	error(event: string, fields?: Record<string, JsonValue | undefined>): void;
 }
 
-export interface TurnProgressEvent {
-	type:
-		| "turn_started"
-		| "step_started"
-		| "interrupt_requested"
-		| "model_request_started"
-		| "model_request_finished"
-		| "model_delta"
-		| "assistant_message"
-		| "context_checkpoint"
-		| "context_compacted"
-		| "tool_calls_received"
-		| "tool_execution_started"
-		| "tool_execution_finished"
-		| "turn_finished"
-		| "turn_interrupted"
-		| "turn_failed"
-		| "turn_max_steps_reached";
-	step?: number;
-	message?: string;
-	userInput?: string;
-	elapsedMs?: number;
-	turnId?: string;
-	toolName?: string;
-	toolCallId?: string;
-	toolArguments?: Record<string, unknown>;
-	toolCallCount?: number;
-	toolExecutionCount?: number;
-	toolOk?: boolean;
-	toolResult?: string;
-	toolResultData?: JsonValue;
-	assistantText?: string;
-	/** Incremental reasoning text emitted mid-stream. */
-	reasoningDelta?: string;
-	/** Incremental assistant content text emitted mid-stream. */
-	contentDelta?: string;
-	/** Incremental tool-call argument fragment emitted mid-stream. */
-	toolCallDelta?: {
-		index: number;
-		id?: string;
-		name?: string;
-		argumentsDelta?: string;
+/**
+ * One turn-progress event per phase of an agent turn. Each key is the event
+ * name the runner emits (and listeners subscribe to); the payload carries only
+ * the fields that phase can meaningfully report. `type`/`turnId`-style
+ * boilerplate is deliberately absent — the event name is the type, and the
+ * turn id is carried once on `turn_started`.
+ */
+export interface TurnProgressEventMap {
+	turn_started: { turnId: string; userInput: string };
+	step_started: { step: number };
+	interrupt_requested: { message: string; stage?: InterruptStage };
+	model_request_started: { step: number };
+	model_request_finished: { step: number };
+	model_delta: {
+		step: number;
+		/** Incremental reasoning text emitted mid-stream. */
+		reasoningDelta?: string;
+		/** Incremental assistant content text emitted mid-stream. */
+		contentDelta?: string;
+		/** Incremental tool-call argument fragment emitted mid-stream. */
+		toolCallDelta?: ModelDelta["toolCallDelta"];
 	};
-	detail?: string;
-	modelElapsedMs?: number;
-	summaryCount?: number;
-	trimCount?: number;
-	failureType?: string;
-	interruptStage?: InterruptStage;
-	interruptSource?: InterruptSource;
+	assistant_message: { step: number; text: string };
+	/** A degenerate empty model response was retried once. */
+	context_checkpoint: { step: number };
 	/**
-	 * Token snapshot of the context window around a compaction, reported on
-	 * `context_compacted` events so the UI can surface the window-size change.
+	 * Token snapshot of the context window around a compaction, so the UI can
+	 * surface the window-size change.
 	 */
-	tokensBefore?: number;
-	tokensAfter?: number;
-	/** Which trigger fired for the compaction (see {@link ContextUpdateResult.trigger}). */
-	trigger?: ContextUpdateResult["trigger"];
-	estimatedContextTokens?: number;
+	context_compacted: {
+		step: number;
+		tokensBefore: number;
+		tokensAfter: number;
+		/** Which trigger fired for the compaction (see {@link ContextUpdateResult.trigger}). */
+		trigger: Exclude<ContextUpdateResult["trigger"], null>;
+	};
+	tool_calls_received: { step: number; count: number };
+	tool_execution_started: {
+		step: number;
+		toolName: string;
+		toolCallId: string;
+		arguments?: Record<string, unknown>;
+		/** Human-readable progress label for the tool call. */
+		message: string;
+	};
+	tool_execution_finished: {
+		step: number;
+		toolName: string;
+		toolCallId: string;
+		ok: boolean;
+		elapsedMs: number;
+		/** Rendered tool result (truncated), for the error line when it failed. */
+		result?: string;
+		/** Structured result payload, when the tool returned one. */
+		data?: JsonValue;
+	};
 	/**
-	 * Provider-reported token usage accumulated across every model request in
-	 * the turn (main steps plus in-turn checkpoint summaries). Reported on the
-	 * terminal turn events (`turn_finished`, `turn_interrupted`,
-	 * `turn_failed`, `turn_max_steps_reached`) so the UI can surface "this
-	 * answer consumed N tokens". Absent when no request reported usage.
+	 * Terminal turn events carry the provider-reported usage accumulated
+	 * across every model request in the turn (main steps plus in-turn
+	 * checkpoint summaries), or `null` when no request reported usage.
 	 */
-	turnTokens?: ModelUsage;
+	turn_finished: { step: number; elapsedMs: number; usage: ModelUsage | null };
+	turn_interrupted: {
+		step: number;
+		elapsedMs: number;
+		stage: InterruptStage;
+		usage: ModelUsage | null;
+	};
+	turn_failed: {
+		step: number;
+		elapsedMs: number;
+		failureType: string;
+		/** Raw error message, for the log. */
+		message: string;
+		usage: ModelUsage | null;
+	};
+	turn_max_steps_reached: {
+		step: number;
+		elapsedMs: number;
+		usage: ModelUsage | null;
+	};
 }
 
-export type ProgressReporter = (event: TurnProgressEvent) => void;
+/** Names of every turn-progress event, for subscribing to the whole stream. */
+export const TURN_PROGRESS_EVENTS = [
+	"turn_started",
+	"step_started",
+	"interrupt_requested",
+	"model_request_started",
+	"model_request_finished",
+	"model_delta",
+	"assistant_message",
+	"context_checkpoint",
+	"context_compacted",
+	"tool_calls_received",
+	"tool_execution_started",
+	"tool_execution_finished",
+	"turn_finished",
+	"turn_interrupted",
+	"turn_failed",
+	"turn_max_steps_reached",
+] as const satisfies readonly (keyof TurnProgressEventMap)[];
+
+/** Runtime payload of one emitted progress event (event name + payload). */
+export type TurnProgressPayload = {
+	[K in keyof TurnProgressEventMap]: TurnProgressEventMap[K] & {
+		estimatedContextTokens?: number;
+	};
+}[keyof TurnProgressEventMap];
+
+/**
+ * A progress event as delivered to `AgentRunner.onProgress` listeners: the
+ * event name tagged back onto the payload. `estimatedContextTokens` is the
+ * live in-flight request-token estimate the runner attaches at emit time; it
+ * is absent on synthetic events (e.g. a REPL-emitted `interrupt_requested`).
+ */
+export type TurnProgressEvent = {
+	[K in keyof TurnProgressEventMap]: { type: K } & TurnProgressEventMap[K] & {
+			estimatedContextTokens?: number;
+		};
+}[keyof TurnProgressEventMap];
+
+/**
+ * The terminal subset of progress events: the four ways a turn can end, each
+ * carrying the turn's final elapsed time and accumulated token usage.
+ */
+export type TurnTerminalEvent = Extract<
+	TurnProgressEvent,
+	{
+		type:
+			| "turn_finished"
+			| "turn_interrupted"
+			| "turn_failed"
+			| "turn_max_steps_reached";
+	}
+>;
 
 export interface ToolExecutionResult {
 	ok: boolean;
@@ -405,7 +471,6 @@ export interface ContextManagerOptions {
 
 export interface ContextUpdateResult {
 	summarized: boolean;
-	trimmed: boolean;
 	summary: string | null;
 	recentMessageCount: number;
 	previousRecentMessageCount: number;
@@ -441,15 +506,15 @@ export interface ConversationContextState {
 /**
  * One of the persisted entry kinds in a session. v4 sessions store a flat
  * stream of `MessageEntry` and `CompactionEntry` (and, optionally, future
- * `BranchSummaryEntry`) entries. `turnId` on `MessageEntry` links it back to
- * the matching `SessionTurnHistoryEntry` for audit purposes.
+ * `BranchSummaryEntry`) entries. `turnId` on `MessageEntry` is an audit
+ * attribute: the runtime UUID of the turn that produced the message.
  */
 export type SessionEntry = MessageEntry | CompactionEntry;
 
 export interface MessageEntry {
 	kind: "message";
 	id: string;
-	turnId: number | null;
+	turnId: string | null;
 	timestamp: string;
 	message: Message;
 	/**
@@ -483,6 +548,13 @@ export interface CompactionEntry {
 	 */
 	tokensBefore?: number;
 	tokensAfter?: number;
+	/**
+	 * Provider-reported token usage of the summarize call that produced this
+	 * compaction (D7). Audit data only — surfaced in logs and telemetry, never
+	 * fed into the `lastUsage` baseline (the summarize request's token count
+	 * does not describe the next main request's window).
+	 */
+	usage?: ModelUsage;
 	details?: {
 		trigger: ContextUpdateResult["trigger"];
 		keptMessages: number;
@@ -502,8 +574,6 @@ export interface AgentRunnerOptions {
 	temperature: number;
 	maxTokens?: number;
 	workingDirectory: string;
-	logger?: RuntimeLogger;
-	progressReporter?: ProgressReporter;
 	runId?: string;
 	sessionId?: string | null;
 	/**
@@ -549,25 +619,6 @@ interface SessionTurnRecord {
 	interruptStage?: InterruptStage | null;
 }
 
-interface SessionToolExecutionEntry {
-	toolCall: ToolCall;
-	result: ToolExecutionResult;
-}
-
-interface SessionTurnHistoryEntry {
-	turnId: number;
-	startedAt: string;
-	finishedAt: string | null;
-	status: TurnStatus;
-	userInput: string;
-	assistantOutput: string | null;
-	steps: number;
-	toolExecutions: SessionToolExecutionEntry[];
-	errorMessage: string | null;
-	interruptSource?: InterruptSource | null;
-	interruptStage?: InterruptStage | null;
-}
-
 export interface PersistedSession {
 	version: 4;
 	sessionId: string;
@@ -588,7 +639,6 @@ export interface PersistedSession {
 	turnCount: number;
 	lastCompletedUserInput: string | null;
 	lastTurn: SessionTurnRecord | null;
-	turns: SessionTurnHistoryEntry[];
 }
 
 export interface SessionSummary {
