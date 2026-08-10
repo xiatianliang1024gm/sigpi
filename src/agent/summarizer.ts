@@ -30,7 +30,7 @@ Structure your response as: an <analysis>...</analysis> block where you reason a
 - [Or "(none)" if the session had no technical depth]
 
 ## Files & Code
-- [Every file path the agent read, with line/byte range if partial]
+- [Critical file the agent read, with path, line range if partial]
 - [Every file path the agent modified, with a one-sentence description of what changed]
 - [Include critical code snippets (function signatures, key logic) so the next turn doesn't need to re-read]
 - [List rejected paths and searches that turned up nothing, to avoid repeating them]
