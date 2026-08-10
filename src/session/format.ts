@@ -204,7 +204,7 @@ function withMessageId(message: Message, id: string): Message {
 export function appendMessageEntries(args: {
 	entries: SessionEntry[];
 	messages: Message[];
-	turnId: number | null;
+	turnId: string | null;
 	timestamp?: string;
 	/**
 	 * Optional provider-reported usage for the assistant message in
@@ -238,68 +238,6 @@ export function appendMessageEntries(args: {
 		},
 	);
 	return [...args.entries, ...newEntries];
-}
-
-export function formatSessionDetails(
-	session: PersistedSession,
-	recentTurnLimit: number = 3,
-): {
-	session: {
-		sessionId: string;
-		title: string | null;
-		createdAt: string;
-		updatedAt: string;
-		cwd: string;
-	};
-	snapshot: {
-		summary: string | null;
-		recentMessageCount: number;
-		turnCount: number;
-		lastCompletedUserInput: string | null;
-		lastTurn: PersistedSession["lastTurn"];
-	};
-	history: {
-		totalTurns: number;
-		recentTurns: Array<{
-			status: PersistedSession["turns"][number]["status"];
-			userInput: string;
-			assistantOutput: string | null;
-			toolExecutionCount: number;
-			startedAt: string;
-			finishedAt: string | null;
-		}>;
-	};
-} {
-	const { summary, recentMessages } = deriveContextStateFromEntries(
-		session.entries,
-	);
-	return {
-		session: {
-			sessionId: session.sessionId,
-			title: session.title,
-			createdAt: session.createdAt,
-			updatedAt: session.updatedAt,
-			cwd: session.cwd,
-		},
-		snapshot: {
-			summary,
-			recentMessageCount: recentMessages.length,
-			turnCount: session.turnCount,
-			lastCompletedUserInput: session.lastCompletedUserInput,
-			lastTurn: session.lastTurn,
-		},
-		history: {
-			totalTurns: session.turns.length,
-			recentTurns: session.turns.slice(-recentTurnLimit).map((turn) => ({
-				status: turn.status,
-				userInput: turn.userInput,
-				assistantOutput: turn.assistantOutput,
-				toolExecutionCount: turn.toolExecutions.length,
-				startedAt: turn.startedAt,
-				finishedAt: turn.finishedAt,
-			})),
-		},
-	};
 }
 
 /**

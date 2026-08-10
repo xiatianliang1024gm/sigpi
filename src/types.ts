@@ -506,15 +506,15 @@ export interface ConversationContextState {
 /**
  * One of the persisted entry kinds in a session. v4 sessions store a flat
  * stream of `MessageEntry` and `CompactionEntry` (and, optionally, future
- * `BranchSummaryEntry`) entries. `turnId` on `MessageEntry` links it back to
- * the matching `SessionTurnHistoryEntry` for audit purposes.
+ * `BranchSummaryEntry`) entries. `turnId` on `MessageEntry` is an audit
+ * attribute: the runtime UUID of the turn that produced the message.
  */
 export type SessionEntry = MessageEntry | CompactionEntry;
 
 export interface MessageEntry {
 	kind: "message";
 	id: string;
-	turnId: number | null;
+	turnId: string | null;
 	timestamp: string;
 	message: Message;
 	/**
@@ -619,21 +619,6 @@ interface SessionTurnRecord {
 	interruptStage?: InterruptStage | null;
 }
 
-interface SessionToolExecutionEntry {
-	toolCall: ToolCall;
-	result: ToolExecutionResult;
-}
-
-interface SessionTurnHistoryEntry {
-	turnId: number;
-	startedAt: string;
-	finishedAt: string | null;
-	status: TurnStatus;
-	userInput: string;
-	assistantOutput: string | null;
-	toolExecutions: SessionToolExecutionEntry[];
-}
-
 export interface PersistedSession {
 	version: 4;
 	sessionId: string;
@@ -654,7 +639,6 @@ export interface PersistedSession {
 	turnCount: number;
 	lastCompletedUserInput: string | null;
 	lastTurn: SessionTurnRecord | null;
-	turns: SessionTurnHistoryEntry[];
 }
 
 export interface SessionSummary {

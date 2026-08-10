@@ -1,8 +1,10 @@
 import type { Component } from "@earendil-works/pi-tui";
+import type { ToolRegistry } from "../tools/registry.js";
 import type {
 	CompactionEntry,
 	PersistedSession,
 	SessionEntry,
+	ToolCall,
 } from "../types.js";
 import type { ReplView } from "./chat-renderer.js";
 import {
@@ -25,11 +27,31 @@ import { formatCompactNumber } from "./status-bar.js";
  * keep their error), and compaction entries render as an info notice showing
  * the context-window change (`tokensBefore → tokensAfter`) — the summary
  * body is not meaningful in a transcript, so it is not shown.
+ *
+ * `tools` is used to reconstruct the tool-line label (e.g. `shell git status`
+ * for bash) from the persisted `ToolCall.arguments` via `describeProgress`,
+ * matching what the live REPL showed during the turn. When `tools` is
+ * omitted (e.g. in tests) the label falls back to the tool name.
  */
 export function buildTranscriptComponents(
 	entries: readonly SessionEntry[],
+	tools?: ToolRegistry,
 ): Component[] {
 	const components: Component[] = [];
+	// Index tool calls by id as we walk the stream so a tool message can
+	// look up its originating call's arguments even when the assistant
+	// message and tool message are not adjacent in the entry list (e.g.
+	// after compaction drops the assistant turn).
+	const toolCallsById = new Map<string, ToolCall>();
+	for (const entry of entries) {
+		if (entry.kind !== "message") continue;
+		if (entry.message.role === "assistant" && entry.message.toolCalls) {
+			for (const call of entry.message.toolCalls) {
+				toolCallsById.set(call.id, call);
+			}
+		}
+	}
+
 	for (const entry of entries) {
 		if (entry.kind === "compaction") {
 			components.push(buildCompactionComponent(entry));
@@ -52,7 +74,10 @@ export function buildTranscriptComponents(
 			component.finalize();
 			components.push(component);
 		} else if (message.role === "tool") {
-			components.push(buildToolComponent(message.name, message.content));
+			const call = toolCallsById.get(message.toolCallId);
+			components.push(
+				buildToolComponent(message.name, message.content, call, tools),
+			);
 		}
 	}
 	return components;
@@ -63,15 +88,21 @@ export function buildTranscriptComponents(
  * currently shows (editor and status bar are kept). A `null` view or session
  * is a no-op / clears the transcript respectively, so callers can use this
  * for both `/resume` (loaded session) and `/new` (fresh, empty session).
+ *
+ * `tools` is forwarded to {@link buildTranscriptComponents} so tool lines
+ * show the same argument summary the live REPL rendered during the turn.
  */
 export function replaySessionIntoView(
 	view: ReplView | null,
 	session: PersistedSession | null,
+	tools?: ToolRegistry,
 ): void {
 	if (!view) {
 		return;
 	}
-	view.replaceTranscript(buildTranscriptComponents(session?.entries ?? []));
+	view.replaceTranscript(
+		buildTranscriptComponents(session?.entries ?? [], tools),
+	);
 }
 
 function buildCompactionComponent(
@@ -90,13 +121,42 @@ function buildCompactionComponent(
 	return new SystemMessageComponent(header, "info");
 }
 
-function buildToolComponent(name: string, content: string): ToolLineComponent {
-	const component = new ToolLineComponent(name);
+function buildToolComponent(
+	name: string,
+	content: string,
+	call: ToolCall | undefined,
+	tools: ToolRegistry | undefined,
+): ToolLineComponent {
+	// Reconstruct the same label the live REPL showed during the turn:
+	// `describeProgress` turns the tool call's arguments into a short
+	// human-readable summary (e.g. `shell git status`, `search files
+	// mentioning "foo"`). Fall back to the bare tool name when the call
+	// can't be found (compaction dropped the assistant turn) or the tool
+	// is no longer registered.
+	const label = formatToolLabel(name, call, tools);
+	const component = new ToolLineComponent(label);
 	const error = extractToolError(content);
 	if (error) {
 		component.fail(error);
 	}
 	return component;
+}
+
+function formatToolLabel(
+	name: string,
+	call: ToolCall | undefined,
+	tools: ToolRegistry | undefined,
+): string {
+	if (!call || !tools) {
+		return name;
+	}
+	try {
+		return tools.describeProgress(call).summary;
+	} catch {
+		// Tool removed or arguments no longer match its schema — fall back
+		// to the bare name so the replay still renders something useful.
+		return name;
+	}
 }
 
 /**

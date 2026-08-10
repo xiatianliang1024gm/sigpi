@@ -29,7 +29,6 @@ import { TurnInterruptController } from "./interrupt.js";
 import { resolveDatedLogFilePath } from "./logger.js";
 import { configureHttpProxy } from "./model/http-dispatcher.js";
 import { createAgentRuntime, createRuntimeSessionStore } from "./runtime.js";
-import { formatSessionDetails } from "./session/format.js";
 import type { SessionStore } from "./session/store.js";
 import { detectShellRuntime } from "./shell.js";
 import type { ToolRegistry } from "./tools/registry.js";
@@ -77,7 +76,6 @@ function printUsage(): void {
 	console.log("  pnpm dev config validate");
 	console.log("  pnpm dev session new [--title <title>]");
 	console.log("  pnpm dev session list");
-	console.log("  pnpm dev session show <id>");
 	console.log("");
 	console.log(`User config: ${getDefaultUserConfigPath()}`);
 	console.log("");
@@ -408,7 +406,7 @@ async function runChatReplLoop(
 	// `--continue`), replay its message stream into the terminal so the
 	// conversation history is visible in place. A fresh session has no
 	// entries, so this is a no-op there.
-	replaySessionIntoView(state.view, state.runtime.session);
+	replaySessionIntoView(state.view, state.runtime.session, state.runtime.tools);
 
 	const readInput = (): Promise<string | null> => view.readInput();
 	const writeLine = (line: string) => view.writeLine(line);
@@ -649,20 +647,6 @@ async function runSessionCommand(args: string[]): Promise<void> {
 	if (subcommand === "list") {
 		const sessions = await store.listSessions();
 		console.log(JSON.stringify(sessions, null, 2));
-		return;
-	}
-
-	if (subcommand === "show") {
-		const sessionId = rest[0]?.trim();
-
-		if (!sessionId) {
-			throw new Error(
-				"Missing session id. Example: pnpm dev session show <id>",
-			);
-		}
-
-		const session = await store.getSession(sessionId);
-		console.log(JSON.stringify(formatSessionDetails(session), null, 2));
 		return;
 	}
 

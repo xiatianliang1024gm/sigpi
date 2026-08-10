@@ -34,3 +34,5 @@ turn summary is a separate, user-facing artifact. Retired: turn checkpoint,
   interfaces. `docs/adr/0026-compaction-refactor.md` (first standalone ADR file;
   prior ADR numbers in `CONTEXT.md` are historical back-references with no files).
   See `AGENTS.md` for the reading path.
+- **ADR 0027** — Drop turn history from the session meta file.
+  `docs/adr/0027-drop-turn-history.md`.

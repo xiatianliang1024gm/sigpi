@@ -145,7 +145,7 @@ export class ConversationContext {
 		this.entries = appendMessageEntries({
 			entries: this.entries,
 			messages: tagged,
-			turnId: parseTurnId(requestContext?.turnId),
+			turnId: requestContext?.turnId ?? null,
 			timestamp: new Date().toISOString(),
 			usage: options?.usage,
 		});
@@ -201,7 +201,7 @@ export class ConversationContext {
 		this.entries = appendMessageEntries({
 			entries: this.entries,
 			messages: tagged,
-			turnId: parseTurnId(requestContext?.turnId),
+			turnId: requestContext?.turnId ?? null,
 			timestamp: new Date().toISOString(),
 		});
 		// Recovery bypasses the model, so any prior usage no longer reflects
@@ -624,10 +624,4 @@ function ensureMessageIds(messages: readonly Message[]): Message[] {
 		}
 		return { ...message, id: randomUUID() } as Message;
 	});
-}
-
-function parseTurnId(raw: string | undefined): number | null {
-	if (!raw) return null;
-	const parsed = Number.parseInt(raw, 10);
-	return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }

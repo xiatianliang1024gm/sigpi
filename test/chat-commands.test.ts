@@ -586,7 +586,7 @@ test("/resume replays the attached session's messages into the view", async () =
 			{
 				kind: "message",
 				id: "m1",
-				turnId: 1,
+				turnId: "turn-1",
 				timestamp: "2026-05-22T00:01:00.000Z",
 				message: { role: "user", content: "hello", id: "m1" },
 			},

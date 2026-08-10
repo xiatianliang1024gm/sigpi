@@ -308,6 +308,7 @@ export function createChatCommandDefinitions(
 				replaySessionIntoView(
 					context.getState().view,
 					attached.updatedState.runtime.session,
+					attached.updatedState.runtime.tools,
 				);
 				context.writeLine(`Attached session: ${attached.selectedSessionId}`);
 				for (const warning of attached.warnings) {
@@ -327,6 +328,7 @@ export function createChatCommandDefinitions(
 				replaySessionIntoView(
 					context.getState().view,
 					attached.updatedState.runtime.session,
+					attached.updatedState.runtime.tools,
 				);
 				context.writeLine(`Started new session: ${attached.selectedSessionId}`);
 				for (const warning of attached.warnings) {

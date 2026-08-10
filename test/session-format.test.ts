@@ -3,96 +3,9 @@ import test from "node:test";
 import {
 	buildEntriesFromContextState,
 	deriveContextStateFromEntries,
-	formatSessionDetails,
 	resolveEntriesForPersist,
 } from "../src/session/format.js";
 import type { PersistedSession, SessionEntry } from "../src/types.js";
-import { createTestToolExecution } from "./helpers.js";
-
-test("session show formatting returns snapshot and recent history only", () => {
-	const session: PersistedSession = {
-		version: 4,
-		sessionId: "11111111-1111-4111-8111-111111111111",
-		title: "demo",
-		createdAt: "2026-05-22T00:00:00.000Z",
-		updatedAt: "2026-05-22T00:04:00.000Z",
-		cwd: "/tmp/demo",
-		systemPromptFingerprint: "fingerprint",
-		loadedSkillNames: ["demo"],
-		skillsFingerprint: "skills-fingerprint",
-		entries: buildEntriesFromContextState({
-			summary: "snapshot summary",
-			recentMessages: [
-				{ role: "user", content: "latest question", id: "msg-u-1" },
-				{ role: "assistant", content: "latest answer", id: "msg-a-1" },
-			],
-		}),
-		turnCount: 4,
-		lastCompletedUserInput: "latest question",
-		lastTurn: {
-			startedAt: "2026-05-22T00:03:00.000Z",
-			finishedAt: "2026-05-22T00:04:00.000Z",
-			status: "completed",
-			userInput: "latest question",
-			assistantOutput: "latest answer",
-			toolExecutionCount: 1,
-			errorMessage: null,
-		},
-		turns: [
-			{
-				turnId: 1,
-				startedAt: "2026-05-22T00:00:00.000Z",
-				finishedAt: "2026-05-22T00:01:00.000Z",
-				status: "completed",
-				userInput: "one",
-				assistantOutput: "a",
-				toolExecutions: [],
-			},
-			{
-				turnId: 2,
-				startedAt: "2026-05-22T00:01:00.000Z",
-				finishedAt: "2026-05-22T00:02:00.000Z",
-				status: "failed",
-				userInput: "two",
-				assistantOutput: null,
-				toolExecutions: [],
-			},
-			{
-				turnId: 3,
-				startedAt: "2026-05-22T00:02:00.000Z",
-				finishedAt: "2026-05-22T00:03:00.000Z",
-				status: "completed",
-				userInput: "three",
-				assistantOutput: "c",
-				toolExecutions: [createTestToolExecution()],
-			},
-			{
-				turnId: 4,
-				startedAt: "2026-05-22T00:03:00.000Z",
-				finishedAt: "2026-05-22T00:04:00.000Z",
-				status: "completed",
-				userInput: "latest question",
-				assistantOutput: "latest answer",
-				toolExecutions: [createTestToolExecution()],
-			},
-		],
-	};
-
-	const formatted = formatSessionDetails(session);
-
-	assert.equal(formatted.session.sessionId, session.sessionId);
-	assert.equal(formatted.snapshot.summary, "snapshot summary");
-	assert.equal(formatted.history.totalTurns, 4);
-	assert.equal(formatted.history.recentTurns.length, 3);
-	assert.deepEqual(
-		formatted.history.recentTurns.map((turn) => turn.userInput),
-		["two", "three", "latest question"],
-	);
-	assert.equal(
-		"turns" in (formatted.history as Record<string, unknown>),
-		false,
-	);
-});
 
 test("deriveContextStateFromEntries returns the summary and live messages after the last compaction", () => {
 	const entries = buildEntriesFromContextState({
