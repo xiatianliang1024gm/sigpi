@@ -46,9 +46,7 @@ test("session show formatting returns snapshot and recent history only", () => {
 				status: "completed",
 				userInput: "one",
 				assistantOutput: "a",
-				steps: 1,
 				toolExecutions: [],
-				errorMessage: null,
 			},
 			{
 				turnId: 2,
@@ -57,9 +55,7 @@ test("session show formatting returns snapshot and recent history only", () => {
 				status: "failed",
 				userInput: "two",
 				assistantOutput: null,
-				steps: 0,
 				toolExecutions: [],
-				errorMessage: "bad",
 			},
 			{
 				turnId: 3,
@@ -68,9 +64,7 @@ test("session show formatting returns snapshot and recent history only", () => {
 				status: "completed",
 				userInput: "three",
 				assistantOutput: "c",
-				steps: 2,
 				toolExecutions: [createTestToolExecution()],
-				errorMessage: null,
 			},
 			{
 				turnId: 4,
@@ -79,9 +73,7 @@ test("session show formatting returns snapshot and recent history only", () => {
 				status: "completed",
 				userInput: "latest question",
 				assistantOutput: "latest answer",
-				steps: 1,
 				toolExecutions: [createTestToolExecution()],
-				errorMessage: null,
 			},
 		],
 	};

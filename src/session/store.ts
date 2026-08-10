@@ -119,14 +119,7 @@ const sessionTurnHistoryEntrySchema = z.object({
 	status: turnStatusSchema,
 	userInput: z.string(),
 	assistantOutput: z.string().nullable(),
-	steps: z.number().int().nonnegative(),
 	toolExecutions: z.array(sessionToolExecutionEntrySchema),
-	errorMessage: z.string().nullable(),
-	interruptSource: z
-		.enum(["user_escape", "process_recovery"])
-		.nullable()
-		.optional(),
-	interruptStage: z.enum(["model", "tool"]).nullable().optional(),
 });
 
 const modelUsageSchema = z.object({
@@ -256,7 +249,6 @@ export interface SessionStore {
 		sessionId: string;
 		userInput: string;
 		assistantOutput: string;
-		steps: number;
 		toolExecutions: ExecutedToolCall[];
 		contextState: ConversationContextState;
 	}): Promise<PersistedSession>;
@@ -265,14 +257,12 @@ export interface SessionStore {
 		userInput: string;
 		errorMessage: string;
 		assistantOutput?: string | null;
-		steps?: number;
 		toolExecutions?: ExecutedToolCall[];
 		contextState?: ConversationContextState;
 	}): Promise<PersistedSession>;
 	markTurnInterrupted(args: {
 		sessionId: string;
 		userInput: string;
-		steps?: number;
 		toolExecutions?: ExecutedToolCall[];
 		contextState?: ConversationContextState;
 		assistantOutput?: string | null;
@@ -369,13 +359,7 @@ export class DiskSessionStore implements SessionStore {
 						status: "interrupted",
 						userInput: session.lastTurn.userInput,
 						assistantOutput: session.lastTurn.assistantOutput,
-						steps: 0,
 						toolExecutions: [],
-						errorMessage:
-							session.lastTurn.errorMessage ??
-							"Session resumed after interruption.",
-						interruptSource: "process_recovery",
-						interruptStage: null,
 					},
 				],
 			};
@@ -498,7 +482,6 @@ export class DiskSessionStore implements SessionStore {
 		sessionId: string;
 		userInput: string;
 		assistantOutput: string;
-		steps: number;
 		toolExecutions: ExecutedToolCall[];
 		contextState: ConversationContextState;
 	}): Promise<PersistedSession> {
@@ -539,11 +522,7 @@ export class DiskSessionStore implements SessionStore {
 					status: "completed",
 					userInput: args.userInput,
 					assistantOutput: args.assistantOutput,
-					steps: args.steps,
 					toolExecutions: args.toolExecutions,
-					errorMessage: null,
-					interruptSource: null,
-					interruptStage: null,
 				},
 			],
 		};
@@ -576,7 +555,6 @@ export class DiskSessionStore implements SessionStore {
 		userInput: string;
 		errorMessage: string;
 		assistantOutput?: string | null;
-		steps?: number;
 		toolExecutions?: ExecutedToolCall[];
 		contextState?: ConversationContextState;
 	}): Promise<PersistedSession> {
@@ -630,11 +608,7 @@ export class DiskSessionStore implements SessionStore {
 					status: "failed",
 					userInput,
 					assistantOutput,
-					steps: args.steps ?? 0,
 					toolExecutions: args.toolExecutions ?? [],
-					errorMessage: args.errorMessage,
-					interruptSource: null,
-					interruptStage: null,
 				},
 			],
 		};
@@ -645,7 +619,6 @@ export class DiskSessionStore implements SessionStore {
 	async markTurnInterrupted(args: {
 		sessionId: string;
 		userInput: string;
-		steps?: number;
 		toolExecutions?: ExecutedToolCall[];
 		contextState?: ConversationContextState;
 		assistantOutput?: string | null;
@@ -689,11 +662,7 @@ export class DiskSessionStore implements SessionStore {
 					status: "interrupted",
 					userInput,
 					assistantOutput,
-					steps: args.steps ?? 0,
 					toolExecutions: args.toolExecutions ?? [],
-					errorMessage: null,
-					interruptSource: args.interruptSource,
-					interruptStage: args.interruptStage,
 				},
 			],
 		};

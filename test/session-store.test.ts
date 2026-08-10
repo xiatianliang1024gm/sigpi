@@ -60,7 +60,6 @@ test("session store persists and restores session state", async () => {
 		sessionId: created.sessionId,
 		userInput: "inspect repo",
 		assistantOutput: "done",
-		steps: 2,
 		toolExecutions: [
 			createTestToolExecution({
 				toolCall: {
@@ -102,7 +101,6 @@ test("session store persists and restores session state", async () => {
 	assert.equal(loaded.session.lastTurn?.status, "completed");
 	assert.equal(loaded.session.turns.length, 1);
 	assert.equal(loaded.session.turns[0]?.status, "completed");
-	assert.equal(loaded.session.turns[0]?.steps, 2);
 	assert.equal(loaded.session.turns[0]?.toolExecutions.length, 1);
 	assert.deepEqual(loaded.session.turns[0]?.toolExecutions[0]?.result.data, {
 		matches: ["src/index.ts:1"],
@@ -134,7 +132,6 @@ test("session store round-trips provider usage on assistant message entries", as
 		sessionId: created.sessionId,
 		userInput: "inspect repo",
 		assistantOutput: "done",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -354,7 +351,6 @@ test("session summary estimates tokens from persisted entries", async () => {
 		sessionId: session.sessionId,
 		userInput: "what is the meaning of life in forty two words",
 		assistantOutput: "forty two",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -599,7 +595,6 @@ test("session list exposes last completed user input in summaries", async () => 
 		sessionId: session.sessionId,
 		userInput: "find parser regression",
 		assistantOutput: "done",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -680,7 +675,6 @@ test("untitled sessions derive their title from the first completed user input",
 		userInput:
 			"investigate why the parser drops the last token in the config loader",
 		assistantOutput: "done",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -723,7 +717,6 @@ test("pruneEmptySessions removes session files that never recorded any turns", a
 		sessionId: active.sessionId,
 		userInput: "keep me",
 		assistantOutput: "done",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -765,7 +758,6 @@ test("session history preserves completed turns even when snapshot changes", asy
 		sessionId: session.sessionId,
 		userInput: "first turn",
 		assistantOutput: "first answer",
-		steps: 1,
 		toolExecutions: [createTestToolExecution()],
 		contextState: {
 			summary: null,
@@ -784,7 +776,6 @@ test("session history preserves completed turns even when snapshot changes", asy
 		sessionId: session.sessionId,
 		userInput: "second turn",
 		assistantOutput: "second answer",
-		steps: 3,
 		toolExecutions: [
 			createTestToolExecution({
 				toolCall: {
@@ -934,7 +925,6 @@ test("session store appends transcript deltas across turns instead of rewriting"
 		sessionId: created.sessionId,
 		userInput: "first task",
 		assistantOutput: "first answer",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -954,7 +944,6 @@ test("session store appends transcript deltas across turns instead of rewriting"
 		sessionId: created.sessionId,
 		userInput: "second task",
 		assistantOutput: "second answer",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -984,7 +973,6 @@ test("session store appends transcript deltas across turns instead of rewriting"
 		sessionId: created.sessionId,
 		userInput: "third task",
 		assistantOutput: "third answer",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,
@@ -1033,7 +1021,6 @@ test("session store tolerates a single torn transcript line on read", async () =
 		sessionId: created.sessionId,
 		userInput: "task",
 		assistantOutput: "answer",
-		steps: 1,
 		toolExecutions: [],
 		contextState: {
 			summary: null,

@@ -631,11 +631,7 @@ interface SessionTurnHistoryEntry {
 	status: TurnStatus;
 	userInput: string;
 	assistantOutput: string | null;
-	steps: number;
 	toolExecutions: SessionToolExecutionEntry[];
-	errorMessage: string | null;
-	interruptSource?: InterruptSource | null;
-	interruptStage?: InterruptStage | null;
 }
 
 export interface PersistedSession {

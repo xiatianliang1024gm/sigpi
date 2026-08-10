@@ -313,8 +313,6 @@ test("session runtime persists interrupted turns without incrementing turnCount"
 	assert.equal(persisted.lastTurn?.interruptStage, "model");
 	assert.equal(persisted.turns.length, 1);
 	assert.equal(persisted.turns[0]?.status, "interrupted");
-	assert.equal(persisted.turns[0]?.interruptSource, "user_escape");
-	assert.equal(persisted.turns[0]?.interruptStage, "model");
 	assert.deepEqual(
 		stripMessageIds(
 			deriveContextStateFromEntries(persisted.entries).recentMessages,

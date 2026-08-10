@@ -877,7 +877,6 @@ test("attachSessionById hydrates context from the selected session snapshot", as
 			sessionId: session.sessionId,
 			userInput: "inspect repo",
 			assistantOutput: "done",
-			steps: 1,
 			toolExecutions: [],
 			contextState: {
 				summary: "conversation summary",
@@ -1048,7 +1047,6 @@ test("attachSessionById can switch from one bound session to another", async () 
 			sessionId: second.sessionId,
 			userInput: "switch here",
 			assistantOutput: "done",
-			steps: 1,
 			toolExecutions: [],
 			contextState: {
 				summary: "second session summary",

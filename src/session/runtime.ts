@@ -68,7 +68,6 @@ export class SessionRuntime {
 					sessionId: this.session.sessionId,
 					userInput,
 					assistantOutput: null,
-					steps: result.steps,
 					toolExecutions: result.toolExecutions,
 					contextState: this.context.exportState(),
 					interruptSource: result.interruptSource ?? "user_escape",
@@ -81,7 +80,6 @@ export class SessionRuntime {
 				sessionId: this.session.sessionId,
 				userInput,
 				assistantOutput: result.outputText ?? "",
-				steps: result.steps,
 				toolExecutions: result.toolExecutions,
 				contextState: this.context.exportState(),
 			});
@@ -94,7 +92,6 @@ export class SessionRuntime {
 				userInput,
 				errorMessage,
 				assistantOutput: null,
-				steps: 0,
 				toolExecutions: [],
 				contextState: this.context.exportState(),
 			});
