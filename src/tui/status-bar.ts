@@ -61,10 +61,9 @@ export interface LastTurnStats {
 /**
  * Compose the status bar line from a {@link StatusBarModel}.
  *
- * Layout: `{model} | {used}/{limit} ({pct}%) Hit(x%) | {cwd} ({branch})`.
+ * Layout: `{model} | {used}/{limit} ({pct}%) | {cwd} ({branch})`.
  * Before the first response (or after `recover()`) `usedTokens` is `null` and
- * we render an honest `?` instead of a drift-prone estimate. The cache hit
- * rate is appended only when there is real cacheable input to measure against.
+ * we render an honest `?` instead of a drift-prone estimate.
  */
 export function composeStatusBar(
 	model: StatusBarModel,
@@ -83,11 +82,7 @@ export function composeStatusBar(
 		const limitStr = formatCompactNumber(model.limit);
 		const usedStr = formatCompactNumber(model.usedTokens);
 		const percentUsed = Math.round((model.usedTokens / model.limit) * 100);
-		const tokenSegment = `${usedStr}/${limitStr} (${percentUsed}%)`;
-		const cacheHitRate = model.usage ? computeCacheHitRate(model.usage) : null;
-		segments.push(
-			cacheHitRate ? `${tokenSegment} Hit(${cacheHitRate}%)` : tokenSegment,
-		);
+		segments.push(`${usedStr}/${limitStr} (${percentUsed}%)`);
 	}
 	segments.push(cwdSegment);
 
@@ -194,26 +189,6 @@ export class StatusBarComponent implements Component {
 
 		return result;
 	}
-}
-
-/**
- * Compute the cache hit rate as a percentage of input tokens that came from
- * the prompt cache. Returns `null` when there is nothing meaningful to report
- * — either no input at all, or no cache hits. A `Hit(0.0%)` segment is
- * uninformative (it cannot distinguish "provider doesn't report cache info"
- * from "first request, cache cold") and clutters the bar, so we only render
- * the segment once the provider reports actual cache activity.
- * The result is rounded to one decimal place and formatted as a string so the
- * status bar always renders a consistent `Hit(80.0%)` shape.
- */
-function computeCacheHitRate(usage: ModelUsage): string | null {
-	const input = usage.input;
-	const cacheRead = usage.cacheRead;
-	if (input <= 0 || cacheRead <= 0) {
-		return null;
-	}
-	const percent = Math.round((cacheRead / (input + cacheRead)) * 1000) / 10;
-	return percent.toFixed(1);
 }
 
 /**

@@ -171,7 +171,7 @@ export async function formatStatusBarForEvent(
 	let model: StatusBarModel;
 	if (typeof event?.estimatedContextTokens === "number") {
 		// A live, in-flight estimate of the request being built. It has no
-		// completed `usage` payload yet, so no cache-hit segment.
+		// completed `usage` payload yet, so the bar shows the estimate only.
 		model = await buildStatusBarModel(
 			state,
 			event.estimatedContextTokens,

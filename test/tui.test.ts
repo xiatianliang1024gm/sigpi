@@ -112,10 +112,9 @@ test("omits the token estimate when usage is unknown", () => {
 	const line = renderStatus(makeModel({ usedTokens: null }));
 	assert.match(line, /^test-model /);
 	assert.match(line, /\?\/183\.6K/);
-	assert.doesNotMatch(line, /Hit/);
 });
 
-test("shows the provider's totalTokens after a response, with cache hit rate", () => {
+test("shows the provider's totalTokens after a response", () => {
 	const line = renderStatus(
 		makeModel({
 			usedTokens: 1_050,
@@ -128,8 +127,8 @@ test("shows the provider's totalTokens after a response, with cache hit rate", (
 			},
 		}),
 	);
-	// 1_050 -> 1.1K; 800 / (800 + 200) = 80.0%.
-	assert.match(line, /1\.1K\/183\.6K \(1%\) Hit\(80\.0%\)/);
+	// 1_050 -> 1.1K.
+	assert.match(line, /1\.1K\/183\.6K \(1%\)/);
 });
 
 test("keeps the last response's count and does not re-estimate after a follow-up", () => {
@@ -146,59 +145,6 @@ test("keeps the last response's count and does not re-estimate after a follow-up
 		}),
 	);
 	assert.match(line, /1\.1K\/183\.6K/);
-});
-
-test("hides the cache hit rate when there is no cacheable input", () => {
-	const line = renderStatus(
-		makeModel({
-			usedTokens: 50,
-			usage: {
-				input: 0,
-				output: 50,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 50,
-			},
-		}),
-	);
-	assert.doesNotMatch(line, /Hit/);
-	assert.match(line, /50\/183\.6K \(0%\)/);
-});
-
-test("omits the Hit segment when the provider reports no cache activity", () => {
-	// Providers that don't return `prompt_tokens_details` (e.g. MiniMax) leave
-	// `cacheRead` at 0. A `Hit(0.0%)` segment is uninformative in that case
-	// (it cannot be distinguished from a cold cache), so the bar omits it.
-	const line = renderStatus(
-		makeModel({
-			usedTokens: 1_050,
-			usage: {
-				input: 1_000,
-				output: 50,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 1_050,
-			},
-		}),
-	);
-	assert.doesNotMatch(line, /Hit/);
-	assert.match(line, /1\.1K\/183\.6K \(1%\)/);
-});
-
-test("shows Hit(x.x%) when the provider reports cache hits", () => {
-	const line = renderStatus(
-		makeModel({
-			usedTokens: 1_050,
-			usage: {
-				input: 500,
-				output: 50,
-				cacheRead: 500,
-				cacheWrite: 0,
-				totalTokens: 1_050,
-			},
-		}),
-	);
-	assert.match(line, /Hit\(50\.0%\)/);
 });
 
 test("appends the git branch when cwd is a repo", () => {
