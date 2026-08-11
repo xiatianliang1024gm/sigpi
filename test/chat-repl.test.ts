@@ -347,78 +347,6 @@ test("formatStatusBar omits git branch when cwd is not a repo", async () => {
 	}
 });
 
-test("formatStatusBar appends cache hit rate when lastUsage is available", async () => {
-	const cwd = await realpath(
-		await createTempDir("sigpi-chat-repl-status-cache-"),
-	);
-	const homeDir = await createTempDir("sigpi-chat-repl-status-cache-home-");
-	const previousCwd = process.cwd();
-	const restoreHome = setTestHome(homeDir);
-	process.chdir(cwd);
-
-	try {
-		await writeTestConfig(homeDir);
-		const runtime = await createAgentRuntime({ createSession: true });
-		const state = runtimeToChatReplState(runtime);
-
-		// Seed lastUsage via the context so the status bar can read it.
-		const provider = new MockProvider(() => ({
-			assistantText: "hi",
-			toolCalls: [],
-			finishReason: "stop",
-		}));
-		await state.runtime.context.appendMessages(
-			[
-				{ role: "user", content: "u" },
-				{ role: "assistant", content: "a" },
-			],
-			provider,
-			"You are a test agent.",
-			[],
-			undefined,
-			{
-				usage: {
-					input: 200,
-					output: 50,
-					cacheRead: 800,
-					cacheWrite: 0,
-					totalTokens: 1_050,
-				},
-			},
-		);
-
-		const status = statusLine(await formatStatusBar(state));
-		// 800 / (200 + 800) = 80.0%
-		assert.match(status, /Hit\(80\.0%\)/);
-	} finally {
-		restoreHome();
-		process.chdir(previousCwd);
-	}
-});
-
-test("formatStatusBar omits cache hit rate when no usage has been recorded", async () => {
-	const cwd = await realpath(
-		await createTempDir("sigpi-chat-repl-status-nocache-"),
-	);
-	const homeDir = await createTempDir("sigpi-chat-repl-status-nocache-home-");
-	const previousCwd = process.cwd();
-	const restoreHome = setTestHome(homeDir);
-	process.chdir(cwd);
-
-	try {
-		await writeTestConfig(homeDir);
-		const runtime = await createAgentRuntime({ createSession: true });
-		const state = runtimeToChatReplState(runtime);
-		const status = statusLine(await formatStatusBar(state));
-
-		assert.doesNotMatch(status, /Hit\(/);
-		assert.match(status, /\?\//);
-	} finally {
-		restoreHome();
-		process.chdir(previousCwd);
-	}
-});
-
 test("formatStatusBar shows the provider's totalTokens from the last response", async () => {
 	const cwd = await realpath(
 		await createTempDir("sigpi-chat-repl-status-total-"),
@@ -572,107 +500,6 @@ test("formatStatusBar resets to ? after in-memory state is cleared", async () =>
 	}
 });
 
-test("formatStatusBar hides cache hit rate when there is no cacheable input", async () => {
-	const cwd = await realpath(
-		await createTempDir("sigpi-chat-repl-status-nocacheinput-"),
-	);
-	const homeDir = await createTempDir(
-		"sigpi-chat-repl-status-nocacheinput-home-",
-	);
-	const previousCwd = process.cwd();
-	const restoreHome = setTestHome(homeDir);
-	process.chdir(cwd);
-
-	try {
-		await writeTestConfig(homeDir);
-		const runtime = await createAgentRuntime({ createSession: true });
-		const state = runtimeToChatReplState(runtime);
-
-		const provider = new MockProvider(() => ({
-			assistantText: "hi",
-			toolCalls: [],
-			finishReason: "stop",
-		}));
-		await state.runtime.context.appendMessages(
-			[
-				{ role: "user", content: "u" },
-				{ role: "assistant", content: "a" },
-			],
-			provider,
-			"You are a test agent.",
-			[],
-			undefined,
-			{
-				// Zero input and zero cache reads => nothing to measure against.
-				usage: {
-					input: 0,
-					output: 50,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 50,
-				},
-			},
-		);
-
-		const status = statusLine(await formatStatusBar(state));
-		assert.doesNotMatch(status, /Hit\(/);
-		assert.match(status, /50\//);
-	} finally {
-		restoreHome();
-		process.chdir(previousCwd);
-	}
-});
-
-test("formatStatusBar omits the Hit segment when the provider reports no cache activity", async () => {
-	const cwd = await realpath(
-		await createTempDir("sigpi-chat-repl-status-cold-"),
-	);
-	const homeDir = await createTempDir("sigpi-chat-repl-status-cold-home-");
-	const previousCwd = process.cwd();
-	const restoreHome = setTestHome(homeDir);
-	process.chdir(cwd);
-
-	try {
-		await writeTestConfig(homeDir);
-		const runtime = await createAgentRuntime({ createSession: true });
-		const state = runtimeToChatReplState(runtime);
-
-		const provider = new MockProvider(() => ({
-			assistantText: "hi",
-			toolCalls: [],
-			finishReason: "stop",
-		}));
-		await state.runtime.context.appendMessages(
-			[
-				{ role: "user", content: "u" },
-				{ role: "assistant", content: "a" },
-			],
-			provider,
-			"You are a test agent.",
-			[],
-			undefined,
-			{
-				// cacheRead = 0, input > 0: providers that don't return
-				// `prompt_tokens_details` (e.g. MiniMax) leave cacheRead at 0.
-				// The bar must omit the uninformative `Hit(0.0%)` segment.
-				usage: {
-					input: 1_000,
-					output: 50,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1_050,
-				},
-			},
-		);
-
-		const status = statusLine(await formatStatusBar(state));
-		assert.doesNotMatch(status, /Hit/);
-	} finally {
-		restoreHome();
-		process.chdir(previousCwd);
-	}
-});
-
 test("formatStatusBar shows @shortSha for a detached HEAD", async () => {
 	const cwd = await realpath(
 		await createTempDir("sigpi-chat-repl-status-detached-"),
@@ -755,7 +582,6 @@ test("formatStatusBar includes a model segment at the start", async () => {
 		// legitimately contain the substring "model", so we anchor at start).
 		assert.match(status, /^test-model /);
 		assert.match(status, /1\.1K\//);
-		assert.match(status, /Hit\(80\.0%\)/);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
@@ -810,7 +636,6 @@ test("formatStatusBar restores token count from a resumed session with usage", a
 		const status = statusLine(await formatStatusBar(state));
 		// Real number restored from the persisted entry, not `?`.
 		assert.match(status, /1\.1K\//);
-		assert.match(status, /Hit\(80\.0%\)/);
 	} finally {
 		restoreHome();
 		process.chdir(previousCwd);
