@@ -33,19 +33,17 @@ export function createEditSummary(
 	const occurrences = replaceAll ? matchCount : 1;
 
 	const preview: FileEditPreviewLine[] = [];
-	const truncated = false;
+	let truncated = false;
 	const startLine = lineNumberAtIndex(
 		originalContent,
 		originalContent.indexOf(oldString),
 	);
-	appendPreviewLines(
-		preview,
-		"remove",
-		removedLines,
-		startLine,
-		() => truncated,
-	);
-	appendPreviewLines(preview, "add", addedLines, startLine, () => truncated);
+	appendPreviewLines(preview, "remove", removedLines, startLine, () => {
+		truncated = true;
+	});
+	appendPreviewLines(preview, "add", addedLines, startLine, () => {
+		truncated = true;
+	});
 
 	return {
 		kind: "file_edit",
@@ -67,10 +65,14 @@ export function createWriteSummary(
 		previousContent === null ? [] : splitContentLines(previousContent);
 	const addedLines = splitContentLines(nextContent);
 	const preview: FileEditPreviewLine[] = [];
-	const truncated = false;
+	let truncated = false;
 
-	appendPreviewLines(preview, "remove", removedLines, 1, () => truncated);
-	appendPreviewLines(preview, "add", addedLines, 1, () => truncated);
+	appendPreviewLines(preview, "remove", removedLines, 1, () => {
+		truncated = true;
+	});
+	appendPreviewLines(preview, "add", addedLines, 1, () => {
+		truncated = true;
+	});
 
 	return {
 		kind: "file_edit",
@@ -83,22 +85,7 @@ export function createWriteSummary(
 	};
 }
 
-export function isFileEditSummary(value: JsonValue): value is FileEditSummary {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		return false;
-	}
-
-	return (
-		value.kind === "file_edit" &&
-		typeof value.additions === "number" &&
-		typeof value.deletions === "number" &&
-		Array.isArray(value.preview) &&
-		(value.path === null || typeof value.path === "string") &&
-		Array.isArray(value.paths)
-	);
-}
-
-function countOccurrences(content: string, search: string): number {
+export function countOccurrences(content: string, search: string): number {
 	let count = 0;
 	let fromIndex = 0;
 	while (true) {

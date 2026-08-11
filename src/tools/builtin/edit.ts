@@ -2,7 +2,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { z } from "zod";
 import { asInlineCode, getString } from "../../progress.js";
 import type { ToolDefinition } from "../../types.js";
-import { createEditSummary } from "../edit-summary.js";
+import { countOccurrences, createEditSummary } from "../edit-summary.js";
 import {
 	applyLineEndingStyle,
 	detectLineEndingStyle,
@@ -242,19 +242,6 @@ export function createEditTool(tracker: ReadTracker): ToolDefinition<EditArgs> {
 			};
 		},
 	};
-}
-
-function countOccurrences(content: string, search: string): number {
-	let count = 0;
-	let fromIndex = 0;
-	while (true) {
-		const index = content.indexOf(search, fromIndex);
-		if (index === -1) {
-			return count;
-		}
-		count += 1;
-		fromIndex = index + search.length;
-	}
 }
 
 function replaceFirst(

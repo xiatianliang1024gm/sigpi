@@ -13,8 +13,8 @@ import type {
 	ToolLineHandle,
 } from "../src/tui/chat-renderer.js";
 import type { StatusBarModel } from "../src/tui/status-bar.js";
-import { VirtualTerminal } from "../src/tui/virtual-terminal.js";
 import type { TurnProgressEvent } from "../src/types.js";
+import { FakeTerminal } from "./helpers/fake-terminal.js";
 
 /**
  * Faithful copy of `AssistantMessageComponent`'s `finalize()` contract: once
@@ -58,7 +58,7 @@ class FakeToolLineHandle implements ToolLineHandle {
 class RecordingReplView implements ReplView {
 	readonly ops: string[] = [];
 	readonly assistants: FakeAssistantView[] = [];
-	readonly tui: TUI = new TUI(new VirtualTerminal());
+	readonly tui: TUI = new TUI(new FakeTerminal());
 
 	getTuiInstance(): TUI {
 		return this.tui;

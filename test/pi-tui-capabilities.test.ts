@@ -16,16 +16,16 @@ import {
 	StdinBuffer,
 	setCapabilities,
 	setKittyProtocolActive,
-	type Terminal,
 	Text,
 	TUI,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { stripAnsi } from "../src/tui/ansi.js";
 import {
 	StatusBarComponent,
 	type StatusBarModel,
 } from "../src/tui/status-bar.js";
+import { FakeTerminal } from "./helpers/fake-terminal.js";
+import { stripAnsi } from "./helpers.js";
 
 const require = createRequire(import.meta.url);
 
@@ -37,63 +37,6 @@ const require = createRequire(import.meta.url);
 // internal scheduler cleanly.)
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// ── Terminal seam ──────────────────────────────────────────────────────────
-// A minimal Terminal that records every write and lets the test drive resize
-// and input by hand. This is the single boundary the verification exercises.
-class FakeTerminal implements Terminal {
-	columns = 20;
-	rows = 5;
-	writes: string[] = [];
-	inputHandler: ((data: string) => void) | null = null;
-	resizeHandler: (() => void) | null = null;
-	kittyActive = false;
-
-	constructor(columns?: number, rows?: number) {
-		if (columns !== undefined) this.columns = columns;
-		if (rows !== undefined) this.rows = rows;
-	}
-
-	start(onInput: (data: string) => void, onResize: () => void): void {
-		this.inputHandler = onInput;
-		this.resizeHandler = onResize;
-	}
-
-	stop(): void {
-		this.inputHandler = null;
-		this.resizeHandler = null;
-	}
-
-	async drainInput(): Promise<void> {}
-
-	write(data: string): void {
-		this.writes.push(data);
-	}
-
-	get kittyProtocolActive(): boolean {
-		return this.kittyActive;
-	}
-
-	moveBy(_lines: number): void {}
-	hideCursor(): void {}
-	showCursor(): void {}
-	clearLine(): void {}
-	clearFromCursor(): void {}
-	clearScreen(): void {}
-	setTitle(_title: string): void {}
-	setProgress(_active: boolean): void {}
-
-	/** Fork TUI extensions (no-op here; Pi-tui's TUI never calls them). */
-	moveTo(_row: number, _column: number): void {}
-	clearRenderedRows(_rows?: number): void {}
-
-	/** Simulate a terminal resize, then trigger the engine's resize handler. */
-	resize(columns?: number, rows?: number): void {
-		if (columns !== undefined) this.columns = columns;
-		if (rows !== undefined) this.rows = rows;
-		this.resizeHandler?.();
-	}
 }
 
 // ── Frame helpers ────────────────────────────────────────────────────────────
