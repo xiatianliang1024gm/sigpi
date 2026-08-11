@@ -63,11 +63,6 @@ const tempPathsToCleanup = new Set<string>();
 let tempCleanupRegistered = false;
 
 /**
- * Return a copy of each message with the `id` field stripped. Tests use this
- * to assert on message shape without caring about the randomly-generated
- * stable id that the session store now mints for every persisted message.
- */
-/**
  * Run a `git` command in `cwd` for tests, without inheriting a `GIT_DIR` /
  * `GIT_WORK_TREE` from the environment. When tests run inside a git hook
  * the parent process exports an absolute `GIT_DIR`, which would otherwise
@@ -86,6 +81,11 @@ export function gitIn(cwd: string, command: string): string {
 	}).toString();
 }
 
+/**
+ * Return a copy of each message with the `id` field stripped. Tests use this
+ * to assert on message shape without caring about the randomly-generated
+ * stable id that the session store now mints for every persisted message.
+ */
 export function stripMessageIds<T extends { id?: string }>(
 	messages: readonly T[],
 ): Array<Omit<T, "id">> {
@@ -93,6 +93,16 @@ export function stripMessageIds<T extends { id?: string }>(
 		const { id: _ignored, ...rest } = message;
 		return rest;
 	});
+}
+
+/**
+ * Strip ANSI escape sequences from a string. Pi-tui does not export an
+ * equivalent, so tests that assert on rendered (ANSI-free) output use this.
+ */
+const ANSI_RE = /\x1B\[[0-9;]*m|\x1B\][^\x07]*\x07|\x1B[()][AB0-2]/g;
+
+export function stripAnsi(value: string): string {
+	return value.replaceAll(ANSI_RE, "");
 }
 
 export async function createTempDir(prefix: string): Promise<string> {

@@ -340,12 +340,9 @@ export function applyTurnProgress(
 		const handle = toolLines.get(id);
 		if (handle) {
 			toolLines.delete(id);
-			if (event.ok === true) {
-				handle.finish();
-			} else {
-				handle.finish();
-				const errorMsg = event.result ?? "failed";
-				view.appendSystem(errorMsg, "error");
+			handle.finish();
+			if (event.ok !== true) {
+				view.appendSystem(event.result ?? "failed", "error");
 			}
 		}
 		return currentAssistant;

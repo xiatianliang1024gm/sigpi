@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stripAnsi } from "../src/tui/ansi.js";
 import { buildTranscriptComponents } from "../src/tui/transcript-replay.js";
 import type { SessionEntry } from "../src/types.js";
+import { stripAnsi } from "./helpers.js";
 
 function userEntry(content: string): SessionEntry {
 	return {

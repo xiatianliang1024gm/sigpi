@@ -8,15 +8,6 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
-	createEditSummary,
-	createWriteSummary,
-} from "../src/tools/edit-summary.js";
-import {
-	FileEditComponent,
-	formatFileEditResultData,
-	formatFileEditSummary,
-} from "../src/tui/file-edit-renderer.js";
-import {
 	AssistantMessageComponent,
 	SystemMessageComponent,
 	ToolLineComponent,
@@ -28,59 +19,7 @@ import {
 	StatusBarComponent,
 	type StatusBarModel,
 } from "../src/tui/status-bar.js";
-
-class FakeTerminal {
-	public columns = 20;
-	public rows = 5;
-	public writes: string[] = [];
-	public inputHandler: ((data: string) => void) | null = null;
-	public resizeHandler: (() => void) | null = null;
-
-	start(onInput: (data: string) => void, onResize: () => void): void {
-		this.inputHandler = onInput;
-		this.resizeHandler = onResize;
-	}
-
-	stop(): void {
-		this.inputHandler = null;
-		this.resizeHandler = null;
-	}
-
-	async drainInput(): Promise<void> {}
-
-	write(data: string): void {
-		this.writes.push(data);
-	}
-
-	get kittyProtocolActive(): boolean {
-		return false;
-	}
-
-	moveBy(lines: number): void {
-		this.write(`<moveBy:${lines}>`);
-	}
-
-	hideCursor(): void {}
-	showCursor(): void {}
-	clearLine(): void {
-		this.write("<clear-line>");
-	}
-	clearScreen(): void {
-		this.write("<clear>");
-	}
-	clearFromCursor(): void {
-		this.write("<clear-rest>");
-	}
-	setTitle(_title: string): void {}
-	setProgress(_active: boolean): void {}
-	moveTo(row: number, column: number): void {
-		this.write(`<${row},${column}>`);
-	}
-
-	clearRenderedRows(rows = 0): void {
-		this.write(`<clear-rows:${rows}>`);
-	}
-}
+import { FakeTerminal } from "./helpers/fake-terminal.js";
 
 test("visibleWidth treats Chinese characters as double width", () => {
 	assert.equal(visibleWidth("ab你好"), 6);
@@ -131,75 +70,6 @@ test("AssistantMessageComponent renders reasoning via the Text sub-component", (
 	// Output lines exist and at least one contains the reasoning content.
 	assert.ok(lines.length > 0);
 	assert.ok(lines.some((l) => l.includes("a")));
-});
-
-test("FileEditComponent output matches formatFileEditSummary exactly", () => {
-	const edit = createEditSummary(
-		"src/foo.ts",
-		"const a = 1;\n",
-		"const a = 1;",
-		"const a = 2;",
-		false,
-	);
-	const write = createWriteSummary("README.md", null, "# Title\nBody\n");
-
-	assert.deepEqual(
-		new FileEditComponent({ color: true }).setSummary(edit).render(80),
-		formatFileEditSummary(edit, { color: true }),
-	);
-	assert.deepEqual(
-		new FileEditComponent({ color: false }).setSummary(write).render(80),
-		formatFileEditSummary(write, { color: false }),
-	);
-});
-
-test("FileEditComponent renders an empty frame when no summary is set", () => {
-	assert.deepEqual(new FileEditComponent().render(80), []);
-	assert.deepEqual(new FileEditComponent().setSummary(null).render(80), []);
-});
-
-test("FileEditComponent renders a write summary (all additions, no deletions)", () => {
-	const summary = createWriteSummary("README.md", null, "# Title\n");
-	const lines = new FileEditComponent({ color: false })
-		.setSummary(summary)
-		.render(80);
-	assert.equal(lines[0], "- Edited README.md (+1 -0)");
-	assert.match(lines.at(-1) ?? "", /1 \+ # Title$/);
-});
-
-test("FileEditComponent mounts under Pi-tui's TUI and renders the diff", async () => {
-	const terminal = new FakeTerminal();
-	const tui = new PiTui(terminal);
-	tui.addChild(
-		new FileEditComponent({ color: false }).setSummary(
-			createWriteSummary("README.md", null, "# Title\n"),
-		),
-	);
-	tui.start();
-	// Pi-tui schedules its first render on a timer; let it flush.
-	await new Promise((resolve) => setTimeout(resolve, 50));
-	tui.stop();
-
-	assert.ok(
-		terminal.writes.some((w) => w.includes("- Edited README.md")),
-		"expected the diff header to be rendered by Pi-tui's TUI",
-	);
-});
-
-test("formatFileEditResultData renders through FileEditComponent", () => {
-	const summary = createEditSummary(
-		"src/foo.ts",
-		"const a = 1;\n",
-		"const a = 1;",
-		"const a = 2;",
-		false,
-	);
-	// The standalone helper must still produce identical output now that it
-	// delegates to the Pi-tui Component.
-	assert.deepEqual(
-		formatFileEditResultData({ editSummary: summary }, { color: false }),
-		new FileEditComponent({ color: false }).setSummary(summary).render(0),
-	);
 });
 
 test("Pi-tui TUI mounts on FakeTerminal and renders a Text component", async () => {
