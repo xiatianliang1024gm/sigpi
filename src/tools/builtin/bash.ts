@@ -222,7 +222,7 @@ export function createBashTool(
 						`Background task started: ${task.id}`,
 						`Command: ${command}`,
 						`Logs: ${task.logPath}`,
-						`Use "/tasks" to list tasks or "/tasks stop ${task.id}" to stop it.`,
+						`List tasks with "/tasks"; open a task's details with Enter and press "k" to stop it.`,
 					]),
 				);
 			}

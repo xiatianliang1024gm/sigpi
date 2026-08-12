@@ -281,6 +281,7 @@ test("bash runs a command in the background and tracks it", async () => {
 		status: string;
 		log_path: string;
 		pid: number | null;
+		rendered: string;
 	};
 	assert.equal(data.status, "running");
 	assert.ok(data.task_id);

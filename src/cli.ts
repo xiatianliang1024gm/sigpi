@@ -149,7 +149,6 @@ async function runChatWithArgs(args: string[]): Promise<void> {
 		},
 		{
 			commands: createChatCommandDefinitions({
-				backgroundTaskManager: runtime.backgroundTasks,
 				loadedSkills: runtime.loadedSkills,
 			}),
 		},

@@ -744,26 +744,26 @@ test("/tasks lists running background tasks", async () => {
 	});
 
 	const outputs: string[] = [];
-	const commands = createChatCommandDefinitions({
-		backgroundTaskManager: manager,
-	});
+	const commands = createChatCommandDefinitions({});
 	await executeChatCommand("/tasks", commands, {
-		getState: () => ({}) as never,
+		getState: () => ({ runtime: { backgroundTasks: manager } }) as never,
 		setState: () => {},
 		store: {} as never,
 		writeLine: (line: string) => outputs.push(line),
 	} as never);
 
 	assert.equal(outputs.length, 1);
-	assert.match(outputs[0], /task-1/);
-	assert.match(outputs[0], /\[running\]/);
-	assert.match(outputs[0], /background nap/);
+	// Rows lead with the task content, then status, then runtime; the id
+	// only appears on the `  id:` detail line, never as the row prefix.
+	assert.match(outputs[0], /^background nap {2}running {2}\d+s/);
+	assert.doesNotMatch(outputs[0], /^task-1/);
+	assert.match(outputs[0], /\n {2}id: task-1/);
 
 	manager.stop("task-1");
 	await waitFor(() => manager.get("task-1")?.status === "done", 3000);
 });
 
-test("/tasks stop ends a background task and reports it", async () => {
+test("/tasks stop is no longer supported", async () => {
 	const manager = new BackgroundTaskManager();
 	const logPath = path.join(await createTempDir("sigpi-tasks-test-"), "t2.log");
 	manager.spawn({
@@ -775,29 +775,32 @@ test("/tasks stop ends a background task and reports it", async () => {
 		description: null,
 	});
 
-	const commands = createChatCommandDefinitions({
-		backgroundTaskManager: manager,
-	});
+	const commands = createChatCommandDefinitions({});
 	const outputs: string[] = [];
 	await executeChatCommand("/tasks stop task-2", commands, {
-		getState: () => ({}) as never,
+		getState: () => ({ runtime: { backgroundTasks: manager } }) as never,
 		setState: () => {},
 		store: {} as never,
 		writeLine: (line: string) => outputs.push(line),
 	} as never);
 
-	assert.match(outputs[0], /Stopped task task-2/);
+	assert.match(outputs[0], /Usage: \/tasks \[list\]/);
+	assert.equal(
+		manager.get("task-2")?.status,
+		"running",
+		"the removed stop subcommand must not stop anything",
+	);
+
+	manager.stop("task-2");
 	await waitFor(() => manager.get("task-2")?.status === "done", 3000);
 });
 
 test("/tasks reports when there are no background tasks", async () => {
 	const manager = new BackgroundTaskManager();
-	const commands = createChatCommandDefinitions({
-		backgroundTaskManager: manager,
-	});
+	const commands = createChatCommandDefinitions({});
 	const outputs: string[] = [];
 	await executeChatCommand("/tasks", commands, {
-		getState: () => ({}) as never,
+		getState: () => ({ runtime: { backgroundTasks: manager } }) as never,
 		setState: () => {},
 		store: {} as never,
 		writeLine: (line: string) => outputs.push(line),
@@ -805,17 +808,54 @@ test("/tasks reports when there are no background tasks", async () => {
 	assert.equal(outputs[0], "No background tasks.");
 });
 
-test("/tasks stop reports unknown task ids", async () => {
+test("/tasks opens the interactive task picker when a TUI is available", async () => {
 	const manager = new BackgroundTaskManager();
+	const logPath = path.join(
+		await createTempDir("sigpi-tasks-picker-"),
+		"t.log",
+	);
+	manager.spawn({
+		id: "task-1",
+		command: "sleep 2",
+		invocation: { executable: "sleep", args: ["2"] },
+		cwd: process.cwd(),
+		logPath,
+		description: "background nap",
+	});
+
+	const opened: Array<{ tasks: readonly unknown[]; options: unknown }> = [];
 	const commands = createChatCommandDefinitions({
-		backgroundTaskManager: manager,
+		selectTaskFromSelector: async (tasks, options) => {
+			opened.push({ tasks, options });
+			return null;
+		},
 	});
 	const outputs: string[] = [];
-	await executeChatCommand("/tasks stop missing", commands, {
-		getState: () => ({}) as never,
+	await executeChatCommand("/tasks", commands, {
+		getState: () =>
+			({
+				view: { getTuiInstance: () => ({}) },
+				runtime: { backgroundTasks: manager },
+			}) as never,
 		setState: () => {},
 		store: {} as never,
 		writeLine: (line: string) => outputs.push(line),
 	} as never);
-	assert.match(outputs[0], /not found or already finished/);
+
+	// The plain-text listing is always written first (so the tasks stay
+	// visible even if the picker cannot open), then the picker takes over.
+	assert.ok(outputs.length >= 1);
+	assert.match(outputs[0] ?? "", /^background nap {2}running {2}\d+s/);
+	assert.equal(opened.length, 1);
+	assert.equal(opened[0]?.tasks.length, 1);
+	const options = opened[0]?.options as {
+		parentTui?: unknown;
+		killTask?: (taskId: string) => boolean;
+	};
+	assert.ok(options?.parentTui, "the REPL TUI is passed through");
+	assert.equal(typeof options?.killTask, "function");
+	assert.equal(options?.killTask?.("task-1"), true, "killTask stops the task");
+
+	manager.stop("task-1");
+	await waitFor(() => manager.get("task-1")?.status === "done", 3000);
 });
