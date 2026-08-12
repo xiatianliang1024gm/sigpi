@@ -13,7 +13,12 @@ import {
 import { createModelProvider } from "./model/provider.js";
 import type { SessionStore } from "./session/store.js";
 import { setLastModelId } from "./state.js";
-import type { BackgroundTaskManager } from "./tools/background.js";
+import {
+	formatRuntime,
+	formatTaskStatus,
+	selectTaskInteractive,
+	taskRuntimeMs,
+} from "./task-selector.js";
 import { formatCompactNumber } from "./tui/status-bar.js";
 import { defaultSelectListTheme } from "./tui/themes.js";
 import { replaySessionIntoView } from "./tui/transcript-replay.js";
@@ -95,7 +100,7 @@ interface ChatCommandDependencies {
 	getResumeAvailability: typeof defaultGetResumeAvailability;
 	selectModelFromSelector: typeof selectModelInteractive;
 	rememberModelSelection: typeof setLastModelId;
-	backgroundTaskManager?: BackgroundTaskManager;
+	selectTaskFromSelector: typeof selectTaskInteractive;
 	/** Skills to expose as dynamic `/skill:<name>` commands. */
 	loadedSkills?: readonly LoadedSkill[];
 }
@@ -127,7 +132,8 @@ export function createChatCommandDefinitions(
 		dependencies.selectModelFromSelector ?? selectModelInteractive;
 	const rememberModelSelection =
 		dependencies.rememberModelSelection ?? setLastModelId;
-	const backgroundTaskManager = dependencies.backgroundTaskManager;
+	const selectTaskFromSelector =
+		dependencies.selectTaskFromSelector ?? selectTaskInteractive;
 
 	const skillCommands = (
 		dependencies.loadedSkills ?? []
@@ -320,34 +326,20 @@ export function createChatCommandDefinitions(
 		},
 		{
 			name: "/tasks",
-			description:
-				"List background tasks, or stop one with '/tasks stop <task-id>'",
-			handler: (context, args) => {
-				if (!backgroundTaskManager) {
-					context.writeLine(
-						"Background tasks are not available in this runtime.",
-					);
-					return { action: "continue" };
-				}
+			description: "List background tasks",
+			handler: async (context, args) => {
+				// Read the manager from the *current* runtime, not a captured
+				// dependency. `/resume` (and `/new`) swap the runtime via
+				// `attachSessionById`, which builds a fresh `createAgentRuntime`
+				// with its own `BackgroundTaskManager`; a captured reference
+				// would still point at the original startup runtime and miss
+				// every task spawned after the switch.
+				const backgroundTaskManager =
+					context.getState().runtime.backgroundTasks;
 
 				const subcommand = args[0]?.trim();
-				if (subcommand === "stop") {
-					const taskId = args[1]?.trim();
-					if (!taskId) {
-						context.writeLine("Usage: /tasks stop <task-id>");
-						return { action: "continue" };
-					}
-					const stopped = backgroundTaskManager.stop(taskId);
-					context.writeLine(
-						stopped
-							? `Stopped task ${taskId}.`
-							: `Task ${taskId} not found or already finished.`,
-					);
-					return { action: "continue" };
-				}
-
 				if (subcommand && subcommand !== "list") {
-					context.writeLine("Usage: /tasks [list | stop <task-id>]");
+					context.writeLine("Usage: /tasks [list]");
 					return { action: "continue" };
 				}
 
@@ -357,10 +349,17 @@ export function createChatCommandDefinitions(
 					return { action: "continue" };
 				}
 
+				// Always show the plain-text listing in the transcript first:
+				// this preserves the original /tasks output, and guarantees the
+				// tasks stay visible even if the interactive picker below cannot
+				// open or render (e.g. a TUI quirk in a specific terminal). The
+				// picker, when it opens, overlays this and the listing remains
+				// in the transcript after it closes.
 				for (const task of tasks) {
-					const label = task.description ? ` (${task.description})` : "";
+					const content = task.description ?? task.command;
 					const lines = [
-						`[${task.status}] ${task.id}${label}`,
+						`${content}  ${formatTaskStatus(task)}  ${formatRuntime(taskRuntimeMs(task, new Date()))}`,
+						`  id: ${task.id}`,
 						`  command: ${task.command}`,
 						`  pid: ${task.pid ?? "-"}\n  cwd: ${task.cwd}`,
 						`  log: ${task.logPath}`,
@@ -372,6 +371,17 @@ export function createChatCommandDefinitions(
 						);
 					}
 					context.writeLine(lines.join("\n"));
+				}
+
+				// Interactive picker: list the tasks, Enter opens a task's
+				// details (status, runtime, command, live output), and `k`
+				// stops the task from the detail view.
+				const tui = context.getState().view?.getTuiInstance();
+				if (tui) {
+					await selectTaskFromSelector(tasks, {
+						parentTui: tui,
+						killTask: (taskId) => backgroundTaskManager.stop(taskId),
+					});
 				}
 				return { action: "continue" };
 			},

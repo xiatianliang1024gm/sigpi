@@ -5,13 +5,16 @@ import { killProcessGroup, sanitizeWorkingDirectory } from "../shell.js";
 
 type BackgroundTaskStatus = "running" | "done";
 
-interface BackgroundTask {
+/** Snapshot of a spawned background shell task, mutated in place as it runs. */
+export interface BackgroundTask {
 	id: string;
 	pid: number | null;
 	command: string;
 	cwd: string;
 	description: string | null;
 	startedAt: number;
+	/** When the task finished (status became `done`), or `null` while running. */
+	endedAt: number | null;
 	status: BackgroundTaskStatus;
 	logPath: string;
 	exitCode: number | null;
@@ -62,6 +65,7 @@ export class BackgroundTaskManager {
 			cwd,
 			description: options.description,
 			startedAt: Date.now(),
+			endedAt: null,
 			status: "running",
 			logPath: options.logPath,
 			exitCode: null,
@@ -80,6 +84,12 @@ export class BackgroundTaskManager {
 				`Started: ${new Date(task.startedAt).toISOString()}\n\n`,
 		);
 		const log = createWriteStream(options.logPath, { flags: "a" });
+		// Don't keep the event loop alive for background tasks: the log
+		// stream, the child's stdio pipes, and the detached child itself
+		// would otherwise prevent `/exit` from terminating the REPL.
+		// `WriteStream.unref()` exists at runtime but isn't on every
+		// `@types/node` version, so reach for it defensively.
+		(log as { unref?: () => void }).unref?.();
 
 		let proc: ChildProcess;
 		try {
@@ -94,6 +104,7 @@ export class BackgroundTaskManager {
 			});
 		} catch (error) {
 			task.status = "done";
+			task.endedAt = Date.now();
 			task.exitCode = null;
 			log.write(
 				`\n[spawn error] ${error instanceof Error ? error.message : String(error)}\n`,
@@ -124,6 +135,12 @@ export class BackgroundTaskManager {
 
 		proc.stdout?.on("data", (chunk: Buffer) => log.write(chunk));
 		proc.stderr?.on("data", (chunk: Buffer) => log.write(chunk));
+		// `Readable.unref()` exists at runtime (Node 16+) but isn't on the
+		// `ChildProcess.stdout` type in every lib version, so reach for it
+		// defensively. Without this, the stdio pipes keep the event loop
+		// alive and `/exit` hangs while background tasks are running.
+		(proc.stdout as { unref?: () => void } | null)?.unref?.();
+		(proc.stderr as { unref?: () => void } | null)?.unref?.();
 
 		proc.on("error", (error: Error) => {
 			if (timeoutTimer) {
@@ -132,6 +149,7 @@ export class BackgroundTaskManager {
 			log.write(`\n[spawn error] ${error.message}\n`);
 			if (task.status === "running") {
 				task.status = "done";
+				task.endedAt = Date.now();
 				task.exitCode = null;
 				log.end();
 			}
@@ -142,6 +160,7 @@ export class BackgroundTaskManager {
 				clearTimeout(timeoutTimer);
 			}
 			task.status = "done";
+			task.endedAt = Date.now();
 			task.exitCode = code;
 			task.signal = signal;
 			log.write(
