@@ -4,10 +4,10 @@ import {
 	existsSync,
 	mkdtempSync,
 	readFileSync,
-	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
@@ -33,8 +33,36 @@ function makeRepo(): string {
 	return dir;
 }
 
-function cleanup(dir: string): void {
-	rmSync(dir, { recursive: true, force: true });
+const CLEANUP_RETRY_ATTEMPTS = 20;
+const CLEANUP_RETRY_DELAY_MS = 100;
+
+/**
+ * Remove a temp repo directory, retrying on Windows transient locks.
+ *
+ * `fs.rm`/`fs.rmSync` only auto-retry `EBUSY`/`EMFILE`/`ENFILE`/`ENOTEMPTY`
+ * — notably NOT `EPERM` — yet a just-killed `git` (or a watcher spawn that
+ * has not fully exited) can hold the directory as its cwd for a few ms after
+ * the assertions pass, surfacing as `EPERM` and failing an otherwise-green
+ * test. A bounded manual backoff lets the handle release; a genuinely
+ * undeletable directory still rethrows after the attempts are exhausted.
+ */
+async function cleanup(dir: string): Promise<void> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			await rm(dir, { recursive: true, force: true });
+			return;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException)?.code;
+			if (
+				(code === "EPERM" || code === "EBUSY" || code === "ENOTEMPTY") &&
+				attempt < CLEANUP_RETRY_ATTEMPTS - 1
+			) {
+				await sleep(CLEANUP_RETRY_DELAY_MS);
+				continue;
+			}
+			throw error;
+		}
+	}
 }
 
 async function waitFor(
@@ -158,7 +186,13 @@ test("runGit settles within the deadline when git hangs", async () => {
 			assert.equal(result.ok, false);
 			assert.equal(result.value, null);
 			const elapsed = Date.now() - startedAt;
-			const deadlineMs = process.platform === "win32" ? 3500 : 800;
+			// The fake hangs forever, so *any* settle proves the kill timer
+			// fired (a leak would never settle). The bound therefore only has
+			// to tolerate process-creation latency, not enforce a tight one:
+			// on Windows, antivirus/EDR scanning the freshly-copied `git.exe`
+			// can stall CreateProcess for seconds, so the win32 budget is
+			// generous. A too-tight bound flakes on a cold/locked-down host.
+			const deadlineMs = process.platform === "win32" ? 8000 : 800;
 			assert.ok(
 				elapsed < deadlineMs,
 				`hanging git should settle within ${deadlineMs}ms, took ${elapsed}ms`,
@@ -172,8 +206,8 @@ test("runGit settles within the deadline when git hangs", async () => {
 			restore();
 		}
 	} finally {
-		cleanup(dir);
-		cleanup(fakeDir);
+		await cleanup(dir);
+		await cleanup(fakeDir);
 	}
 });
 
@@ -188,7 +222,7 @@ test("branch watcher records the current branch name", async () => {
 			stopBranchWatcher();
 		}
 	} finally {
-		cleanup(dir);
+		await cleanup(dir);
 	}
 });
 
@@ -205,7 +239,7 @@ test("branch watcher records @shortSha for a detached HEAD", async () => {
 			stopBranchWatcher();
 		}
 	} finally {
-		cleanup(dir);
+		await cleanup(dir);
 	}
 });
 
@@ -239,8 +273,8 @@ test("branch watcher reports null when the lookup fails", async () => {
 			restore();
 		}
 	} finally {
-		cleanup(dir);
-		cleanup(fakeDir);
+		await cleanup(dir);
+		await cleanup(fakeDir);
 	}
 });
 
@@ -257,7 +291,7 @@ test("branch watcher picks up a branch switch on a later tick", async () => {
 			stopBranchWatcher();
 		}
 	} finally {
-		cleanup(dir);
+		await cleanup(dir);
 	}
 });
 
@@ -306,8 +340,8 @@ test("branch watcher keeps the last known branch when a lookup fails", async () 
 			restore();
 		}
 	} finally {
-		cleanup(dir);
-		cleanup(fakeDir);
+		await cleanup(dir);
+		await cleanup(fakeDir);
 	}
 });
 
@@ -336,7 +370,7 @@ test("branch change listener fires on first sample and on change only", async ()
 			unsubscribe();
 		}
 	} finally {
-		cleanup(dir);
+		await cleanup(dir);
 	}
 });
 
@@ -358,7 +392,7 @@ test("branch change listener stops firing after unsubscribe", async () => {
 			stopBranchWatcher();
 		}
 	} finally {
-		cleanup(dir);
+		await cleanup(dir);
 	}
 });
 
@@ -406,7 +440,7 @@ test.skip("branch watcher skips ticks while a lookup is in flight", async () => 
 			restore();
 		}
 	} finally {
-		cleanup(dir);
-		cleanup(fakeDir);
+		await cleanup(dir);
+		await cleanup(fakeDir);
 	}
 });

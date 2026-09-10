@@ -67,15 +67,25 @@ export interface AgentRuntime {
 	 * active model each turn.
 	 */
 	setActiveModel: (model: ModelConfig) => void;
+	/**
+	 * Release the runtime's per-session resources (background shell tasks and
+	 * their log streams). A single-process, multi-session host calls this when
+	 * it retires a session so a closed session never leaks handles. Idempotent.
+	 */
+	dispose: () => void;
 }
 
-interface CreateAgentRuntimeArgs {
+export interface CreateAgentRuntimeArgs {
 	sessionId?: string;
 	sessionTitle?: string;
 	createSession?: boolean;
 	config?: AppConfig;
 	/** Override the session store (e.g. for tests). */
 	store?: SessionStore;
+	/** Project working directory. Defaults to `process.cwd()`. */
+	cwd?: string;
+	/** Home directory for config/skills resolution. Defaults to `$HOME`/`os.homedir()`. */
+	homeDir?: string;
 }
 
 function createRuntimeLogger(config: AppConfig): RuntimeLogger {
@@ -193,13 +203,13 @@ async function bootstrapSessionState(args: {
 export async function createAgentRuntime(
 	args: CreateAgentRuntimeArgs = {},
 ): Promise<AgentRuntime> {
-	const cwd = process.cwd();
-	const config = args.config ?? loadAppConfig();
+	const cwd = args.cwd ?? process.cwd();
+	const homeDir = args.homeDir ?? process.env.HOME ?? os.homedir();
+	const config = args.config ?? loadAppConfig({ homeDir });
 	const runId = randomUUID();
 	const baseLogger = createRuntimeLogger(config);
 	const runLogger = createChildLogger(baseLogger, { runId });
 	const shellRuntime = detectShellRuntime(config.shell);
-	const homeDir = process.env.HOME ?? os.homedir();
 	const skillCatalog = await loadRuntimeSkillCatalog({
 		cwd,
 		homeDir,
@@ -344,6 +354,9 @@ export async function createAgentRuntime(
 		backgroundTasks: backgroundTaskManager,
 		setActiveModel: (model: ModelConfig) => {
 			activeModelRef.current = model;
+		},
+		dispose: () => {
+			backgroundTaskManager.dispose();
 		},
 	};
 }

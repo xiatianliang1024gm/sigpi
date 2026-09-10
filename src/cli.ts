@@ -25,31 +25,30 @@ import {
 	startBranchWatcher,
 	stopBranchWatcher,
 } from "./git.js";
-import { TurnInterruptController } from "./interrupt.js";
 import { resolveDatedLogFilePath } from "./logger.js";
 import { configureHttpProxy } from "./model/http-dispatcher.js";
 import { createAgentRuntime, createRuntimeSessionStore } from "./runtime.js";
+import { runServeCommand } from "./server/serve.js";
+import { SessionController } from "./session/controller.js";
+import {
+	accumulateTurnStats,
+	applyTurnProgress,
+	createReplRunStats,
+	formatReplRunSummary,
+	isTurnTerminalEvent,
+	type ReplRunStats,
+} from "./session/events.js";
 import type { SessionStore } from "./session/store.js";
 import { detectShellRuntime } from "./shell.js";
 import type { ToolRegistry } from "./tools/registry.js";
 import {
 	type AssistantMessageView,
 	ChatRenderer,
-	type ReplView,
 	type ToolLineHandle,
 } from "./tui/chat-renderer.js";
-import {
-	formatCompactNumber,
-	formatElapsed,
-	getStatusEventLabel,
-	type LastTurnStats,
-} from "./tui/status-bar.js";
+import { getStatusEventLabel, type LastTurnStats } from "./tui/status-bar.js";
 import { replaySessionIntoView } from "./tui/transcript-replay.js";
-import type {
-	JsonValue,
-	TurnProgressEvent,
-	TurnTerminalEvent,
-} from "./types.js";
+import type { JsonValue, TurnProgressEvent } from "./types.js";
 
 /**
  * Resolve the effective config for the current working directory. The global
@@ -76,6 +75,9 @@ function printUsage(): void {
 	console.log("  pnpm dev config validate");
 	console.log("  pnpm dev session new [--title <title>]");
 	console.log("  pnpm dev session list");
+	console.log(
+		"  pnpm dev serve [--host <host>] [--port <port>] [--idle-ttl <ms>] [--max-sessions <n>]",
+	);
 	console.log("");
 	console.log(`User config: ${getDefaultUserConfigPath()}`);
 	console.log("");
@@ -195,195 +197,16 @@ const STATUS_BAR_REFRESH_INTERVAL_MS = 5_000;
  */
 const TURN_STATUS_REFRESH_INTERVAL_MS = 1_000;
 
-/** The turn events that end a turn and carry final elapsed/token stats. */
-function isTurnTerminalEvent(
-	event: TurnProgressEvent,
-): event is TurnTerminalEvent {
-	return (
-		event.type === "turn_finished" ||
-		event.type === "turn_interrupted" ||
-		event.type === "turn_failed" ||
-		event.type === "turn_max_steps_reached"
-	);
-}
-
-/**
- * Cumulative agent usage across one REPL run (sigpi start → exit). Every
- * terminal turn event folds its elapsed/token totals in; when the loop exits
- * the totals are printed as a single summary line. Token fields mirror the
- * per-turn log fields, so `inputTokens + outputTokens` is the billed figure.
- */
-interface ReplRunStats {
-	/** Number of turns that reached a terminal event in this run. */
-	turnCount: number;
-	/** Sum of each turn's user-submit → terminal-event elapsed time, in ms. */
-	elapsedMs: number;
-	/** Provider-reported usage summed across every turn's model requests. */
-	inputTokens: number;
-	outputTokens: number;
-	cacheReadTokens: number;
-	cacheWriteTokens: number;
-	totalTokens: number;
-}
-
-export function createReplRunStats(): ReplRunStats {
-	return {
-		turnCount: 0,
-		elapsedMs: 0,
-		inputTokens: 0,
-		outputTokens: 0,
-		cacheReadTokens: 0,
-		cacheWriteTokens: 0,
-		totalTokens: 0,
-	};
-}
-
-/**
- * Fold a terminal turn event's stats into the run accumulator. Non-terminal
- * events, and turns that never emit a terminal event, are not counted.
- */
-export function accumulateTurnStats(
-	stats: ReplRunStats,
-	event: TurnTerminalEvent,
-): ReplRunStats {
-	stats.turnCount += 1;
-	stats.elapsedMs += event.elapsedMs;
-	const tokens = event.usage;
-	if (tokens) {
-		stats.inputTokens += tokens.input;
-		stats.outputTokens += tokens.output;
-		stats.cacheReadTokens += tokens.cacheRead;
-		stats.cacheWriteTokens += tokens.cacheWrite;
-		stats.totalTokens += tokens.totalTokens;
-	}
-	return stats;
-}
-
-/**
- * One-line summary printed when the REPL exits: total turns, wall-clock agent
- * time, and billed tokens (cumulative `input + output` across every turn).
- * Returns `null` when no turn ran, so an empty session prints nothing.
- */
-export function formatReplRunSummary(stats: ReplRunStats): string | null {
-	if (stats.turnCount === 0) {
-		return null;
-	}
-	const turns = `${stats.turnCount} ${stats.turnCount === 1 ? "turn" : "turns"}`;
-	let line = `Session: ${turns} · ${formatElapsed(stats.elapsedMs)}`;
-	const billed = stats.inputTokens + stats.outputTokens;
-	if (billed > 0) {
-		line = `${line} · ${formatCompactNumber(billed)} billed`;
-	}
-	return line;
-}
-
-/**
- * Apply one turn-progress event to the persistent REPL view. Returns the
- * current in-flight assistant-message view so the caller can thread it across
- * events within a turn, and a map of in-flight tool-line handles keyed by
- * tool-call id so the caller can resolve them on finish/fail.
- *
- * Each model response (one per agent step) gets its OWN assistant component,
- * created lazily on the first content/reasoning delta and finalized at the
- * step boundary (`model_request_finished` / `assistant_message` / terminal
- * events). This keeps every step's answer in a component appended in
- * chronological order — so the final conclusion lands AFTER the step's tool
- * results — and, crucially, never leaves a finalized component receiving a
- * later step's deltas. `AssistantMessageComponent.finalize()` locks the
- * component so further `appendContent`/`appendReasoning` calls are silently
- * dropped; an earlier design created a single component at turn start and
- * finalized it after the first step, so every later step's text (including
- * the final answer) was dropped and never rendered.
- */
-export function applyTurnProgress(
-	view: ReplView,
-	event: TurnProgressEvent,
-	currentAssistant: AssistantMessageView | null,
-	toolLines: Map<string, ToolLineHandle>,
-): AssistantMessageView | null {
-	if (event.type === "model_delta") {
-		const assistant = currentAssistant ?? view.beginAssistantMessage();
-		if (event.reasoningDelta) {
-			assistant.appendReasoning(event.reasoningDelta);
-		}
-		if (event.contentDelta) {
-			assistant.appendContent(event.contentDelta);
-		}
-		return assistant;
-	}
-
-	if (event.type === "interrupt_requested") {
-		// The status bar alone ("cancelling") is easy to miss; surface the
-		// interruption as a transcript line so the user sees the Esc/Ctrl+C
-		// was acknowledged.
-		view.appendSystem(event.message ?? "Interrupt requested.", "info");
-		return currentAssistant;
-	}
-
-	if (event.type === "context_compacted") {
-		view.appendSystem(formatCompactionMessage(event), "info");
-		return currentAssistant;
-	}
-
-	if (event.type === "tool_execution_started" && event.toolName) {
-		const id = event.toolCallId;
-		if (id) {
-			const handle = view.beginToolLine(id, event.message ?? event.toolName);
-			toolLines.set(id, handle);
-		}
-		return currentAssistant;
-	}
-
-	if (event.type === "tool_execution_finished" && event.toolName) {
-		const id = event.toolCallId || "";
-		const handle = toolLines.get(id);
-		if (handle) {
-			toolLines.delete(id);
-			handle.finish();
-			if (event.ok !== true) {
-				view.appendSystem(event.result ?? "failed", "error");
-			}
-		}
-		return currentAssistant;
-	}
-
-	if (
-		event.type === "model_request_finished" ||
-		event.type === "assistant_message" ||
-		event.type === "turn_interrupted" ||
-		event.type === "turn_failed" ||
-		event.type === "turn_max_steps_reached"
-	) {
-		currentAssistant?.finalize();
-		// Finalize any remaining in-flight tool lines on terminal events.
-		for (const handle of toolLines.values()) {
-			handle.fail("interrupted");
-		}
-		toolLines.clear();
-		if (event.type === "turn_interrupted") {
-			view.appendSystem("Turn interrupted.", "info");
-		}
-		return null;
-	}
-
-	return currentAssistant;
-}
-
-/**
- * Render a compaction notice that highlights the context-window size change
- * (the number users actually care about) instead of a verbose recap. The
- * token snapshot is always present on `context_compacted`, so this is the
- * primary branch.
- */
-function formatCompactionMessage(
-	event: Extract<TurnProgressEvent, { type: "context_compacted" }>,
-): string {
-	const { tokensBefore, tokensAfter } = event;
-	if (tokensBefore > 0 || tokensAfter > 0) {
-		return `Context compacted: context window ${formatCompactNumber(tokensBefore)} → ${formatCompactNumber(tokensAfter)} tokens.`;
-	}
-	return "Context compacted.";
-}
+export type { ReplRunStats };
+// Re-exported for back-compat: these UI-neutral helpers now live in
+// `session/events.ts`, shared by the TUI and any headless frontend. Existing
+// importers (and tests) keep resolving them from `cli.js`.
+export {
+	accumulateTurnStats,
+	applyTurnProgress,
+	createReplRunStats,
+	formatReplRunSummary,
+};
 
 async function runChatReplLoop(
 	options: RunChatReplLoopOptions,
@@ -456,10 +279,12 @@ async function runChatReplLoop(
 			toolLines,
 		);
 	};
-	// Subscribe the live view to the runner's turn-progress events. `setState`
-	// below re-subscribes when `/new` or `/resume` swaps in a new runtime.
-	let unsubscribeProgress =
-		state.runtime.runner.onProgress(viewProgressListener);
+	// The SessionController owns the turn lifecycle + interrupt wiring; the TUI
+	// only subscribes to its unified progress stream (and re-points it on a
+	// runtime swap). A web frontend would hold the same controller and consume
+	// the identical event stream.
+	const controller = new SessionController(state.runtime);
+	const unsubscribeProgress = controller.onProgress(viewProgressListener);
 
 	// Idle refresh: keep the bar honest between turns (see the constant's
 	// doc comment). Cleared on the loop's single exit path below.
@@ -510,11 +335,11 @@ async function runChatReplLoop(
 				// ProcessTerminal on process.stdin (whose stop() pauses
 				// stdin and freezes the REPL).
 				state = { ...updatedState, view };
-				// A new runtime (e.g. /new, /resume) comes with a new runner
-				// that has no listeners; re-subscribe the view to it.
-				unsubscribeProgress();
-				unsubscribeProgress =
-					updatedState.runtime.runner.onProgress(viewProgressListener);
+				// A new runtime (e.g. /new, /resume) is driven by the same
+				// controller: `setRuntime` re-binds its internal runner
+				// subscription, so the view's single `onProgress` keeps working
+				// without re-wiring.
+				controller.setRuntime(updatedState.runtime);
 				latestProgressEvent = null;
 				// The state changed (e.g. /model, /new, /resume): the previous
 				// turn's clock/stats no longer apply to the new context.
@@ -557,7 +382,6 @@ async function runChatReplLoop(
 			continue;
 		}
 
-		const interruptController = new TurnInterruptController();
 		latestProgressEvent = null;
 		toolLines = new Map();
 		currentAssistant = null;
@@ -565,28 +389,13 @@ async function runChatReplLoop(
 		// stats: the bar now shows the live elapsed timer instead.
 		turnStartedAt = Date.now();
 		lastTurnStats = null;
+		// Esc/Ctrl+C during a turn asks the controller to interrupt it; the
+		// synthetic `interrupt_requested` event flows through the same stream.
 		view.beginTurn(() => {
-			const interrupt = interruptController.requestInterrupt();
-			if (!interrupt.accepted || interrupt.alreadyRequested) {
-				return;
-			}
-			const message =
-				interrupt.stage === "model"
-					? "Cancelling current model request"
-					: "Interrupt requested; waiting for current tool to finish";
-			// Feed the synthetic event through the same listener pipeline as
-			// the runner's own events (status bar + transcript line).
-			state.runtime.runner.emitProgress("interrupt_requested", {
-				message,
-				stage: interrupt.stage ?? undefined,
-			});
+			controller.requestInterrupt();
 		});
 
-		const turn = await state.runtime.turn.runTurn(
-			turnInput,
-			state.runtime.logger,
-			interruptController,
-		);
+		const turn = await controller.submit(turnInput);
 		view.endTurn();
 		currentAssistant = null;
 		toolLines.clear();
@@ -605,6 +414,7 @@ async function runChatReplLoop(
 	view.stop();
 	clearInterval(statusBarRefreshTimer);
 	clearInterval(turnStatusTimer);
+	unsubscribeProgress();
 	unsubscribeBranchChange();
 	stopBranchWatcher();
 	// The terminal is restored, so a plain stdout line is safe here. Print
@@ -833,7 +643,8 @@ async function main(): Promise<void> {
 		command.startsWith("--") ||
 		command === "init" ||
 		command === "config" ||
-		command === "session"
+		command === "session" ||
+		command === "serve"
 	) {
 		if (command === "init") {
 			await runInitCommand(rest);
@@ -845,6 +656,10 @@ async function main(): Promise<void> {
 		}
 		if (command === "session") {
 			await runSessionCommand(rest);
+			return;
+		}
+		if (command === "serve") {
+			await runServeCommand(rest);
 			return;
 		}
 		// `chat` or a bare top-level flag: default to chat.

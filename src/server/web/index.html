@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>sigpi</title>
+		<link rel="stylesheet" href="/styles.css" />
+	</head>
+	<body>
+		<header class="topbar">
+			<span class="brand">sigpi</span>
+			<span id="status" class="status">connecting…</span>
+		</header>
+		<main class="layout">
+			<aside class="sidebar">
+				<section class="panel">
+					<div class="panel-head">
+						<h2>Projects</h2>
+						<button
+							id="add-project"
+							type="button"
+							class="icon-button"
+							title="Add a working directory"
+						>
+							＋
+						</button>
+					</div>
+					<div id="projects" class="tree"></div>
+				</section>
+			</aside>
+			<section class="chat">
+				<button id="load-earlier" class="load-earlier" type="button" hidden>
+					Load earlier messages
+				</button>
+				<div id="transcript" class="transcript"></div>
+				<div id="error" class="error" hidden></div>
+				<form id="composer" class="composer">
+					<textarea
+						id="input"
+						rows="3"
+						placeholder="Send a message to the agent…"
+						disabled
+					></textarea>
+					<div class="composer-actions">
+						<button id="interrupt" type="button" disabled>Interrupt</button>
+						<button id="send" type="submit" disabled>Send</button>
+					</div>
+				</form>
+			</section>
+		</main>
+		<script type="module" src="/app.js"></script>
+	</body>
+</html>

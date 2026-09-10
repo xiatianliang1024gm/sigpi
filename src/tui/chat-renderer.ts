@@ -7,6 +7,11 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ChatCommandMetadata } from "../chat-commands.js";
 import { buildEditor } from "../chat-input.js";
+import type {
+	AssistantMessageView,
+	ToolLineHandle,
+	TurnTranscriptView,
+} from "../session/events.js";
 import {
 	AssistantMessageComponent,
 	SystemMessageComponent,
@@ -14,19 +19,14 @@ import {
 	UserMessageComponent,
 } from "./messages.js";
 import { StatusBarComponent, type StatusBarModel } from "./status-bar.js";
-export interface AssistantMessageView {
-	appendReasoning(text: string): void;
-	appendContent(text: string): void;
-	finalize(): void;
-}
 
-/** Handle for an in-flight tool-call line in the activity log. */
-export interface ToolLineHandle {
-	/** Mark the tool line as succeeded. */
-	finish(): void;
-	/** Append a red error summary to the same line. */
-	fail(error: string): void;
-}
+// Re-exported so existing importers (`cli.ts`, tests) keep resolving these from
+// the renderer; the canonical definitions now live in the UI-neutral
+// `session/events` module.
+export type {
+	AssistantMessageView,
+	ToolLineHandle,
+} from "../session/events.js";
 
 /**
  * Output surface for the REPL loop. Two implementations: {@link ChatRenderer}
@@ -34,7 +34,7 @@ export interface ToolLineHandle {
  * one-shot modes. The loop is written against this interface so the TTY and
  * non-TTY paths share one control flow.
  */
-export interface ReplView {
+export interface ReplView extends TurnTranscriptView {
 	start(): void;
 	stop(): void;
 	readInput(prompt?: string): Promise<string | null>;

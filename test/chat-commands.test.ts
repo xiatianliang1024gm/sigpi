@@ -8,7 +8,11 @@ import {
 	parseChatCommand,
 } from "../src/chat-commands.js";
 import { BackgroundTaskManager } from "../src/tools/background.js";
-import { createTempDir, waitFor } from "./helpers.js";
+import { createTempDir, sleepAvailable, waitFor } from "./helpers.js";
+
+// The `/tasks` fixtures spawn a real `sleep`. It is present on CI
+// (ubuntu-latest) but absent on a plain Windows runner, so those tests skip.
+const SLEEP_AVAILABLE = sleepAvailable();
 
 test("parseChatCommand matches supported slash commands", () => {
 	const commands = createChatCommandDefinitions();
@@ -731,7 +735,9 @@ test("getChatCommandSuggestions narrows matches by prefix", () => {
 	assert.deepEqual(getChatCommandSuggestions("plain text", commands), []);
 });
 
-test("/tasks lists running background tasks", async () => {
+test("/tasks lists running background tasks", {
+	skip: !SLEEP_AVAILABLE,
+}, async () => {
 	const manager = new BackgroundTaskManager();
 	const logPath = path.join(await createTempDir("sigpi-tasks-test-"), "t1.log");
 	manager.spawn({
@@ -763,7 +769,9 @@ test("/tasks lists running background tasks", async () => {
 	await waitFor(() => manager.get("task-1")?.status === "done", 3000);
 });
 
-test("/tasks stop is no longer supported", async () => {
+test("/tasks stop is no longer supported", {
+	skip: !SLEEP_AVAILABLE,
+}, async () => {
 	const manager = new BackgroundTaskManager();
 	const logPath = path.join(await createTempDir("sigpi-tasks-test-"), "t2.log");
 	manager.spawn({
@@ -808,7 +816,9 @@ test("/tasks reports when there are no background tasks", async () => {
 	assert.equal(outputs[0], "No background tasks.");
 });
 
-test("/tasks opens the interactive task picker when a TUI is available", async () => {
+test("/tasks opens the interactive task picker when a TUI is available", {
+	skip: !SLEEP_AVAILABLE,
+}, async () => {
 	const manager = new BackgroundTaskManager();
 	const logPath = path.join(
 		await createTempDir("sigpi-tasks-picker-"),

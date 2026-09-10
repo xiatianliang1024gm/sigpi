@@ -201,4 +201,31 @@ export class BackgroundTaskManager {
 			return false;
 		}
 	}
+
+	/**
+	 * Stop every still-running task and forget all tasks. This is the bulk
+	 * teardown a multi-session host calls when it retires a runtime, so a
+	 * closed session never leaks live child processes or log streams.
+	 *
+	 * Each running process group is SIGTERMed, then SIGKILLed after a short
+	 * grace period (mirroring the per-task timeout path) so a task that
+	 * ignores SIGTERM still goes down. Best-effort and idempotent: a task
+	 * already gone is skipped.
+	 */
+	dispose(): void {
+		for (const task of this.tasks.values()) {
+			if (task.status !== "running" || task.pid == null) {
+				continue;
+			}
+			const pid = task.pid;
+			task.killed = true;
+			killProcessGroup(pid, "SIGTERM");
+			const killTimer = setTimeout(
+				() => killProcessGroup(pid, "SIGKILL"),
+				2_000,
+			);
+			killTimer.unref?.();
+		}
+		this.tasks.clear();
+	}
 }

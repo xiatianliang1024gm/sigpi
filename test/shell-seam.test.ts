@@ -18,10 +18,15 @@ import { bashTool, createBashTool } from "../src/tools/builtin/bash.js";
 import { ReadTracker } from "../src/tools/read-tracker.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { ShellKind } from "../src/types.js";
+import { defaultShellIsPosix, posixShellUsable } from "./helpers.js";
 
 // Shells we exercise per-shell. Each entry is skipped when the binary is not
 // present on the runner, so the suite stays green on minimal images.
 const POSIX_SHELLS: ShellKind[] = ["sh", "bash", "zsh"];
+
+// `pwd`-comparing tests additionally need a shell that speaks platform-native
+// paths; a Git-Bash/WSL `sh` on Windows reports MSYS paths and is excluded.
+const POSIX_PATH_SAFE = posixShellUsable();
 
 function shellPresent(shell: ShellKind): boolean {
 	try {
@@ -92,7 +97,7 @@ for (const shell of POSIX_SHELLS) {
 	});
 
 	test(`bash resets to the project directory on every call under ${shell}`, {
-		skip: !present,
+		skip: !present || !POSIX_PATH_SAFE,
 	}, async () => {
 		const shellRuntime = createShellRuntime(shell, "linux");
 		const startDir = process.cwd();
@@ -293,7 +298,11 @@ test("resolvePosixDefaultShell falls back to an available POSIX shell", () => {
 	assert.ok(["sh", "bash"].includes(fallback));
 });
 
-test("default bashTool resolves a present shell (no zsh ENOENT)", async () => {
+test("default bashTool resolves a present shell (no zsh ENOENT)", {
+	// POSIX semantics (`printf`) assume the default shell is a POSIX shell.
+	// On a plain Windows host it is `powershell.exe`, so skip there.
+	skip: !defaultShellIsPosix(),
+}, async () => {
 	// The exported default tool must work on a runner without zsh. We only
 	// assert it does not crash with an empty-stderr ENOENT failure.
 	const result = await new ToolRegistry([bashTool]).execute(
