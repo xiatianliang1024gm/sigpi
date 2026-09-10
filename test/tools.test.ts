@@ -28,7 +28,25 @@ import { createWriteTool } from "../src/tools/builtin/write.js";
 import { createDefaultToolRegistry } from "../src/tools/index.js";
 import { ReadTracker } from "../src/tools/read-tracker.js";
 import { ToolRegistry } from "../src/tools/registry.js";
-import { createTempDir, waitFor, writeWorkspaceFile } from "./helpers.js";
+import {
+	createTempDir,
+	defaultShellIsPosix,
+	posixShellUsable,
+	pythonAvailable,
+	sleepAvailable,
+	waitFor,
+	writeWorkspaceFile,
+} from "./helpers.js";
+
+// Capability probes, evaluated once. CI (ubuntu-latest) has them all; a
+// minimal image or a plain Windows runner does not, so the bash-execution
+// tests below skip instead of failing on a missing binary. `posixShellUsable`
+// additionally requires native path semantics, so a Git-Bash/WSL `sh` on
+// Windows (MSYS paths) skips the path-asserting tests too.
+const SH_AVAILABLE = posixShellUsable();
+const SLEEP_AVAILABLE = sleepAvailable();
+const PYTHON_AVAILABLE = pythonAvailable();
+const DEFAULT_SHELL_IS_POSIX = defaultShellIsPosix();
 
 function decodePowerShellEncodedCommand(encodedCommand: string): string {
 	return Buffer.from(encodedCommand, "base64").toString("utf16le");
@@ -45,7 +63,9 @@ function extractWrappedPowerShellCommand(script: string): string {
 	return Buffer.from(encodedCommand, "base64").toString("utf8");
 }
 
-test("bash executes a command and returns stdout", async () => {
+test("bash executes a command and returns stdout", {
+	skip: !DEFAULT_SHELL_IS_POSIX,
+}, async () => {
 	const tools = new ToolRegistry([bashTool]);
 
 	const result = await tools.execute(
@@ -63,7 +83,9 @@ test("bash executes a command and returns stdout", async () => {
 	assert.equal((result.data as { stdout: string }).stdout, "hello");
 });
 
-test("bash captures command failure without throwing", async () => {
+test("bash captures command failure without throwing", {
+	skip: !DEFAULT_SHELL_IS_POSIX,
+}, async () => {
 	const tools = new ToolRegistry([bashTool]);
 
 	const result = await tools.execute(
@@ -85,7 +107,9 @@ test("bash captures command failure without throwing", async () => {
 	);
 });
 
-test("bash reports timeouts in command results", async () => {
+test("bash reports timeouts in command results", {
+	skip: !SH_AVAILABLE || !SLEEP_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const tools = new ToolRegistry([
 		createBashTool(shellRuntime, {}, new ReadTracker()),
@@ -113,7 +137,9 @@ test("bash reports timeouts in command results", async () => {
 	assert.match(rendered, /Signal: SIGTERM/);
 });
 
-test("bash renders the exit code for failed commands", async () => {
+test("bash renders the exit code for failed commands", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const tools = new ToolRegistry([
 		createBashTool(shellRuntime, {}, new ReadTracker()),
@@ -137,7 +163,9 @@ test("bash renders the exit code for failed commands", async () => {
 	assert.match(rendered, /Exit code: 3/);
 });
 
-test("bash truncates long output and marks truncation flags", async () => {
+test("bash truncates long output and marks truncation flags", {
+	skip: !SH_AVAILABLE || !PYTHON_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const tools = new ToolRegistry([
 		createBashTool(shellRuntime, {}, new ReadTracker()),
@@ -173,7 +201,9 @@ test("bash truncates long output and marks truncation flags", async () => {
 	assert.match(overflow, /x{200}/);
 });
 
-test("bash starts every command in the project directory (no cd carry-over)", async () => {
+test("bash starts every command in the project directory (no cd carry-over)", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const startDir = process.cwd();
 	const outputDir = await createTempDir("sigpi-bash-test-");
@@ -212,7 +242,9 @@ test("bash starts every command in the project directory (no cd carry-over)", as
 	}
 });
 
-test("bash ignores a cd outside the project on subsequent calls", async () => {
+test("bash ignores a cd outside the project on subsequent calls", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const startDir = process.cwd();
 	const outputDir = await createTempDir("sigpi-bash-test-");
@@ -249,7 +281,9 @@ test("bash ignores a cd outside the project on subsequent calls", async () => {
 	assert.equal((pwd.data as { stdout: string }).stdout.trim(), startDir);
 });
 
-test("bash runs a command in the background and tracks it", async () => {
+test("bash runs a command in the background and tracks it", {
+	skip: !SH_AVAILABLE || !SLEEP_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const startDir = process.cwd();
 	const outputDir = await createTempDir("sigpi-bash-test-");
@@ -318,7 +352,9 @@ test("bash rejects run_in_background when no task manager is available", async (
 	assert.match(result.error ?? "", /background task manager/);
 });
 
-test("bash does not hit E2BIG with a very large captured-rc preamble", async () => {
+test("bash does not hit E2BIG with a very large captured-rc preamble", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const startDir = process.cwd();
 	const workingDir = {
@@ -361,7 +397,9 @@ test("bash does not hit E2BIG with a very large captured-rc preamble", async () 
 	assert.equal(result.ok, true);
 });
 
-test("bash resets to the project working dir when maintainProjectWorkingDir is set", async () => {
+test("bash resets to the project working dir when maintainProjectWorkingDir is set", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const startDir = process.cwd();
 	const workingDir = {
@@ -406,7 +444,10 @@ test("bash resets to the project working dir when maintainProjectWorkingDir is s
 });
 
 test("detectShellRuntime defaults to powershell on Windows", () => {
-	const shellRuntime = detectShellRuntime({}, "win32");
+	// Pass an explicit empty env: the default-resolution assertion must not
+	// depend on the ambient environment (e.g. `MSYSTEM`/`SHELL` set when the
+	// suite runs from inside a Git Bash shell).
+	const shellRuntime = detectShellRuntime({}, "win32", {});
 
 	assert.equal(shellRuntime.shell, "powershell");
 	assert.equal(shellRuntime.executable, "powershell.exe");
@@ -1336,7 +1377,9 @@ test("grep surfaces ripgrep's stderr on a real rg failure (exit 2)", async () =>
 	assert.match(result.error ?? "", /unclosed character class/);
 });
 
-test("bash closes stdin so commands reading it see EOF instead of hanging", async () => {
+test("bash closes stdin so commands reading it see EOF instead of hanging", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const tools = new ToolRegistry([
 		createBashTool(shellRuntime, {}, new ReadTracker()),
@@ -2101,7 +2144,9 @@ test("write over an existing BOM+CRLF file preserves the BOM and CRLF", async ()
 	assert.equal(after.toString("utf8"), "\uFEFFusing System;\r\nclass A {}\r\n");
 });
 
-test("bash cat records a read so a later edit is allowed", async () => {
+test("bash cat records a read so a later edit is allowed", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const cwd = await createTempDir("sigpi-shell-read-");
 	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nbeta\n");
@@ -2140,7 +2185,9 @@ test("bash cat records a read so a later edit is allowed", async () => {
 	);
 });
 
-test("bash piped command does not record a read", async () => {
+test("bash piped command does not record a read", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const cwd = await createTempDir("sigpi-shell-pipe-");
 	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nbeta\n");
@@ -2176,7 +2223,9 @@ test("bash piped command does not record a read", async () => {
 	assert.match(edit.error ?? "", /not been read/i);
 });
 
-test("bash sed -n 'X,Yp' records a read", async () => {
+test("bash sed -n 'X,Yp' records a read", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const cwd = await createTempDir("sigpi-shell-sed-");
 	await writeWorkspaceFile(cwd, "demo.txt", "a\nb\nc\nd\ne\n");
@@ -2207,7 +2256,9 @@ test("bash sed -n 'X,Yp' records a read", async () => {
 	assert.equal(edit.ok, true);
 });
 
-test("bash grep records a read of the single file", async () => {
+test("bash grep records a read of the single file", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const cwd = await createTempDir("sigpi-shell-grep-");
 	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nbeta\n");
@@ -2410,7 +2461,9 @@ test("glob and grep succeed on a skill discovery root (read capability unchanged
 	assert.equal(grepResult.ok, true);
 });
 
-test("bash writes to a path outside the workspace directory", async () => {
+test("bash writes to a path outside the workspace directory", {
+	skip: !SH_AVAILABLE,
+}, async () => {
 	const shellRuntime = createShellRuntime("sh", "linux");
 	const scratch = await createTempDir("sigpi-bash-trusted-scratch-");
 	const tools = new ToolRegistry([

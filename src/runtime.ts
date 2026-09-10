@@ -204,12 +204,12 @@ export async function createAgentRuntime(
 	args: CreateAgentRuntimeArgs = {},
 ): Promise<AgentRuntime> {
 	const cwd = args.cwd ?? process.cwd();
-	const config = args.config ?? loadAppConfig();
+	const homeDir = args.homeDir ?? process.env.HOME ?? os.homedir();
+	const config = args.config ?? loadAppConfig({ homeDir });
 	const runId = randomUUID();
 	const baseLogger = createRuntimeLogger(config);
 	const runLogger = createChildLogger(baseLogger, { runId });
 	const shellRuntime = detectShellRuntime(config.shell);
-	const homeDir = args.homeDir ?? process.env.HOME ?? os.homedir();
 	const skillCatalog = await loadRuntimeSkillCatalog({
 		cwd,
 		homeDir,

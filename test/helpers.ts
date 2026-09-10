@@ -1,4 +1,4 @@
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { getDefaultSessionsRoot } from "../src/config.js";
 import { resolveSessionStoragePaths } from "../src/session/paths.js";
 import { DiskSessionStore } from "../src/session/store.js";
+import { detectShellRuntime } from "../src/shell.js";
 import type {
 	ExecutedToolCall,
 	ModelProvider,
@@ -103,6 +104,73 @@ const ANSI_RE = /\x1B\[[0-9;]*m|\x1B\][^\x07]*\x07|\x1B[()][AB0-2]/g;
 
 export function stripAnsi(value: string): string {
 	return value.replaceAll(ANSI_RE, "");
+}
+
+/**
+ * Environment capability probes.
+ *
+ * Some tests drive real external tools (a POSIX shell, `sleep`, `python3`).
+ * CI runs on `ubuntu-latest`, where those are present, but a minimal image or
+ * a plain Windows runner lacks them. Probing lets the dependent tests `skip`
+ * with a clear signal instead of failing on an `ENOENT` that says nothing
+ * about the code under test.
+ */
+export function executableAvailable(
+	command: string,
+	args: string[] = ["--version"],
+): boolean {
+	try {
+		execFileSync(command, args, { timeout: 2_000, stdio: "ignore" });
+		return true;
+	} catch (error) {
+		// Only `ENOENT` means "missing": a binary that exists but rejects the
+		// probe arguments still ran, so it counts as present.
+		return (error as NodeJS.ErrnoException)?.code !== "ENOENT";
+	}
+}
+
+/** A POSIX `sh` is present — the shell the bash-tool tests drive. */
+export function posixShellAvailable(): boolean {
+	return executableAvailable("sh", ["-c", "true"]);
+}
+
+/**
+ * Whether the bash-tool tests can drive a POSIX shell with platform-native
+ * paths. `sh` must be present, and it must speak the host's own path syntax:
+ * on Windows a Git-Bash/WSL `sh` reports MSYS paths (`/c/Users/...`), so tests
+ * that compare `pwd` against `process.cwd()` (or write absolute paths) cannot
+ * pass there and are skipped.
+ */
+export function posixShellUsable(): boolean {
+	return process.platform !== "win32" && posixShellAvailable();
+}
+
+/** `sleep` (POSIX coreutils) is present — background-task fixtures spawn it. */
+export function sleepAvailable(): boolean {
+	return executableAvailable("sleep", ["0"]);
+}
+
+/** `python3` is present — the long-output truncation fixture uses it. */
+export function pythonAvailable(): boolean {
+	return executableAvailable("python3", ["-c", "pass"]);
+}
+
+/**
+ * The `bashTool` default shell resolves to a present POSIX shell. On a plain
+ * Windows host `detectShellRuntime()` picks `powershell.exe`, so tests that
+ * assert POSIX semantics (`printf`/`pwd`/`cat`) must skip there instead of
+ * asserting PowerShell behavior.
+ */
+export function defaultShellIsPosix(): boolean {
+	const runtime = detectShellRuntime();
+	if (
+		runtime.shell !== "sh" &&
+		runtime.shell !== "bash" &&
+		runtime.shell !== "zsh"
+	) {
+		return false;
+	}
+	return executableAvailable(runtime.executable, ["-c", "true"]);
 }
 
 export async function createTempDir(prefix: string): Promise<string> {
