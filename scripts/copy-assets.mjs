@@ -10,7 +10,13 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 
-const assets = ["src/default-config.toml"];
+const assets = [
+	"src/default-config.toml",
+	"src/server/web/index.html",
+	"src/server/web/app.js",
+	"src/server/web/reducer.js",
+	"src/server/web/styles.css",
+];
 
 for (const relPath of assets) {
 	const src = join(root, relPath);

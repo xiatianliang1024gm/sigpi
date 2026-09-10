@@ -24,6 +24,7 @@ Key sections: `[model]` (default model + manual selection), `[models.<id>]` (per
 - Headless session controller (turn lifecycle + interrupt + progress stream): `src/session/controller.ts`
 - UI-neutral turn-progress reducer + run stats: `src/session/events.ts`
 - Web/SSE transport for the controller: `src/server/http.ts`, `src/server/sse.ts`
+- Web browser client (zero-build, same-origin) + its static host: `src/server/web/`, `src/server/static.ts`
 - Session storage: `src/session/paths.ts`, `src/session/store.ts`
 - Multi-frontend (TUI + Web) handover, incl. git-is-TUI-only and web multi-directory/multi-session design: `docs/handover-multi-frontend.md`
 - Logging: `src/logger.ts`

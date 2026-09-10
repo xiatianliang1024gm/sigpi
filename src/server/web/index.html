@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>sigpi</title>
+		<link rel="stylesheet" href="/styles.css" />
+	</head>
+	<body>
+		<header class="topbar">
+			<span class="brand">sigpi</span>
+			<span id="status" class="status">connecting…</span>
+		</header>
+		<main class="layout">
+			<aside class="sidebar">
+				<section class="panel">
+					<h2>Projects</h2>
+					<div id="projects" class="list"></div>
+					<button id="add-project" type="button">Choose folder…</button>
+				</section>
+				<section class="panel">
+					<h2>Sessions</h2>
+					<div id="sessions" class="list"></div>
+					<button id="new-session" type="button" disabled>New session</button>
+				</section>
+			</aside>
+			<section class="chat">
+				<div id="transcript" class="transcript"></div>
+				<div id="error" class="error" hidden></div>
+				<form id="composer" class="composer">
+					<textarea
+						id="input"
+						rows="3"
+						placeholder="Send a message to the agent…"
+						disabled
+					></textarea>
+					<div class="composer-actions">
+						<button id="interrupt" type="button" disabled>Interrupt</button>
+						<button id="send" type="submit" disabled>Send</button>
+					</div>
+				</form>
+			</section>
+		</main>
+		<script type="module" src="/app.js"></script>
+	</body>
+</html>

@@ -18,5 +18,7 @@ bench/data
 .npmrc
 .agents/
 *.js
+# ...but the zero-build web client is hand-written source, not build output.
+!src/server/web/*.js
 promo/
 *Zone.Identifier

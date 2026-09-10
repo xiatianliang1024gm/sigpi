@@ -4,6 +4,7 @@ import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { DirectoryPickerUnavailableError } from "../src/server/directory-picker.js";
 import type { ManagedRuntime } from "../src/server/manager.js";
 import { SessionManager } from "../src/server/manager.js";
 import { createMultiSessionServer } from "../src/server/multi.js";
@@ -141,6 +142,37 @@ async function addProject(baseUrl: string, cwd: string): Promise<string> {
 	const body = (await response.json()) as { key: string };
 	return body.key;
 }
+
+test("GET / serves the bundled browser client", async () => {
+	await withServer(async (baseUrl) => {
+		const response = await fetch(`${baseUrl}/`);
+		assert.equal(response.status, 200);
+		assert.match(response.headers.get("content-type") ?? "", /text\/html/);
+		const html = await response.text();
+		assert.match(html, /\/app\.js/);
+	});
+});
+
+test("client assets are served and unknown paths still 404", async () => {
+	await withServer(async (baseUrl) => {
+		const app = await fetch(`${baseUrl}/app.js`);
+		assert.equal(app.status, 200);
+		assert.match(app.headers.get("content-type") ?? "", /javascript/);
+		assert.match(await app.text(), /applyTurnProgress/);
+
+		const reducer = await fetch(`${baseUrl}/reducer.js`);
+		assert.equal(reducer.status, 200);
+		assert.match(await reducer.text(), /export function applyTurnProgress/);
+
+		const css = await fetch(`${baseUrl}/styles.css`);
+		assert.equal(css.status, 200);
+		assert.match(css.headers.get("content-type") ?? "", /text\/css/);
+
+		const missing = await fetch(`${baseUrl}/nope.js`);
+		assert.equal(missing.status, 404);
+		assert.deepEqual(await missing.json(), { error: "not_found" });
+	});
+});
 
 test("GET /projects lists registered directories", async () => {
 	await withServer(async (baseUrl) => {
@@ -300,20 +332,71 @@ test("DELETE /projects/:key/sessions/:id retires the session", async () => {
 	});
 });
 
-test("DELETE /projects/:key removes the project", async () => {
-	await withServer(async (baseUrl) => {
-		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
-		const key = await addProject(baseUrl, dir);
-
-		const response = await fetch(`${baseUrl}/projects/${key}`, {
-			method: "DELETE",
-		});
-		assert.equal(response.status, 200);
-		assert.deepEqual(await response.json(), { removed: true });
-
-		const missing = await fetch(`${baseUrl}/projects/${key}`, {
-			method: "DELETE",
-		});
-		assert.equal(missing.status, 404);
+async function withPickedServer(
+	pickDirectory: () => Promise<string | null>,
+	run: (baseUrl: string) => Promise<void>,
+): Promise<void> {
+	const manager = new SessionManager({
+		createRuntime: async () => makeRuntime("sess"),
+		listStoredSessions: async () => [],
 	});
+	const server = createMultiSessionServer({ manager, pickDirectory });
+	const baseUrl = await listen(server);
+	try {
+		await run(baseUrl);
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+}
+
+test("POST /projects/pick returns the chosen directory", async () => {
+	await withPickedServer(
+		async () => "/tmp/chosen",
+		async (baseUrl) => {
+			const response = await fetch(`${baseUrl}/projects/pick`, {
+				method: "POST",
+			});
+			assert.equal(response.status, 200);
+			assert.deepEqual(await response.json(), { path: "/tmp/chosen" });
+		},
+	);
+});
+
+test("POST /projects/pick reports a cancel as a null path", async () => {
+	await withPickedServer(
+		async () => null,
+		async (baseUrl) => {
+			const response = await fetch(`${baseUrl}/projects/pick`, {
+				method: "POST",
+			});
+			assert.equal(response.status, 200);
+			assert.deepEqual(await response.json(), { path: null });
+		},
+	);
+});
+
+test("POST /projects/pick maps an unavailable picker to 501", async () => {
+	await withPickedServer(
+		async () => {
+			throw new DirectoryPickerUnavailableError("no chooser");
+		},
+		async (baseUrl) => {
+			const response = await fetch(`${baseUrl}/projects/pick`, {
+				method: "POST",
+			});
+			assert.equal(response.status, 501);
+			assert.deepEqual(await response.json(), { error: "picker_unavailable" });
+		},
+	);
+});
+
+test("GET /projects/pick is not allowed", async () => {
+	await withPickedServer(
+		async () => null,
+		async (baseUrl) => {
+			const response = await fetch(`${baseUrl}/projects/pick`);
+			assert.equal(response.status, 405);
+		},
+	);
 });

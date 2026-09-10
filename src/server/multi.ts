@@ -5,6 +5,11 @@ import {
 	type ServerResponse,
 } from "node:http";
 import {
+	type DirectoryPicker,
+	DirectoryPickerUnavailableError,
+	pickDirectory as defaultPickDirectory,
+} from "./directory-picker.js";
+import {
 	handleSessionEvents,
 	handleSessionMessage,
 	readBody,
@@ -16,12 +21,19 @@ import {
 	SessionManagerError,
 	type SessionManagerErrorCode,
 } from "./manager.js";
+import { serveStaticAsset } from "./static.js";
 
 export interface MultiSessionServerOptions {
 	/** The registry that owns projects and their live sessions. */
 	manager: SessionManager;
 	/** Max request body size in bytes. Defaults to 1 MiB. */
 	maxBodyBytes?: number;
+	/**
+	 * Opens the host's native folder chooser for `POST /projects/pick`.
+	 * Injectable so tests never block on a real dialog; defaults to the
+	 * platform chooser in `./directory-picker.ts`.
+	 */
+	pickDirectory?: DirectoryPicker;
 }
 
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -38,6 +50,7 @@ const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
  * ```
  * GET    /projects                                  list registered projects
  * POST   /projects                { path }          add a project directory
+ * POST   /projects/pick                             open a native folder chooser
  * DELETE /projects/:key                             remove a project + its sessions
  * GET    /projects/:key/sessions                    list stored + live sessions
  * POST   /projects/:key/sessions  { sessionId? }    create (or resume) a live session
@@ -52,8 +65,9 @@ export function createMultiSessionServer(
 ): Server {
 	const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 	const { manager } = options;
+	const pickDirectory = options.pickDirectory ?? defaultPickDirectory;
 	const server = createServer((req, res) => {
-		route(req, res, manager, maxBodyBytes).catch((error) => {
+		route(req, res, manager, maxBodyBytes, pickDirectory).catch((error) => {
 			const message = error instanceof Error ? error.message : String(error);
 			if (!res.headersSent) {
 				writeJson(res, 500, { error: message });
@@ -70,8 +84,16 @@ async function route(
 	res: ServerResponse,
 	manager: SessionManager,
 	maxBodyBytes: number,
+	pickDirectory: DirectoryPicker,
 ): Promise<void> {
 	const url = new URL(req.url ?? "/", "http://localhost");
+
+	// The bundled browser client is same-origin with this API, so a GET for a
+	// known asset path is served directly (see `static.ts`).
+	if (req.method === "GET" && (await serveStaticAsset(url.pathname, res))) {
+		return;
+	}
+
 	const segments = url.pathname
 		.split("/")
 		.filter((segment) => segment.length > 0)
@@ -108,6 +130,10 @@ async function route(
 
 	// /projects/:key
 	if (segments.length === 2) {
+		if (method === "POST" && projectKey === "pick") {
+			await handlePickDirectory(res, pickDirectory);
+			return;
+		}
 		if (method === "DELETE") {
 			const removed = await manager.removeProject(projectKey);
 			if (!removed) {
@@ -221,6 +247,31 @@ async function handleAddProject(
 			code === "invalid_project_path" ? 400 : 500,
 		);
 	}
+}
+
+/**
+ * Open the host's native directory chooser and return the chosen absolute path
+ * so the browser can add a project without the user typing one. Responds `501`
+ * when the host has no chooser, and `{ path: null }` when the user cancels.
+ */
+async function handlePickDirectory(
+	res: ServerResponse,
+	pickDirectory: DirectoryPicker,
+): Promise<void> {
+	let picked: string | null;
+	try {
+		picked = await pickDirectory();
+	} catch (error) {
+		if (error instanceof DirectoryPickerUnavailableError) {
+			writeJson(res, 501, { error: "picker_unavailable" });
+			return;
+		}
+		writeJson(res, 500, {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return;
+	}
+	writeJson(res, 200, { path: picked });
 }
 
 async function handleListSessions(

@@ -164,7 +164,8 @@ SessionManager
    保留；新增按 `projectKey`/`sessionId` 路由的多会话服务）
 3. **多目录 API**：`/projects` 增删查 + 目录校验；会话列表复用 session store index。✅
 4. **生命周期**：空闲 TTL、连接关闭清理、`dispose()` 串接。✅
-5. **前端（可选）**：最小页面，`EventSource` 订阅 + `applyTurnProgress` 移植。⏳ 未做
+5. **前端**：最小页面，`EventSource` 订阅 + `applyTurnProgress` 移植。✅
+   （`src/server/web/`，由多会话服务同源托管，详见 §5.2）
 6. **安全**：鉴权、绑定回环、cwd 白名单。部分：默认绑定 `127.0.0.1` 且有警告；
    鉴权 / 白名单仍未实现。
 
@@ -180,15 +181,42 @@ SessionManager
   驱动 `sweepIdle`（跳过 `isTurnActive()` 的会话）。会话语义 key 为 `${cwd}\u0000${sessionId}`，
   但 HTTP 层不把 `cwd` 放进 URL（见下）。
 - **HTTP 路由（`src/server/multi.ts`）**：按 `projectKey` 定位目录，避免 `cwd`/NUL 进入 URL：
-  `GET/POST /projects`、`DELETE /projects/:key`、`GET/POST /projects/:key/sessions`、
+  `GET/POST /projects`、`POST /projects/pick`（在**服务端主机**弹出原生文件夹选择框，
+  返回 `{ path }`；取消为 `{ path: null }`；主机无可用选择器时 `501 picker_unavailable`）、
+  `DELETE /projects/:key`、`GET/POST /projects/:key/sessions`、
   `GET /projects/:key/sessions/:id/events`、`POST .../message`、`POST .../interrupt`、
   `DELETE /projects/:key/sessions/:id`。SSE/消息处理直接复用 `http.ts` 导出的
-  `handleSessionEvents` / `handleSessionMessage`，帧格式不变。
+  `handleSessionEvents` / `handleSessionMessage`，帧格式不变。原生选择器实现见
+  `src/server/directory-picker.ts`（win32 现代 `IFileDialog`+`FOS_PICKFOLDERS` / macOS
+  `choose folder` / Linux `zenity`→`kdialog`），通过 `pickDirectory` 选项注入以便测试。
 - **CLI**：新增 `sigpi serve [--host] [--port] [--idle-ttl <ms>] [--max-sessions <n>]`
   （`src/server/serve.ts`），默认绑定 `127.0.0.1:7878`，Ctrl+C/SIGTERM 时
   `disposeAll()` + 关服务；非回环地址打印警告。
 - **测试**：`test/session-manager.test.ts`、`test/chat-server-multi.test.ts`、
   `test/serve-args.test.ts`，以及既有的 `test/chat-server.test.ts`。
+
+## 5.2 Web 浏览器客户端
+
+`src/server/web/` 是零构建的原生 ES module 页面，由多会话服务**同源**托管（无 CORS）：
+
+- `index.html` / `styles.css` / `app.js`：极简 UI —— 项目列表 + `Choose folder…` 按钮 +
+  新建/恢复会话 + 聊天流 + 输入框 + 中断按钮。添加项目时不再手输路径：点击按钮让服务端
+  弹出原生文件夹选择框（`POST /projects/pick`），选中后 `POST /projects` 登记。SSE 用
+  `EventSource` 订阅 `.../sessions/:id/events`。
+- `reducer.js`：`applyTurnProgress` 的**逐行移植**（`src/session/events.ts`），并导出
+  `isTurnTerminalEvent` / `formatCompactionMessage`。因为 SSE 的 `message` 帧就是
+  `TurnProgressEvent`，浏览器归约器与 TUI 同源、行为一致。
+- `src/server/static.ts`：只服务**固定白名单**路径（`/`、`/index.html`、`/app.js`、
+  `/reducer.js`、`/styles.css`），无目录穿越面。由 `multi.ts` 的 `route()` 在进入
+  `projects` 路由前处理。
+- 资源通过 `scripts/copy-assets.mjs` 复制到 `dist/src/server/web/`，`import.meta.url`
+  在构建产物与测试中都解析得到。
+- 测试：`test/web-reducer.test.ts`（归约器语义）、`test/chat-server-multi.test.ts`
+  （静态资源托管 + 404）、`test/web-app.test.ts`（jsdom 文档 + 伪造 `fetch`/
+  `EventSource` 驱动 `app.js`：项目/会话接线、流式 transcript、发送/中断）。
+- 局限：页面与 API 同源，`sigpi serve` 默认仅绑 `127.0.0.1`。鉴权/白名单仍未实现
+  （见 §6）。浏览器 DOM 接线已由 `test/web-app.test.ts`（jsdom）覆盖，但**不是**真实
+  浏览器渲染——CSS/布局与真实 `EventSource` 重连语义仍未验证。
 
 ## 6. 风险与未决问题
 
@@ -211,7 +239,9 @@ SessionManager
 - Web 传输（单会话）：`src/server/http.ts`、`src/server/sse.ts`
 - 会话注册表（多目录/多会话）：`src/server/manager.ts`
 - Web 传输（多会话路由）：`src/server/multi.ts`
+- 原生文件夹选择框（跨平台，可注入）：`src/server/directory-picker.ts`
 - Web 服务启动命令：`src/server/serve.ts`
+- Web 浏览器客户端（零构建，同源托管）：`src/server/web/`、`src/server/static.ts`
 - runtime 组装（cwd/store 注入点）：`src/runtime.ts`
 - 会话归档（projectKey）：`src/session/paths.ts`、`src/session/store.ts`
 - git（**TUI-only**，模块单例）：`src/git.ts`
