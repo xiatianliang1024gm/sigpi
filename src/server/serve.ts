@@ -1,5 +1,6 @@
 import { SessionManager } from "./manager.js";
 import { createMultiSessionServer } from "./multi.js";
+import { loadProjectRegistry, saveProjectRegistry } from "./project-store.js";
 
 export interface ServeOptions {
 	/** Bind host. Defaults to loopback so the agent is not exposed by accident. */
@@ -72,14 +73,19 @@ function parseInteger(
 /**
  * Start the multi-session HTTP/SSE frontend and block until Ctrl+C / SIGTERM,
  * then retire every session and close the server. Session state lives in the
- * `~/.sigpi/projects/<projectKey>` archive, so a restart resumes cleanly.
+ * `~/.sigpi/projects/<projectKey>` archive and the set of added directories in
+ * `~/.sigpi/projects.json`, so a restart resumes cleanly with the same folders.
  */
 export async function runServeCommand(args: string[]): Promise<void> {
 	const options = parseServeArgs(args);
 	const manager = new SessionManager({
 		idleTtlMs: options.idleTtlMs,
 		maxSessions: options.maxSessions,
+		loadProjectRegistry,
+		saveProjectRegistry: (projects) => saveProjectRegistry(projects),
 	});
+	// Bring back the directories added in earlier runs before serving requests.
+	await manager.restoreProjects();
 	const server = createMultiSessionServer({ manager });
 
 	await new Promise<void>((resolve, reject) => {

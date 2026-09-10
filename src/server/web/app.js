@@ -3,9 +3,9 @@
  * same wire protocol as the TUI: `GET /events` is an SSE stream of
  * `TurnProgressEvent` frames, and the transcript is folded by the shared
  * reducer (`./reducer.js`, a verbatim port of `applyTurnProgress`). Everything
- * else — listing/adding projects, listing/creating/resuming sessions, submitting
- * a turn, interrupting — is a thin `fetch` wrapper over the HTTP routes in
- * `src/server/multi.ts`.
+ * else — a collapsible project → session tree (list/add projects, list/create/
+ * resume/delete sessions, delete projects), submitting a turn, interrupting —
+ * is a thin `fetch` wrapper over the HTTP routes in `src/server/multi.ts`.
  *
  * No build step: this loads directly as an ES module. All asset requests are
  * same-origin (the server hosts this page), so there is no CORS surface.
@@ -16,8 +16,6 @@ const els = {
 	status: document.getElementById("status"),
 	projects: document.getElementById("projects"),
 	addProject: document.getElementById("add-project"),
-	sessions: document.getElementById("sessions"),
-	newSession: document.getElementById("new-session"),
 	transcript: document.getElementById("transcript"),
 	loadEarlier: document.getElementById("load-earlier"),
 	composer: document.getElementById("composer"),
@@ -29,9 +27,15 @@ const els = {
 
 const state = {
 	projects: [],
+	/** projectKey → { stored: SessionSummary[], live: LiveSession[] }. */
+	sessionsByProject: new Map(),
+	/** Project keys whose session list is collapsed in the tree. */
+	collapsed: new Set(),
+	/** Active project directory key (the session below belongs to it). */
 	projectKey: null,
-	sessions: { stored: [], live: [] },
 	sessionId: null,
+	/** Key of the delete button awaiting its second (confirming) click. */
+	confirmKey: null,
 	source: null,
 	turnActive: false,
 	currentAssistant: null,
@@ -307,32 +311,15 @@ const sessionBase = () =>
 async function loadProjects() {
 	const body = await requestJson("/projects");
 	state.projects = body?.projects ?? [];
-	if (!state.projectKey && state.projects.length > 0) {
-		state.projectKey = state.projects[0].key;
-	}
+	// Drop the active session if its project vanished (e.g. deleted elsewhere).
 	if (
 		state.projectKey &&
 		!state.projects.some((p) => p.key === state.projectKey)
 	) {
-		state.projectKey = null;
+		resetActive();
 	}
 	renderProjects();
 	await loadSessions();
-}
-
-function renderProjects() {
-	els.projects.textContent = "";
-	for (const project of state.projects) {
-		const el = document.createElement("button");
-		el.type = "button";
-		el.className =
-			project.key === state.projectKey ? "list-item active" : "list-item";
-		el.textContent = project.cwd;
-		el.title = project.cwd;
-		el.addEventListener("click", () => void selectProject(project.key));
-		els.projects.append(el);
-	}
-	els.newSession.disabled = !state.projectKey;
 }
 
 async function addProject(path) {
@@ -360,87 +347,281 @@ async function pickAndAddProject() {
 	}
 }
 
+function toggleProject(key) {
+	if (state.collapsed.has(key)) {
+		state.collapsed.delete(key);
+	} else {
+		state.collapsed.add(key);
+	}
+	renderProjects();
+}
+
 async function selectProject(key) {
 	state.projectKey = key;
 	state.sessionId = null;
+	state.collapsed.delete(key);
 	disconnect();
 	clearTranscript();
 	renderProjects();
 	await loadSessions();
 }
 
+/** Delete a project and all of its sessions (and their stored messages). */
+async function deleteProject(key) {
+	await requestJson(`/projects/${encodeURIComponent(key)}`, {
+		method: "DELETE",
+	});
+	state.collapsed.delete(key);
+	state.sessionsByProject.delete(key);
+	if (state.projectKey === key) {
+		resetActive();
+	}
+	await loadProjects();
+}
+
+/** Clear the active project/session and stop streaming its events. */
+function resetActive() {
+	state.projectKey = null;
+	state.sessionId = null;
+	disconnect();
+	clearTranscript();
+}
+
 // --- sessions --------------------------------------------------------------
 
+/** Refresh the session list for every project (the tree shows them all). */
 async function loadSessions() {
-	if (!state.projectKey) {
-		state.sessions = { stored: [], live: [] };
-		renderSessions();
-		return;
-	}
-	const body = await requestJson(
-		`/projects/${encodeURIComponent(state.projectKey)}/sessions`,
+	const results = await Promise.all(
+		state.projects.map(async (project) => {
+			try {
+				const body = await requestJson(
+					`/projects/${encodeURIComponent(project.key)}/sessions`,
+				);
+				return [
+					project.key,
+					{ stored: body?.stored ?? [], live: body?.live ?? [] },
+				];
+			} catch {
+				return [project.key, { stored: [], live: [] }];
+			}
+		}),
 	);
-	state.sessions = { stored: body?.stored ?? [], live: body?.live ?? [] };
-	renderSessions();
+	state.sessionsByProject = new Map(results);
+	renderProjects();
 }
 
-function renderSessions() {
-	els.sessions.textContent = "";
-	const liveIds = new Set(state.sessions.live.map((s) => s.sessionId));
-
-	for (const session of state.sessions.live) {
-		const el = document.createElement("button");
-		el.type = "button";
-		el.className =
-			session.sessionId === state.sessionId ? "list-item active" : "list-item";
-		el.textContent = `${session.turnActive ? "● " : ""}${shortId(session.sessionId)} · live`;
-		el.title = session.sessionId;
-		el.addEventListener("click", () =>
-			void selectSession(session.sessionId, { resume: false }),
-		);
-		els.sessions.append(el);
-	}
-
-	for (const session of state.sessions.stored) {
-		if (liveIds.has(session.sessionId)) continue;
-		const el = document.createElement("button");
-		el.type = "button";
-		el.className = "list-item";
-		const label =
-			session.title || session.lastCompletedUserInput || "(empty session)";
-		el.textContent = `${label} · ${session.turnCount} turns`;
-		el.title = session.sessionId;
-		el.addEventListener("click", () =>
-			void selectSession(session.sessionId, { resume: true }),
-		);
-		els.sessions.append(el);
-	}
-}
-
-async function createSession() {
-	if (!state.projectKey) return;
+async function createSession(projectKey) {
 	const created = await postJson(
-		`/projects/${encodeURIComponent(state.projectKey)}/sessions`,
+		`/projects/${encodeURIComponent(projectKey)}/sessions`,
 		{},
 	);
 	await loadSessions();
-	await selectSession(created.sessionId, { resume: false });
+	await selectSession(projectKey, created.sessionId, { resume: false });
 }
 
-async function selectSession(sessionId, { resume }) {
+async function selectSession(projectKey, sessionId, { resume }) {
+	state.projectKey = projectKey;
+	state.collapsed.delete(projectKey);
 	if (resume) {
-		await postJson(`/projects/${encodeURIComponent(state.projectKey)}/sessions`, {
+		await postJson(`/projects/${encodeURIComponent(projectKey)}/sessions`, {
 			sessionId,
 		});
 		await loadSessions();
 	}
 	state.sessionId = sessionId;
 	clearTranscript();
-	renderSessions();
+	renderProjects();
 	connect();
 	els.input.disabled = false;
 	els.input.focus();
 	void loadHistory();
+}
+
+/** Delete one session and its stored messages; stop it first if it is live. */
+async function deleteSession(projectKey, sessionId) {
+	await requestJson(
+		`/projects/${encodeURIComponent(projectKey)}/sessions/${encodeURIComponent(sessionId)}`,
+		{ method: "DELETE" },
+	);
+	if (state.projectKey === projectKey && state.sessionId === sessionId) {
+		state.sessionId = null;
+		disconnect();
+		clearTranscript();
+	}
+	await loadSessions();
+}
+
+// --- tree rendering --------------------------------------------------------
+
+/** Re-draw the whole project → session tree from current state. */
+function renderProjects() {
+	els.projects.textContent = "";
+	if (state.projects.length === 0) {
+		const empty = document.createElement("div");
+		empty.className = "empty";
+		empty.textContent = "No folders yet — add one with ＋.";
+		els.projects.append(empty);
+		return;
+	}
+	for (const project of state.projects) {
+		els.projects.append(buildProjectNode(project));
+	}
+}
+
+/** One project group: a collapsible header row plus its nested session rows. */
+function buildProjectNode(project) {
+	const collapsed = state.collapsed.has(project.key);
+	const group = document.createElement("div");
+	group.className = "project";
+	if (project.key === state.projectKey) group.classList.add("active");
+
+	const header = document.createElement("div");
+	header.className = "project-header";
+
+	const toggle = document.createElement("button");
+	toggle.type = "button";
+	toggle.className = "project-toggle";
+	toggle.textContent = collapsed ? "▸" : "▾";
+	toggle.setAttribute("aria-expanded", String(!collapsed));
+	toggle.title = collapsed ? "Expand sessions" : "Collapse sessions";
+	toggle.addEventListener("click", () => toggleProject(project.key));
+
+	const name = document.createElement("button");
+	name.type = "button";
+	name.className = "project-name";
+	name.textContent = baseName(project.cwd);
+	// Keep the full path discoverable on hover, even though only the leaf shows.
+	name.title = project.cwd;
+	name.addEventListener("click", () => void selectProject(project.key));
+
+	const newSession = document.createElement("button");
+	newSession.type = "button";
+	newSession.className = "icon-button project-new";
+	newSession.textContent = "＋";
+	newSession.title = "New session in this folder";
+	newSession.addEventListener("click", (event) => {
+		event.stopPropagation();
+		createSession(project.key).catch((error) => showError(error.message));
+	});
+
+	const del = document.createElement("button");
+	del.type = "button";
+	del.className = "icon-button danger project-delete";
+	const armed = state.confirmKey === `project:${project.key}`;
+	del.textContent = armed ? "✓?" : "🗑";
+	if (armed) del.classList.add("armed");
+	del.title = armed
+		? "Click again to delete this folder and all its sessions"
+		: "Delete folder";
+	del.addEventListener("click", (event) => {
+		event.stopPropagation();
+		armConfirm(`project:${project.key}`, () => deleteProject(project.key));
+	});
+
+	header.append(toggle, name, newSession, del);
+	group.append(header);
+
+	if (!collapsed) {
+		const list = document.createElement("div");
+		list.className = "sessions";
+		const bucket = state.sessionsByProject.get(project.key) ?? {
+			stored: [],
+			live: [],
+		};
+		for (const session of bucket.live) {
+			const label = sessionLabel(session);
+			list.append(
+				buildSessionRow({
+					projectKey: project.key,
+					sessionId: session.sessionId,
+					label: `${session.turnActive ? "● " : ""}${label}`,
+					resume: false,
+				}),
+			);
+		}
+		const liveIds = new Set(bucket.live.map((session) => session.sessionId));
+		for (const session of bucket.stored) {
+			if (liveIds.has(session.sessionId)) continue;
+			list.append(
+				buildSessionRow({
+					projectKey: project.key,
+					sessionId: session.sessionId,
+					label: `${sessionLabel(session)} · ${session.turnCount} turns`,
+					resume: true,
+				}),
+			);
+		}
+		if (list.childElementCount === 0) {
+			const empty = document.createElement("div");
+			empty.className = "empty";
+			empty.textContent = "No sessions";
+			list.append(empty);
+		}
+		group.append(list);
+	}
+	return group;
+}
+
+/** A selectable session row: the session button plus its delete control. */
+function buildSessionRow({ projectKey, sessionId, label, resume }) {
+	const active =
+		projectKey === state.projectKey && sessionId === state.sessionId;
+	const row = document.createElement("div");
+	row.className = active ? "session-row active" : "session-row";
+
+	const item = document.createElement("button");
+	item.type = "button";
+	item.className = "list-item session";
+	item.textContent = label;
+	item.title = sessionId;
+	item.addEventListener("click", () =>
+		void selectSession(projectKey, sessionId, { resume }),
+	);
+
+	const del = document.createElement("button");
+	del.type = "button";
+	del.className = "icon-button danger session-delete";
+	const confirmKey = `session:${projectKey}:${sessionId}`;
+	const armed = state.confirmKey === confirmKey;
+	del.textContent = armed ? "✓?" : "🗑";
+	if (armed) del.classList.add("armed");
+	del.title = armed
+		? "Click again to delete this session and its history"
+		: "Delete session";
+	del.addEventListener("click", (event) => {
+		event.stopPropagation();
+		armConfirm(confirmKey, () => deleteSession(projectKey, sessionId));
+	});
+
+	row.append(item, del);
+	return row;
+}
+
+/** How long a first delete click stays "armed" waiting for confirmation. */
+const CONFIRM_WINDOW_MS = 5000;
+let confirmTimer = null;
+
+/**
+ * Two-step delete confirmation. The first call arms `key` (re-rendering so the
+ * button shows a confirm affordance); a second call for the same key within
+ * {@link CONFIRM_WINDOW_MS} runs `action`. Any other key simply re-arms.
+ */
+function armConfirm(key, action) {
+	if (state.confirmKey === key) {
+		state.confirmKey = null;
+		clearTimeout(confirmTimer);
+		void action().catch((error) => showError(error.message));
+		return;
+	}
+	state.confirmKey = key;
+	renderProjects();
+	clearTimeout(confirmTimer);
+	confirmTimer = setTimeout(() => {
+		if (state.confirmKey === key) {
+			state.confirmKey = null;
+			renderProjects();
+		}
+	}, CONFIRM_WINDOW_MS);
 }
 
 // --- transport -------------------------------------------------------------
@@ -517,8 +698,20 @@ function showError(message) {
 	}, 6000);
 }
 
-function shortId(id) {
-	return id.length > 10 ? `${id.slice(0, 8)}…` : id;
+/** The last path segment, so a project shows just its folder name. */
+function baseName(p) {
+	if (!p) return "";
+	const parts = p.split(/[\\/]+/).filter(Boolean);
+	return parts.length > 0 ? parts[parts.length - 1] : p;
+}
+
+/**
+ * A human-readable session label: the derived title, else the last user input,
+ * else a placeholder for a session that has not recorded anything yet. The raw
+ * session id is never shown.
+ */
+function sessionLabel(session) {
+	return session.title || session.lastCompletedUserInput || "(new session)";
 }
 
 /** Turn a picker failure into something a person can act on. */
@@ -533,10 +726,6 @@ function projectErrorMessage(error) {
 
 els.addProject.addEventListener("click", () => {
 	pickAndAddProject().catch((error) => showError(projectErrorMessage(error)));
-});
-
-els.newSession.addEventListener("click", () => {
-	createSession().catch((error) => showError(error.message));
 });
 
 els.loadEarlier.addEventListener("click", () => {

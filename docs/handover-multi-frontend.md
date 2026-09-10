@@ -180,32 +180,53 @@ SessionManager
   `listStoredSessions`/`now` 均可注入（测试用 fake）。`maxSessions` 限并发；`idleTtlMs`
   驱动 `sweepIdle`（跳过 `isTurnActive()` 的会话）。会话语义 key 为 `${cwd}\u0000${sessionId}`，
   但 HTTP 层不把 `cwd` 放进 URL（见下）。
+- **项目注册表持久化**（`src/server/project-store.ts`）：项目列表存于
+  `~/.sigpi/projects.json`（`{ version: 1, projects: [{ cwd, addedAt }] }`，原子写 temp+rename，
+  容错：缺失/损坏一律返回 `[]`）。`SessionManager` 通过可注入的
+  `loadProjectRegistry`/`saveProjectRegistry` 接入，**默认均为空（no-op）**——裸 manager 不落盘，
+  只有 `runServeCommand` 注入真实文件实现并在启动时 `await manager.restoreProjects()`，因此
+  重启后左侧项目仍在。`addProject`/`removeProject` 后自动写回；`restoreProjects()` 幂等，
+  且会跳过并剔除已不存在的目录（避免指向已移动/删除的文件夹）。
 - **HTTP 路由（`src/server/multi.ts`）**：按 `projectKey` 定位目录，避免 `cwd`/NUL 进入 URL：
   `GET/POST /projects`、`POST /projects/pick`（在**服务端主机**弹出原生文件夹选择框，
   返回 `{ path }`；取消为 `{ path: null }`；主机无可用选择器时 `501 picker_unavailable`）、
-  `DELETE /projects/:key`、`GET/POST /projects/:key/sessions`、
+  `DELETE /projects/:key`（移除项目：退役其所有活跃会话**并删除该项目整份落盘归档**，
+  含所有会话的 message 与 `index.json`）、`GET/POST /projects/:key/sessions`
+（`GET` 返回 `{ stored, live }`；`live` 项除 `sessionId`/`createdAt`/`lastActivityAt`/
+`turnActive` 外，还从同 id 的持久化 summary 借来 `title`/`lastCompletedUserInput`/
+`turnCount`，供前端做友好命名）、
   `GET /projects/:key/sessions/:id/events`、`GET /projects/:key/sessions/:id/messages`
   （分页读取持久化历史，最新一页在前：`?limit=` 默认 30、`?before=` 为游标，
   返回 `{ items, cursor }`，`cursor` 为 `null` 表示已到最早；只读存储，不要求会话在活跃）、
   `POST .../message`、`POST .../interrupt`、
-  `DELETE /projects/:key/sessions/:id`。SSE/消息处理直接复用 `http.ts` 导出的
+  `DELETE /projects/:key/sessions/:id`（删除会话：退役活跃运行时**并删除该会话的
+  落盘 message 文件与 `index.json` 条目**）。SSE/消息处理直接复用 `http.ts` 导出的
   `handleSessionEvents` / `handleSessionMessage`，帧格式不变。原生选择器实现见
   `src/server/directory-picker.ts`（win32 现代 `IFileDialog`+`FOS_PICKFOLDERS` / macOS
   `choose folder` / Linux `zenity`→`kdialog`），通过 `pickDirectory` 选项注入以便测试。
 - **CLI**：新增 `sigpi serve [--host] [--port] [--idle-ttl <ms>] [--max-sessions <n>]`
-  （`src/server/serve.ts`），默认绑定 `127.0.0.1:7878`，Ctrl+C/SIGTERM 时
-  `disposeAll()` + 关服务；非回环地址打印警告。
+  （`src/server/serve.ts`），默认绑定 `127.0.0.1:7878`，启动时 `restoreProjects()` 载入
+  `~/.sigpi/projects.json` 里记住的项目目录，Ctrl+C/SIGTERM 时 `disposeAll()` + 关服务；
+  非回环地址打印警告。
 - **测试**：`test/session-manager.test.ts`、`test/chat-server-multi.test.ts`、
-  `test/serve-args.test.ts`，以及既有的 `test/chat-server.test.ts`。
+  `test/project-store.test.ts`、`test/serve-args.test.ts`，以及既有的
+  `test/chat-server.test.ts`。
 
 ## 5.2 Web 浏览器客户端
 
 `src/server/web/` 是零构建的原生 ES module 页面，由多会话服务**同源**托管（无 CORS）：
 
-- `index.html` / `styles.css` / `app.js`：极简 UI —— 项目列表 + `Choose folder…` 按钮 +
-  新建/恢复会话 + 聊天流 + 输入框 + 中断按钮。添加项目时不再手输路径：点击按钮让服务端
-  弹出原生文件夹选择框（`POST /projects/pick`），选中后 `POST /projects` 登记。SSE 用
-  `EventSource` 订阅 `.../sessions/:id/events`。点击某个会话时会先拉取**最近一页**历史
+- `index.html` / `styles.css` / `app.js`：极简 UI —— 左侧是**两级可折叠树**：第一层为工作
+  目录（project），**只显示完整路径的最后一个目录名**（完整路径留在 hover title）。点开后
+  在目录下嵌套列出其 live/stored 会话；每个目录行有「新建会话」与「删除目录」按钮，每个
+  会话行有「删除会话」按钮。会话名不显示裸 sessionId：优先用服务端根据首次用户输入派生的
+  `title`，其次 `lastCompletedUserInput`，都没有（刚建的空会话）则显示 `(new session)`；
+  为实现这点，`GET .../sessions` 的 `live` 项会从持久化 summary 里借来 `title` /
+  `lastCompletedUserInput` / `turnCount`（同一 sessionId 关联）。删除均为**两步确认**（首次
+  点击把按钮置为待确认态，5s 内再次点击才真正执行；无原生 `confirm` 对话框）。删除会话/目录
+  会连带删除其落盘的 message（见上）。添加项目时不再手输路径：点击 `＋` 让服务端弹出原生
+  文件夹选择框（`POST /projects/pick`），选中后 `POST /projects` 登记。SSE 用 `EventSource`
+  订阅 `.../sessions/:id/events`。点击某个会话时会先拉取**最近一页**历史
   （`GET .../messages?limit=30`，服务端 `src/server/history.ts` 把持久化的 entry 流投影成
   可渲染的 `user`/`assistant`/`tool`/`compaction` 项），滚动到顶部或点击 `Load earlier
   messages` 再按 `cursor` 分页向前加载更早的内容（prepend，保持阅读位置）。

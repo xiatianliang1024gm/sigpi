@@ -204,6 +204,13 @@ export interface SessionStore {
 	}): Promise<LoadedSession>;
 	listSessions(): Promise<SessionSummary[]>;
 	getSession(sessionId: string): Promise<PersistedSession>;
+	/**
+	 * Permanently delete one persisted session: its transcript/meta files and
+	 * its entry in the session index. Returns `true` when something existed to
+	 * remove, `false` when the id was already absent (so a caller can answer
+	 * `404` without treating it as an error).
+	 */
+	deleteSession(sessionId: string): Promise<boolean>;
 	pruneEmptySessions(): Promise<number>;
 	markTurnStarted(args: {
 		sessionId: string;
@@ -357,6 +364,22 @@ export class DiskSessionStore implements SessionStore {
 
 	async getSession(sessionId: string): Promise<PersistedSession> {
 		return this.readSession(sessionId);
+	}
+
+	async deleteSession(sessionId: string): Promise<boolean> {
+		const existed =
+			(await pathExists(this.metaPath(sessionId))) ||
+			(await pathExists(this.transcriptPath(sessionId)));
+		await this.removeSessionFiles(sessionId);
+
+		const index = await this.readIndex();
+		const remaining = index.sessions.filter(
+			(session) => session.sessionId !== sessionId,
+		);
+		if (remaining.length !== index.sessions.length) {
+			await this.writeIndex({ version: SESSION_VERSION, sessions: remaining });
+		}
+		return existed;
 	}
 
 	async pruneEmptySessions(): Promise<number> {

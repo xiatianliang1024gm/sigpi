@@ -1,11 +1,15 @@
-import { stat } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { getDefaultSessionsRoot } from "../config.js";
 import { createAgentRuntime, createRuntimeSessionStore } from "../runtime.js";
 import {
 	SessionController,
 	type SessionControllerRuntime,
 } from "../session/controller.js";
-import { createProjectKey } from "../session/paths.js";
+import {
+	createProjectKey,
+	resolveSessionStoragePaths,
+} from "../session/paths.js";
 import type {
 	PersistedSession,
 	SessionEntry as SessionStreamEntry,
@@ -47,6 +51,14 @@ export interface SessionEntry {
 	lastActivityAt: number;
 }
 
+/** A project directory remembered across restarts. */
+export interface RegisteredProject {
+	/** Absolute, normalized project directory. */
+	cwd: string;
+	/** Epoch ms the directory was first registered (stables list ordering). */
+	addedAt: number;
+}
+
 export interface SessionManagerOptions {
 	/**
 	 * Build a runtime for a project. Mirrors `createAgentRuntime`'s session
@@ -70,8 +82,31 @@ export interface SessionManagerOptions {
 		cwd: string,
 		sessionId: string,
 	) => Promise<PersistedSession>;
+	/**
+	 * Permanently delete one persisted session (its files and index entry).
+	 * Returns whether anything existed to delete. Injected in tests so deletion
+	 * needs no real disk store.
+	 */
+	deleteStoredSession?: (cwd: string, sessionId: string) => Promise<boolean>;
+	/**
+	 * Permanently delete a project's entire on-disk archive (every session file
+	 * plus the index). Injected in tests so it never touches a real archive.
+	 */
+	deleteStoredProject?: (cwd: string) => Promise<void>;
 	/** Injectable clock (tests). Defaults to `Date.now`. */
 	now?: () => number;
+	/**
+	 * Load the project directories remembered from a previous run. Called once
+	 * by {@link SessionManager.restoreProjects}. Defaults to an empty list, so a
+	 * bare `SessionManager` never persists anything — the server entry point
+	 * injects the real file-backed registry (see `serve.ts`).
+	 */
+	loadProjectRegistry?: () => Promise<RegisteredProject[]>;
+	/**
+	 * Persist the current project list after a directory is added or removed.
+	 * Defaults to a no-op for the same reason as {@link loadProjectRegistry}.
+	 */
+	saveProjectRegistry?: (projects: ProjectEntry[]) => Promise<void>;
 	/** Idle TTL in ms; sessions idle longer are retired by {@link sweepIdle}. */
 	idleTtlMs?: number;
 	/** Max concurrent live sessions; `0` (default) means unlimited. */
@@ -132,6 +167,32 @@ async function defaultReadStoredSession(
 	return createRuntimeSessionStore({ cwd }).getSession(sessionId);
 }
 
+/** Delete one persisted session (files + index entry). Returns whether it existed. */
+async function defaultDeleteStoredSession(
+	cwd: string,
+	sessionId: string,
+): Promise<boolean> {
+	return createRuntimeSessionStore({ cwd }).deleteSession(sessionId);
+}
+
+/** Delete a project's whole on-disk archive (all sessions + index). */
+async function defaultDeleteStoredProject(cwd: string): Promise<void> {
+	const paths = resolveSessionStoragePaths({
+		cwd,
+		sessionsRoot: getDefaultSessionsRoot(),
+	});
+	await rm(paths.projectDir, { recursive: true, force: true });
+}
+
+/** True when `target` exists and is a directory (used to prune dead projects). */
+async function isDirectory(target: string): Promise<boolean> {
+	try {
+		return (await stat(target)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Process-level registry of hosted projects and their live sessions. A single
  * `SessionManager` backs the multi-session web frontend: each added directory
@@ -160,6 +221,16 @@ export class SessionManager {
 		cwd: string,
 		sessionId: string,
 	) => Promise<PersistedSession>;
+	private readonly deleteStoredSessionFn: (
+		cwd: string,
+		sessionId: string,
+	) => Promise<boolean>;
+	private readonly deleteStoredProjectFn: (cwd: string) => Promise<void>;
+	private readonly loadProjectRegistryFn: () => Promise<RegisteredProject[]>;
+	private readonly saveProjectRegistryFn: (
+		projects: ProjectEntry[],
+	) => Promise<void>;
+	private restoredProjects = false;
 	private readonly now: () => number;
 	readonly idleTtlMs: number;
 	readonly maxSessions: number;
@@ -172,6 +243,14 @@ export class SessionManager {
 			options.listStoredSessions ?? defaultListStoredSessions;
 		this.readStoredSessionFn =
 			options.readStoredSession ?? defaultReadStoredSession;
+		this.deleteStoredSessionFn =
+			options.deleteStoredSession ?? defaultDeleteStoredSession;
+		this.deleteStoredProjectFn =
+			options.deleteStoredProject ?? defaultDeleteStoredProject;
+		this.loadProjectRegistryFn =
+			options.loadProjectRegistry ?? (async () => []);
+		this.saveProjectRegistryFn =
+			options.saveProjectRegistry ?? (async () => {});
 		this.now = options.now ?? (() => Date.now());
 		this.idleTtlMs = options.idleTtlMs ?? 0;
 		this.maxSessions = options.maxSessions ?? 0;
@@ -210,7 +289,49 @@ export class SessionManager {
 
 		const entry: ProjectEntry = { key, cwd: resolved, addedAt: this.now() };
 		this.projects.set(key, entry);
+		await this.persistProjects();
 		return entry;
+	}
+
+	/**
+	 * Register the directories remembered from a previous run (via the injected
+	 * {@link SessionManagerOptions.loadProjectRegistry}). Idempotent and safe to
+	 * call once at startup; a no-op when no loader was injected. Directories that
+	 * no longer exist are skipped and pruned from the persisted registry, so a
+	 * stale entry never blocks the sidebar on a folder that has since moved.
+	 */
+	async restoreProjects(): Promise<void> {
+		if (this.restoredProjects) {
+			return;
+		}
+		this.restoredProjects = true;
+
+		const remembered = await this.loadProjectRegistryFn();
+		let pruned = false;
+		for (const entry of remembered) {
+			const resolved = path.resolve(entry.cwd);
+			const key = createProjectKey(resolved);
+			if (this.projects.has(key)) {
+				continue;
+			}
+			if (!(await isDirectory(resolved))) {
+				pruned = true;
+				continue;
+			}
+			this.projects.set(key, { key, cwd: resolved, addedAt: entry.addedAt });
+		}
+		if (pruned) {
+			await this.persistProjects();
+		}
+	}
+
+	/** Write the current project list to durable storage (best-effort). */
+	private async persistProjects(): Promise<void> {
+		try {
+			await this.saveProjectRegistryFn(this.listProjects());
+		} catch {
+			// A registry write must never fail the user's add/remove request.
+		}
 	}
 
 	/** All registered projects, oldest first. */
@@ -223,8 +344,12 @@ export class SessionManager {
 	}
 
 	/**
-	 * Remove a project and retire every session it hosts. Returns `false` when
-	 * the project was never registered.
+	 * Remove a project, retire every session it hosts, and delete its entire
+	 * on-disk archive (every session's messages plus the index). Returns `false`
+	 * when the project was never registered.
+	 *
+	 * The archive removal is best-effort: the project is unregistered regardless,
+	 * so a filesystem error can never wedge the registry.
 	 */
 	async removeProject(projectKey: string): Promise<boolean> {
 		const project = this.projects.get(projectKey);
@@ -237,6 +362,12 @@ export class SessionManager {
 			}
 		}
 		this.projects.delete(projectKey);
+		await this.persistProjects();
+		try {
+			await this.deleteStoredProjectFn(project.cwd);
+		} catch {
+			// Best-effort; the in-memory removal already succeeded.
+		}
 		return true;
 	}
 
@@ -363,6 +494,33 @@ export class SessionManager {
 		}
 		await this.disposeSessionEntry(session);
 		return true;
+	}
+
+	/**
+	 * Permanently delete a session: retire it if it is live (releasing its
+	 * runtime) and delete its persisted messages on disk. Returns `true` when
+	 * the session was either live or persisted, `false` when it was unknown
+	 * (so the HTTP layer can answer `404`).
+	 *
+	 * Unlike {@link disposeSession}, which only retires an in-process runtime,
+	 * this is destructive and cannot be undone.
+	 */
+	async deleteSession(projectKey: string, sessionId: string): Promise<boolean> {
+		const project = this.projects.get(projectKey);
+		if (!project) {
+			return false;
+		}
+		const live = this.getSession(projectKey, sessionId);
+		if (live) {
+			await this.disposeSessionEntry(live);
+		}
+		let storedRemoved = false;
+		try {
+			storedRemoved = await this.deleteStoredSessionFn(project.cwd, sessionId);
+		} catch {
+			// Best-effort disk removal; a live session is still retired.
+		}
+		return Boolean(live) || storedRemoved;
 	}
 
 	/** Retire every live session (e.g. on server shutdown). */

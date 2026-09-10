@@ -52,14 +52,14 @@ const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
  * GET    /projects                                  list registered projects
  * POST   /projects                { path }          add a project directory
  * POST   /projects/pick                             open a native folder chooser
- * DELETE /projects/:key                             remove a project + its sessions
+ * DELETE /projects/:key                             remove a project + its sessions + stored messages
  * GET    /projects/:key/sessions                    list stored + live sessions
  * POST   /projects/:key/sessions  { sessionId? }    create (or resume) a live session
  * GET    /projects/:key/sessions/:id/events         stream the session's SSE events
  * GET    /projects/:key/sessions/:id/messages       page persisted history (newest first)
  * POST   /projects/:key/sessions/:id/message        submit one turn
  * POST   /projects/:key/sessions/:id/interrupt      interrupt the in-flight turn
- * DELETE /projects/:key/sessions/:id                retire the live session
+ * DELETE /projects/:key/sessions/:id                delete the session + its stored messages
  * ```
  */
 export function createMultiSessionServer(
@@ -173,7 +173,7 @@ async function route(
 	// /projects/:key/sessions/:id
 	if (segments.length === 4) {
 		if (method === "DELETE") {
-			const removed = await manager.disposeSession(projectKey, sessionId);
+			const removed = await manager.deleteSession(projectKey, sessionId);
 			if (!removed) {
 				writeJson(res, 404, { error: "session_not_found" });
 				return;
@@ -297,14 +297,26 @@ async function handleListSessions(
 		writeJson(res, 404, { error: "project_not_found" });
 		return;
 	}
+	// Live sessions carry no title of their own; borrow it from the persisted
+	// summary (which derives one from the first user input) so the client can
+	// label a live row the same way as a stored one instead of showing its id.
+	const storedById = new Map(
+		stored.map((session) => [session.sessionId, session]),
+	);
 	writeJson(res, 200, {
 		stored,
-		live: manager.listSessions(projectKey).map((session) => ({
-			sessionId: session.sessionId,
-			createdAt: session.createdAt,
-			lastActivityAt: session.lastActivityAt,
-			turnActive: session.controller.isTurnActive(),
-		})),
+		live: manager.listSessions(projectKey).map((session) => {
+			const summary = storedById.get(session.sessionId);
+			return {
+				sessionId: session.sessionId,
+				title: summary?.title ?? null,
+				lastCompletedUserInput: summary?.lastCompletedUserInput ?? null,
+				turnCount: summary?.turnCount ?? 0,
+				createdAt: session.createdAt,
+				lastActivityAt: session.lastActivityAt,
+				turnActive: session.controller.isTurnActive(),
+			};
+		}),
 	});
 }
 

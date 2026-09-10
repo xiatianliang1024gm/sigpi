@@ -14,14 +14,18 @@
 		<main class="layout">
 			<aside class="sidebar">
 				<section class="panel">
-					<h2>Projects</h2>
-					<div id="projects" class="list"></div>
-					<button id="add-project" type="button">Choose folder…</button>
-				</section>
-				<section class="panel">
-					<h2>Sessions</h2>
-					<div id="sessions" class="list"></div>
-					<button id="new-session" type="button" disabled>New session</button>
+					<div class="panel-head">
+						<h2>Projects</h2>
+						<button
+							id="add-project"
+							type="button"
+							class="icon-button"
+							title="Add a working directory"
+						>
+							＋
+						</button>
+					</div>
+					<div id="projects" class="tree"></div>
 				</section>
 			</aside>
 			<section class="chat">

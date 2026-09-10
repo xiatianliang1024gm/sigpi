@@ -12,6 +12,10 @@ import {
 	SessionManagerError,
 	sessionKey,
 } from "../src/server/manager.js";
+import {
+	loadProjectRegistry,
+	saveProjectRegistry,
+} from "../src/server/project-store.js";
 import type {
 	SessionController,
 	SessionProgressBus,
@@ -185,6 +189,60 @@ test("removeProject disposes every session it hosts", async () => {
 	assert.equal(await manager.removeProject(project.key), false);
 });
 
+test("removeProject deletes the project's stored archive", async () => {
+	const dir = await tempDir();
+	const removed: string[] = [];
+	const { manager } = makeManager({
+		deleteStoredProject: async (cwd) => {
+			removed.push(cwd);
+		},
+	});
+	const project = await manager.addProject(dir);
+	await manager.createSession({ projectKey: project.key });
+
+	assert.equal(await manager.removeProject(project.key), true);
+	assert.deepEqual(removed, [path.resolve(dir)]);
+});
+
+test("deleteSession disposes a live session and deletes its stored messages", async () => {
+	const dir = await tempDir();
+	const deleted: Array<[string, string]> = [];
+	const { manager } = makeManager({
+		deleteStoredSession: async (cwd, sessionId) => {
+			deleted.push([cwd, sessionId]);
+			return true;
+		},
+	});
+	const project = await manager.addProject(dir);
+	const session = await manager.createSession({ projectKey: project.key });
+
+	assert.equal(
+		await manager.deleteSession(project.key, session.sessionId),
+		true,
+	);
+	assert.equal((session.runtime as FakeRuntime).disposed, 1);
+	assert.deepEqual(deleted, [[path.resolve(dir), session.sessionId]]);
+	assert.equal(manager.getSession(project.key, session.sessionId), undefined);
+
+	// Unknown project: `false`.
+	assert.equal(await manager.deleteSession("nope", "s1"), false);
+});
+
+test("deleteSession removes a stored-only session that is not live", async () => {
+	const dir = await tempDir();
+	const deleted: string[] = [];
+	const { manager } = makeManager({
+		deleteStoredSession: async (_cwd, sessionId) => {
+			deleted.push(sessionId);
+			return true;
+		},
+	});
+	const project = await manager.addProject(dir);
+
+	assert.equal(await manager.deleteSession(project.key, "stored-1"), true);
+	assert.deepEqual(deleted, ["stored-1"]);
+});
+
 test("maxSessions caps concurrent live sessions", async () => {
 	const dir = await tempDir();
 	const { manager } = makeManager({ maxSessions: 1 });
@@ -290,4 +348,93 @@ test("readSessionEntries is null for an unknown project or session", async () =>
 
 	const project = await manager.addProject(dir);
 	assert.equal(await manager.readSessionEntries(project.key, "s1"), null);
+});
+
+test("restoreProjects re-registers remembered directories", async () => {
+	const dir = await tempDir();
+	const saved: Array<{ cwd: string }> = [];
+	const { manager } = makeManager({
+		loadProjectRegistry: async () => [{ cwd: dir, addedAt: 123 }],
+		saveProjectRegistry: async (projects) => {
+			saved.push(...projects.map((p) => ({ cwd: p.cwd })));
+		},
+	});
+
+	await manager.restoreProjects();
+	const projects = manager.listProjects();
+	assert.equal(projects.length, 1);
+	assert.equal(projects[0]?.cwd, path.resolve(dir));
+	assert.equal(projects[0]?.addedAt, 123, "addedAt is preserved for ordering");
+
+	// Idempotent: a second restore does not duplicate the entry.
+	await manager.restoreProjects();
+	assert.equal(manager.listProjects().length, 1);
+});
+
+test("restoreProjects drops directories that no longer exist", async () => {
+	const missing = path.join(os.tmpdir(), `sigpi-gone-${Date.now()}`);
+	const saved: string[] = [];
+	const { manager } = makeManager({
+		loadProjectRegistry: async () => [{ cwd: missing, addedAt: 1 }],
+		saveProjectRegistry: async (projects) => {
+			saved.push(...projects.map((p) => p.cwd));
+		},
+	});
+
+	await manager.restoreProjects();
+	assert.equal(manager.listProjects().length, 0);
+	assert.deepEqual(saved, [], "the pruned list is written back");
+});
+
+test("addProject and removeProject persist the registry", async () => {
+	const dir = await tempDir();
+	const snapshots: string[][] = [];
+	const { manager } = makeManager({
+		saveProjectRegistry: async (projects) => {
+			snapshots.push(projects.map((p) => p.cwd));
+		},
+	});
+
+	const project = await manager.addProject(dir);
+	assert.deepEqual(snapshots, [[path.resolve(dir)]]);
+
+	// Re-adding the same directory is idempotent and does not re-persist.
+	await manager.addProject(dir);
+	assert.equal(snapshots.length, 1);
+
+	await manager.removeProject(project.key);
+	assert.deepEqual(snapshots.at(-1), []);
+});
+
+test("a bare SessionManager never touches a project registry", async () => {
+	// No loader/saver injected: restore is a no-op and add/remove stay in memory.
+	const dir = await tempDir();
+	const { manager } = makeManager();
+	await manager.restoreProjects();
+	const project = await manager.addProject(dir);
+	assert.equal(manager.listProjects().length, 1);
+	assert.equal(await manager.removeProject(project.key), true);
+	assert.equal(manager.listProjects().length, 0);
+});
+
+test("projects survive a restart when the file-backed registry is used", async () => {
+	const dir = await tempDir();
+	const homeDir = await mkdtemp(path.join(os.tmpdir(), "sigpi-home-"));
+	const withStore = (): SessionManager =>
+		makeManager({
+			loadProjectRegistry: () => loadProjectRegistry({ homeDir }),
+			saveProjectRegistry: (projects) =>
+				saveProjectRegistry(projects, { homeDir }),
+		}).manager;
+
+	// First run: add a directory. This writes the registry to disk.
+	const first = withStore();
+	await first.addProject(dir);
+
+	// "Restart": a brand-new manager reads the same file and remembers `dir`.
+	const second = withStore();
+	await second.restoreProjects();
+	const projects = second.listProjects();
+	assert.equal(projects.length, 1);
+	assert.equal(projects[0]?.cwd, path.resolve(dir));
 });

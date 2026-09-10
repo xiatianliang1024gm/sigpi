@@ -42,6 +42,9 @@ interface Project {
 interface LiveSession {
 	sessionId: string;
 	turnActive: boolean;
+	title?: string | null;
+	lastCompletedUserInput?: string | null;
+	turnCount?: number;
 }
 
 interface SessionList {
@@ -250,6 +253,28 @@ class Harness {
 			return jsonResponse(200, { accepted: true });
 		}
 
+		const sessionDelete = /^\/projects\/([^/]+)\/sessions\/([^/]+)$/.exec(
+			pathname,
+		);
+		if (method === "DELETE" && sessionDelete) {
+			const key = decodeURIComponent(sessionDelete[1] ?? "");
+			const id = decodeURIComponent(sessionDelete[2] ?? "");
+			const list = this.sessions.get(key);
+			if (list) {
+				list.live = list.live.filter((s) => s.sessionId !== id);
+				list.stored = list.stored.filter((s) => s.sessionId !== id);
+			}
+			return jsonResponse(200, { removed: true });
+		}
+
+		const projectDelete = /^\/projects\/([^/]+)$/.exec(pathname);
+		if (method === "DELETE" && projectDelete) {
+			const key = decodeURIComponent(projectDelete[1] ?? "");
+			this.projects = this.projects.filter((p) => p.key !== key);
+			this.sessions.delete(key);
+			return jsonResponse(200, { removed: true });
+		}
+
 		throw new Error(`unexpected request: ${method} ${pathname}`);
 	};
 }
@@ -266,7 +291,10 @@ async function openSession(): Promise<Harness> {
 	const harness = await Harness.create();
 	element<HTMLButtonElement>(harness.document, "add-project").click();
 	await flush();
-	element<HTMLButtonElement>(harness.document, "new-session").click();
+	const newSession =
+		harness.document.querySelector<HTMLButtonElement>(".project-new");
+	assert.ok(newSession, "the added project renders a new-session control");
+	newSession.click();
 	await flush();
 	return harness;
 }
@@ -280,27 +308,31 @@ test("boots empty, then wires project → session → SSE stream", async () => {
 		body: undefined,
 	});
 	assert.equal(
-		element<HTMLButtonElement>(harness.document, "new-session").disabled,
-		true,
-	);
-	assert.equal(
-		harness.document.querySelectorAll("#projects .list-item").length,
+		harness.document.querySelectorAll("#projects .project").length,
 		0,
 	);
 
 	element<HTMLButtonElement>(harness.document, "add-project").click();
 	await flush();
 
-	const projects = harness.document.querySelectorAll("#projects .list-item");
-	assert.equal(projects.length, 1);
-	assert.equal(projects[0]?.textContent, "/tmp/demo");
-	assert.match(projects[0]?.className ?? "", /active/);
+	const project = harness.document.querySelector("#projects .project");
+	assert.ok(project, "the project node renders");
 	assert.equal(
-		element<HTMLButtonElement>(harness.document, "new-session").disabled,
-		false,
+		project.querySelector(".project-name")?.textContent,
+		"demo",
+		"only the folder's last path segment is shown",
 	);
+	assert.equal(
+		project.querySelector(".project-name")?.getAttribute("title"),
+		"/tmp/demo",
+		"the full path stays available on hover",
+	);
+	assert.match(project.className, /active/);
 
-	element<HTMLButtonElement>(harness.document, "new-session").click();
+	const newSession =
+		harness.document.querySelector<HTMLButtonElement>(".project-new");
+	assert.ok(newSession, "the project renders a new-session control");
+	newSession.click();
 	await flush();
 
 	const source = harness.sources.at(-1);
@@ -308,9 +340,15 @@ test("boots empty, then wires project → session → SSE stream", async () => {
 	assert.equal(source.url, "/projects/k1/sessions/s1/events");
 	assert.equal(source.closed, false);
 
-	const live = harness.document.querySelectorAll("#sessions .list-item");
+	const live = harness.document.querySelectorAll("#projects .session-row");
 	assert.equal(live.length, 1);
-	assert.match(live[0]?.textContent ?? "", /live/);
+	const liveLabel = live[0]?.querySelector(".session")?.textContent;
+	assert.equal(
+		liveLabel,
+		"(new session)",
+		"a fresh session shows a friendly placeholder, never its id",
+	);
+	assert.doesNotMatch(liveLabel ?? "", /s1/);
 	assert.equal(
 		element<HTMLTextAreaElement>(harness.document, "input").disabled,
 		false,
@@ -329,6 +367,40 @@ test("boots empty, then wires project → session → SSE stream", async () => {
 	);
 });
 
+test("a live session shows its derived title once the server reports one", async () => {
+	const harness = await openSession();
+	const liveSession = harness.sessions.get("k1")?.live[0];
+	assert.ok(liveSession, "the live session is registered");
+	// The server derives a title from the first user input; the client should
+	// surface it on the live row instead of the session id.
+	liveSession.title = "Fix the flaky test";
+	liveSession.lastCompletedUserInput = "Fix the flaky test";
+
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	source.message({ type: "turn_finished", step: 1 });
+	await flush();
+
+	const row = harness.document.querySelector("#projects .session-row .session");
+	assert.equal(row?.textContent, "Fix the flaky test");
+	assert.doesNotMatch(row?.textContent ?? "", /s1/);
+});
+
+test("a live session falls back to the last input when it has no title", async () => {
+	const harness = await openSession();
+	const liveSession = harness.sessions.get("k1")?.live[0];
+	assert.ok(liveSession);
+	liveSession.lastCompletedUserInput = "run the tests";
+
+	const source = harness.sources.at(-1);
+	assert.ok(source);
+	source.message({ type: "turn_finished", step: 1 });
+	await flush();
+
+	const row = harness.document.querySelector("#projects .session-row .session");
+	assert.equal(row?.textContent, "run the tests");
+});
+
 test("add-project asks the server to pick a folder and registers the result", async () => {
 	const harness = await Harness.create();
 	harness.pickPath = "/tmp/demo";
@@ -341,8 +413,8 @@ test("add-project asks the server to pick a folder and registers the result", as
 	assert.equal(added.length, 1);
 	assert.deepEqual(added[0]?.body, { path: "/tmp/demo" });
 	assert.equal(
-		harness.document.querySelector("#projects .list-item")?.textContent,
-		"/tmp/demo",
+		harness.document.querySelector("#projects .project-name")?.textContent,
+		"demo",
 	);
 });
 
@@ -356,7 +428,7 @@ test("add-project ignores a cancelled picker", async () => {
 	assert.equal(harness.callsTo("POST", "/projects/pick").length, 1);
 	assert.equal(harness.callsTo("POST", "/projects").length, 0);
 	assert.equal(
-		harness.document.querySelectorAll("#projects .list-item").length,
+		harness.document.querySelectorAll("#projects .project").length,
 		0,
 	);
 });
@@ -519,7 +591,10 @@ test("loads a resumed session's history and pages older messages", async () => {
 		],
 		cursor: 4,
 	});
-	element<HTMLButtonElement>(harness.document, "new-session").click();
+	const newSession =
+		harness.document.querySelector<HTMLButtonElement>(".project-new");
+	assert.ok(newSession, "the project renders a new-session control");
+	newSession.click();
 	await flush();
 
 	const transcript = harness.document.getElementById("transcript");
@@ -567,4 +642,57 @@ test("loads a resumed session's history and pages older messages", async () => {
 		1,
 		"the cursor is sent back as `before`",
 	);
+});
+
+test("deletes a session only after a confirming second click", async () => {
+	const harness = await openSession();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	source.message({ type: "ready", turnActive: false });
+	await flush();
+
+	const del = () =>
+		harness.document.querySelector<HTMLButtonElement>(".session-delete");
+	let button = del();
+	assert.ok(button, "the session row has a delete control");
+
+	// First click only arms the confirmation; no request goes out.
+	button.click();
+	await flush();
+	assert.equal(harness.callsTo("DELETE", "/projects/k1/sessions/s1").length, 0);
+	button = del();
+	assert.ok(button, "the delete control is re-rendered armed");
+	assert.match(button.textContent ?? "", /✓/);
+
+	// Second click confirms and issues the DELETE.
+	button.click();
+	await flush();
+	assert.equal(harness.callsTo("DELETE", "/projects/k1/sessions/s1").length, 1);
+	assert.equal(
+		harness.document.querySelector(".session-row"),
+		null,
+		"the deleted session disappears from the tree",
+	);
+});
+
+test("deletes a project (and its sessions) after a confirming second click", async () => {
+	const harness = await openSession();
+
+	const del = () =>
+		harness.document.querySelector<HTMLButtonElement>(".project-delete");
+	let button = del();
+	assert.ok(button, "the project header has a delete control");
+
+	button.click();
+	await flush();
+	assert.equal(harness.callsTo("DELETE", "/projects/k1").length, 0);
+	button = del();
+	assert.ok(button);
+	assert.match(button.textContent ?? "", /✓/);
+
+	button.click();
+	await flush();
+	assert.equal(harness.callsTo("DELETE", "/projects/k1").length, 1);
+	assert.equal(harness.document.querySelector("#projects .project"), null);
+	assert.equal(harness.document.querySelectorAll("#projects .empty").length, 1);
 });

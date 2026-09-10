@@ -102,6 +102,114 @@ body.busy .status::before {
 	border-color: var(--accent);
 }
 
+/* --- project → session tree ------------------------------------------------ */
+
+.panel-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.panel-head h2 {
+	margin: 0;
+}
+
+.icon-button {
+	padding: 2px 8px;
+	line-height: 1.4;
+	border-radius: 6px;
+}
+
+.icon-button.danger {
+	color: var(--muted);
+}
+
+.icon-button.danger:hover {
+	color: var(--error);
+	border-color: var(--error);
+}
+
+.icon-button.armed {
+	color: var(--error);
+	border-color: var(--error);
+	font-weight: 700;
+}
+
+.tree {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 8px;
+}
+
+.project {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.project-header {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.project-toggle {
+	padding: 2px 6px;
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.project-name {
+	flex: 1;
+	min-width: 0;
+	text-align: left;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	color: var(--text);
+	border-radius: 6px;
+	padding: 6px 8px;
+	cursor: pointer;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.project.active > .project-header .project-name {
+	border-color: var(--accent);
+}
+
+.sessions {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding-left: 18px;
+}
+
+.session-row {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.session-row .session {
+	flex: 1;
+	min-width: 0;
+}
+
+.session-row.active .session {
+	border-color: var(--accent);
+}
+
+.empty {
+	color: var(--muted);
+	font-size: 12.5px;
+	padding: 2px 4px;
+}
+
 .stack-form {
 	display: flex;
 	flex-direction: column;

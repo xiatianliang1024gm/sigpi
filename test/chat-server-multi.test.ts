@@ -17,6 +17,7 @@ import type {
 	PersistedSession,
 	RuntimeLogger,
 	SessionEntry,
+	SessionSummary,
 	TurnProgressEvent,
 } from "../src/types.js";
 
@@ -334,6 +335,119 @@ test("DELETE /projects/:key/sessions/:id retires the session", async () => {
 			{ method: "DELETE" },
 		);
 		assert.equal(again.status, 404);
+	});
+});
+
+test("DELETE /projects/:key/sessions/:id deletes the stored messages", async () => {
+	const deleted: Array<[string, string]> = [];
+	const manager = new SessionManager({
+		createRuntime: async () => makeRuntime("sess"),
+		listStoredSessions: async () => [],
+		deleteStoredSession: async (cwd, sessionId) => {
+			deleted.push([cwd, sessionId]);
+			return true;
+		},
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+
+		// No live session with this id: deletion still succeeds via the store.
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/stored-1`,
+			{ method: "DELETE" },
+		);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), { removed: true });
+		assert.deepEqual(deleted, [[path.resolve(dir), "stored-1"]]);
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("DELETE /projects/:key deletes the project's stored archive", async () => {
+	const removed: string[] = [];
+	const manager = new SessionManager({
+		createRuntime: async () => makeRuntime("sess"),
+		listStoredSessions: async () => [],
+		deleteStoredProject: async (cwd) => {
+			removed.push(cwd);
+		},
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+
+		const response = await fetch(`${baseUrl}/projects/${key}`, {
+			method: "DELETE",
+		});
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), { removed: true });
+		assert.deepEqual(removed, [path.resolve(dir)]);
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("GET .../sessions labels a live session with its persisted title", async () => {
+	const summary: SessionSummary = {
+		sessionId: "sess-1",
+		title: "Fix the build",
+		lastCompletedUserInput: "Fix the build",
+		updatedAt: "2024-01-01T00:00:00.000Z",
+		cwd: "/tmp/x",
+		turnCount: 2,
+		lastTurnStatus: null,
+		estimatedTokens: null,
+	};
+	const manager = new SessionManager({
+		createRuntime: async ({ sessionId }) => makeRuntime(sessionId ?? "sess-1"),
+		listStoredSessions: async () => [summary],
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(`${baseUrl}/projects/${key}/sessions`);
+		const body = (await response.json()) as {
+			live: Array<{
+				sessionId: string;
+				title: string | null;
+				turnCount: number;
+			}>;
+		};
+		const live = body.live.find((session) => session.sessionId === "sess-1");
+		assert.ok(live, "the live session is listed");
+		assert.equal(live.title, "Fix the build");
+		assert.equal(live.turnCount, 2);
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("GET .../sessions leaves a live session's title null when unpersisted", async () => {
+	await withServer(async (baseUrl) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(`${baseUrl}/projects/${key}/sessions`);
+		const body = (await response.json()) as {
+			live: Array<{ title: string | null; turnCount: number }>;
+		};
+		assert.equal(body.live.length, 1);
+		assert.equal(body.live[0]?.title, null);
+		assert.equal(body.live[0]?.turnCount, 0);
 	});
 });
 
