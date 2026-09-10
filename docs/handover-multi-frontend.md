@@ -184,7 +184,10 @@ SessionManager
   `GET/POST /projects`、`POST /projects/pick`（在**服务端主机**弹出原生文件夹选择框，
   返回 `{ path }`；取消为 `{ path: null }`；主机无可用选择器时 `501 picker_unavailable`）、
   `DELETE /projects/:key`、`GET/POST /projects/:key/sessions`、
-  `GET /projects/:key/sessions/:id/events`、`POST .../message`、`POST .../interrupt`、
+  `GET /projects/:key/sessions/:id/events`、`GET /projects/:key/sessions/:id/messages`
+  （分页读取持久化历史，最新一页在前：`?limit=` 默认 30、`?before=` 为游标，
+  返回 `{ items, cursor }`，`cursor` 为 `null` 表示已到最早；只读存储，不要求会话在活跃）、
+  `POST .../message`、`POST .../interrupt`、
   `DELETE /projects/:key/sessions/:id`。SSE/消息处理直接复用 `http.ts` 导出的
   `handleSessionEvents` / `handleSessionMessage`，帧格式不变。原生选择器实现见
   `src/server/directory-picker.ts`（win32 现代 `IFileDialog`+`FOS_PICKFOLDERS` / macOS
@@ -202,7 +205,10 @@ SessionManager
 - `index.html` / `styles.css` / `app.js`：极简 UI —— 项目列表 + `Choose folder…` 按钮 +
   新建/恢复会话 + 聊天流 + 输入框 + 中断按钮。添加项目时不再手输路径：点击按钮让服务端
   弹出原生文件夹选择框（`POST /projects/pick`），选中后 `POST /projects` 登记。SSE 用
-  `EventSource` 订阅 `.../sessions/:id/events`。
+  `EventSource` 订阅 `.../sessions/:id/events`。点击某个会话时会先拉取**最近一页**历史
+  （`GET .../messages?limit=30`，服务端 `src/server/history.ts` 把持久化的 entry 流投影成
+  可渲染的 `user`/`assistant`/`tool`/`compaction` 项），滚动到顶部或点击 `Load earlier
+  messages` 再按 `cursor` 分页向前加载更早的内容（prepend，保持阅读位置）。
 - `reducer.js`：`applyTurnProgress` 的**逐行移植**（`src/session/events.ts`），并导出
   `isTurnTerminalEvent` / `formatCompactionMessage`。因为 SSE 的 `message` 帧就是
   `TurnProgressEvent`，浏览器归约器与 TUI 同源、行为一致。
@@ -239,6 +245,7 @@ SessionManager
 - Web 传输（单会话）：`src/server/http.ts`、`src/server/sse.ts`
 - 会话注册表（多目录/多会话）：`src/server/manager.ts`
 - Web 传输（多会话路由）：`src/server/multi.ts`
+- 历史分页/投影：`src/server/history.ts`
 - 原生文件夹选择框（跨平台，可注入）：`src/server/directory-picker.ts`
 - Web 服务启动命令：`src/server/serve.ts`
 - Web 浏览器客户端（零构建，同源托管）：`src/server/web/`、`src/server/static.ts`

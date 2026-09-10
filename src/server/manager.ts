@@ -6,7 +6,11 @@ import {
 	type SessionControllerRuntime,
 } from "../session/controller.js";
 import { createProjectKey } from "../session/paths.js";
-import type { SessionSummary } from "../types.js";
+import type {
+	PersistedSession,
+	SessionEntry as SessionStreamEntry,
+	SessionSummary,
+} from "../types.js";
 
 /**
  * The slice of a runtime a {@link SessionManager} owns: the headless
@@ -57,6 +61,15 @@ export interface SessionManagerOptions {
 	createController?: (runtime: ManagedRuntime) => SessionController;
 	/** List persisted session summaries for a project directory. */
 	listStoredSessions?: (cwd: string) => Promise<SessionSummary[]>;
+	/**
+	 * Read one persisted session (its full entry stream) from a project
+	 * directory. Injected in tests so history paging needs no real disk store.
+	 * Defaults to reading the on-disk session store.
+	 */
+	readStoredSession?: (
+		cwd: string,
+		sessionId: string,
+	) => Promise<PersistedSession>;
 	/** Injectable clock (tests). Defaults to `Date.now`. */
 	now?: () => number;
 	/** Idle TTL in ms; sessions idle longer are retired by {@link sweepIdle}. */
@@ -112,6 +125,13 @@ async function defaultListStoredSessions(
 	return createRuntimeSessionStore({ cwd }).listSessions();
 }
 
+async function defaultReadStoredSession(
+	cwd: string,
+	sessionId: string,
+): Promise<PersistedSession> {
+	return createRuntimeSessionStore({ cwd }).getSession(sessionId);
+}
+
 /**
  * Process-level registry of hosted projects and their live sessions. A single
  * `SessionManager` backs the multi-session web frontend: each added directory
@@ -136,6 +156,10 @@ export class SessionManager {
 	private readonly listStoredSessionsFn: (
 		cwd: string,
 	) => Promise<SessionSummary[]>;
+	private readonly readStoredSessionFn: (
+		cwd: string,
+		sessionId: string,
+	) => Promise<PersistedSession>;
 	private readonly now: () => number;
 	readonly idleTtlMs: number;
 	readonly maxSessions: number;
@@ -146,6 +170,8 @@ export class SessionManager {
 			options.createController ?? ((runtime) => new SessionController(runtime));
 		this.listStoredSessionsFn =
 			options.listStoredSessions ?? defaultListStoredSessions;
+		this.readStoredSessionFn =
+			options.readStoredSession ?? defaultReadStoredSession;
 		this.now = options.now ?? (() => Date.now());
 		this.idleTtlMs = options.idleTtlMs ?? 0;
 		this.maxSessions = options.maxSessions ?? 0;
@@ -223,6 +249,31 @@ export class SessionManager {
 			return null;
 		}
 		return this.listStoredSessionsFn(project.cwd);
+	}
+
+	/**
+	 * Persisted entry stream for a stored session, used to page a resumed
+	 * session's history. Returns `null` when the project is unknown or the
+	 * session id maps to neither a live session nor a persisted file, so the
+	 * HTTP layer can answer `404`. A live session whose file is not yet readable
+	 * (e.g. a brand-new empty session) yields an empty stream so it pages
+	 * uniformly.
+	 */
+	async readSessionEntries(
+		projectKey: string,
+		sessionId: string,
+	): Promise<SessionStreamEntry[] | null> {
+		const project = this.projects.get(projectKey);
+		if (!project) {
+			return null;
+		}
+		try {
+			const session = await this.readStoredSessionFn(project.cwd, sessionId);
+			return session.entries;
+		} catch {
+			const live = this.sessions.get(sessionKey(project.cwd, sessionId));
+			return live ? [] : null;
+		}
 	}
 
 	// --- sessions ---------------------------------------------------------

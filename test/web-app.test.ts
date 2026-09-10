@@ -124,6 +124,14 @@ class Harness {
 	messageStatus = 202;
 	/** Path `POST /projects/pick` hands back; `null` simulates a cancel. */
 	pickPath: string | null = "/tmp/demo";
+	/**
+	 * Canned history pages keyed by the `before` query param (`""` when the
+	 * client asks for the newest page). Each entry drives `GET .../messages`.
+	 */
+	historyPages = new Map<
+		string,
+		{ items: Array<Record<string, unknown>>; cursor: number | null }
+	>();
 
 	private constructor(dom: JSDOM) {
 		this.dom = dom;
@@ -143,6 +151,14 @@ class Harness {
 	submitEvent(): Event {
 		const ctor = (this.dom.window as unknown as { Event: typeof Event }).Event;
 		return new ctor("submit", { bubbles: true, cancelable: true });
+	}
+
+	/** A bubbling `keydown` `KeyboardEvent` from this document's realm. */
+	keydownEvent(init: KeyboardEventInit): KeyboardEvent {
+		const ctor = (
+			this.dom.window as unknown as { KeyboardEvent: typeof KeyboardEvent }
+		).KeyboardEvent;
+		return new ctor("keydown", { bubbles: true, cancelable: true, ...init });
 	}
 
 	/** HTTP calls recorded for a given method + path. */
@@ -208,6 +224,19 @@ class Harness {
 			}
 		}
 
+		if (
+			method === "GET" &&
+			/^\/projects\/[^/]+\/sessions\/[^/]+\/messages$/.test(pathname)
+		) {
+			const before = new URLSearchParams(path.split("?")[1] ?? "").get(
+				"before",
+			);
+			const page = this.historyPages.get(before ?? "") ?? {
+				items: [],
+				cursor: null,
+			};
+			return jsonResponse(200, page);
+		}
 		if (
 			method === "POST" &&
 			/^\/projects\/[^/]+\/sessions\/[^/]+\/message$/.test(pathname)
@@ -436,5 +465,106 @@ test("sends a turn and interrupts through the composer", async () => {
 	assert.equal(
 		element<HTMLButtonElement>(harness.document, "send").disabled,
 		false,
+	);
+});
+
+test("Enter sends the composer, but empty input and Shift+Enter do not", async () => {
+	const harness = await openSession();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	source.message({ type: "ready", turnActive: false });
+	await flush();
+
+	const input = element<HTMLTextAreaElement>(harness.document, "input");
+	const messageCalls = () =>
+		harness.callsTo("POST", "/projects/k1/sessions/s1/message");
+
+	// A blank (or whitespace-only) box must not send.
+	input.value = "   ";
+	input.dispatchEvent(harness.keydownEvent({ key: "Enter" }));
+	await flush();
+	assert.equal(messageCalls().length, 0);
+
+	// Shift+Enter keeps the newline and does not send.
+	input.value = "line one";
+	input.dispatchEvent(harness.keydownEvent({ key: "Enter", shiftKey: true }));
+	await flush();
+	assert.equal(messageCalls().length, 0);
+	assert.equal(input.value, "line one");
+
+	// A plain Enter trims, sends, and clears the box.
+	input.value = "  hello from enter  ";
+	input.dispatchEvent(harness.keydownEvent({ key: "Enter" }));
+	await flush();
+	assert.equal(messageCalls().length, 1);
+	assert.deepEqual(messageCalls()[0]?.body, { input: "hello from enter" });
+	assert.equal(input.value, "");
+	assert.equal(
+		harness.document.querySelector("#transcript .msg.user")?.textContent,
+		"hello from enter",
+	);
+});
+
+test("loads a resumed session's history and pages older messages", async () => {
+	const harness = await Harness.create();
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	// The newest page (cursor 4 points at older entries) is ready before the
+	// session opens, so the client's first fetch picks it up.
+	harness.historyPages.set("", {
+		items: [
+			{ kind: "user", text: "earlier question" },
+			{ kind: "assistant", text: "earlier answer", reasoning: null },
+		],
+		cursor: 4,
+	});
+	element<HTMLButtonElement>(harness.document, "new-session").click();
+	await flush();
+
+	const transcript = harness.document.getElementById("transcript");
+	assert.equal(transcript?.querySelectorAll(".msg.user").length, 1);
+	assert.equal(
+		transcript?.querySelector(".msg.user")?.textContent,
+		"earlier question",
+	);
+	assert.equal(
+		transcript?.querySelector(".msg.assistant .content")?.textContent,
+		"earlier answer",
+	);
+	assert.equal(
+		element<HTMLButtonElement>(harness.document, "load-earlier").hidden,
+		false,
+	);
+
+	// The next older page arrives when the reader asks for it.
+	harness.historyPages.set("4", {
+		items: [{ kind: "tool", name: "read" }],
+		cursor: null,
+	});
+	element<HTMLButtonElement>(harness.document, "load-earlier").click();
+	await flush();
+
+	const first = transcript?.firstElementChild;
+	assert.equal(first?.className, "tool ok");
+	assert.equal(first?.textContent, "✓ read");
+	assert.equal(
+		transcript?.querySelectorAll(".msg.user").length,
+		1,
+		"older page is prepended, not replacing the current transcript",
+	);
+	assert.equal(
+		element<HTMLButtonElement>(harness.document, "load-earlier").hidden,
+		true,
+		"no older pages remain, so the control hides",
+	);
+
+	assert.equal(
+		harness.callsTo(
+			"GET",
+			"/projects/k1/sessions/s1/messages?limit=30&before=4",
+		).length,
+		1,
+		"the cursor is sent back as `before`",
 	);
 });

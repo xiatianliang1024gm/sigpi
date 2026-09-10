@@ -13,7 +13,12 @@ import type {
 	SessionTurnOutcome,
 	SessionTurnRunner,
 } from "../src/session/controller.js";
-import type { RuntimeLogger, TurnProgressEvent } from "../src/types.js";
+import type {
+	PersistedSession,
+	RuntimeLogger,
+	SessionEntry,
+	TurnProgressEvent,
+} from "../src/types.js";
 
 const noopLogger: RuntimeLogger = {
 	debug() {},
@@ -329,6 +334,93 @@ test("DELETE /projects/:key/sessions/:id retires the session", async () => {
 			{ method: "DELETE" },
 		);
 		assert.equal(again.status, 404);
+	});
+});
+
+/** A manager whose one stored session (`sessionId`) exposes `entries`. */
+async function withHistoryServer(
+	sessionId: string,
+	entries: SessionEntry[],
+	run: (baseUrl: string) => Promise<void>,
+): Promise<void> {
+	const manager = new SessionManager({
+		createRuntime: async () => makeRuntime("sess"),
+		listStoredSessions: async () => [],
+		readStoredSession: async (_cwd, id) => {
+			if (id !== sessionId) {
+				throw new Error(`Session ${id} not found`);
+			}
+			return { sessionId: id, entries } as unknown as PersistedSession;
+		},
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		await run(baseUrl);
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+}
+
+function historyUserEntry(text: string, id: string): SessionEntry {
+	return {
+		kind: "message",
+		id,
+		turnId: null,
+		timestamp: "2025-01-01T00:00:00.000Z",
+		message: { role: "user", content: text, id: `${id}-msg` },
+	};
+}
+
+test("GET .../messages pages a stored session's history newest-first", async () => {
+	const entries = Array.from({ length: 5 }, (_, i) =>
+		historyUserEntry(`m${i}`, `e${i}`),
+	);
+
+	await withHistoryServer("stored", entries, async (baseUrl) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		const base = `${baseUrl}/projects/${key}/sessions/stored/messages`;
+
+		const first = await fetch(`${base}?limit=2`);
+		assert.equal(first.status, 200);
+		const page1 = (await first.json()) as {
+			items: Array<{ text: string }>;
+			cursor: number | null;
+		};
+		assert.deepEqual(
+			page1.items.map((item) => item.text),
+			["m3", "m4"],
+		);
+		assert.equal(page1.cursor, 3);
+
+		const second = await fetch(`${base}?limit=2&before=3`);
+		const page2 = (await second.json()) as {
+			items: Array<{ text: string }>;
+			cursor: number | null;
+		};
+		assert.deepEqual(
+			page2.items.map((item) => item.text),
+			["m1", "m2"],
+		);
+		assert.equal(page2.cursor, 1);
+
+		const unknownSession = await fetch(
+			`${baseUrl}/projects/${key}/sessions/nope/messages`,
+		);
+		assert.equal(unknownSession.status, 404);
+		assert.deepEqual(await unknownSession.json(), {
+			error: "session_not_found",
+		});
+
+		const unknownProject = await fetch(
+			`${baseUrl}/projects/missing/sessions/stored/messages`,
+		);
+		assert.equal(unknownProject.status, 404);
+		assert.deepEqual(await unknownProject.json(), {
+			error: "project_not_found",
+		});
 	});
 });
 

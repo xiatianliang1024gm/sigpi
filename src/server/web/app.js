@@ -19,6 +19,7 @@ const els = {
 	sessions: document.getElementById("sessions"),
 	newSession: document.getElementById("new-session"),
 	transcript: document.getElementById("transcript"),
+	loadEarlier: document.getElementById("load-earlier"),
 	composer: document.getElementById("composer"),
 	input: document.getElementById("input"),
 	send: document.getElementById("send"),
@@ -35,7 +36,13 @@ const state = {
 	turnActive: false,
 	currentAssistant: null,
 	toolLines: new Map(),
+	/** Exclusive end index for the next older history page; null when none. */
+	historyCursor: null,
+	historyLoading: false,
 };
+
+/** Entries fetched per history page when resuming a session. */
+const HISTORY_PAGE_SIZE = 30;
 
 // --- transcript view -------------------------------------------------------
 
@@ -118,6 +125,7 @@ function clearTranscript() {
 	state.currentAssistant = null;
 	state.toolLines.clear();
 	els.transcript.textContent = "";
+	resetHistory();
 }
 
 function addUserMessage(text) {
@@ -126,6 +134,105 @@ function addUserMessage(text) {
 	el.textContent = text;
 	els.transcript.append(el);
 	scrollToEnd();
+}
+
+// --- history ---------------------------------------------------------------
+
+/** Build the DOM node for one server-projected history item. */
+function historyItemToElement(item) {
+	if (item.kind === "user") {
+		const el = document.createElement("div");
+		el.className = "msg user";
+		el.textContent = item.text;
+		return el;
+	}
+	if (item.kind === "assistant") {
+		const root = document.createElement("div");
+		root.className = "msg assistant";
+		if (item.reasoning) {
+			const reasoning = document.createElement("div");
+			reasoning.className = "reasoning";
+			reasoning.textContent = item.reasoning;
+			root.append(reasoning);
+		}
+		const content = document.createElement("div");
+		content.className = "content";
+		content.textContent = item.text;
+		root.append(content);
+		return root;
+	}
+	if (item.kind === "tool") {
+		const line = document.createElement("div");
+		line.className = "tool ok";
+		const label = document.createElement("span");
+		label.className = "tool-label";
+		label.textContent = `✓ ${item.name}`;
+		line.append(label);
+		return line;
+	}
+	const line = document.createElement("div");
+	line.className = "system info";
+	line.textContent = item.text;
+	return line;
+}
+
+/** Render a history page, either newest-page (append) or older (prepend). */
+function renderHistory(items, { prepend }) {
+	const fragment = document.createDocumentFragment();
+	for (const item of items) {
+		fragment.append(historyItemToElement(item));
+	}
+	if (!prepend) {
+		els.transcript.append(fragment);
+		scrollToEnd();
+		return;
+	}
+	// Prepending older content grows the scroll height above the viewport;
+	// shift scrollTop by the delta so the reader's position stays put.
+	const previousHeight = els.transcript.scrollHeight;
+	els.transcript.insertBefore(fragment, els.transcript.firstChild);
+	els.transcript.scrollTop += els.transcript.scrollHeight - previousHeight;
+}
+
+function resetHistory() {
+	state.historyCursor = null;
+	state.historyLoading = false;
+	updateLoadEarlier();
+}
+
+function updateLoadEarlier() {
+	els.loadEarlier.hidden = !state.sessionId || state.historyCursor === null;
+	els.loadEarlier.disabled = state.historyLoading;
+}
+
+/**
+ * Load a page of persisted history for the active session. The newest page is
+ * fetched on session select; `older` walks backwards using the server cursor.
+ */
+async function loadHistory({ older = false } = {}) {
+	if (!state.projectKey || !state.sessionId) return;
+	if (state.historyLoading) return;
+	if (older && state.historyCursor === null) return;
+	const sessionId = state.sessionId;
+	const projectKey = state.projectKey;
+	state.historyLoading = true;
+	updateLoadEarlier();
+	try {
+		const params = new URLSearchParams({ limit: String(HISTORY_PAGE_SIZE) });
+		if (older && state.historyCursor !== null) {
+			params.set("before", String(state.historyCursor));
+		}
+		const page = await requestJson(`${sessionBase()}/messages?${params}`);
+		// Drop the result if the user switched sessions mid-flight.
+		if (state.sessionId !== sessionId || state.projectKey !== projectKey) return;
+		state.historyCursor = page?.cursor ?? null;
+		renderHistory(page?.items ?? [], { prepend: older });
+	} catch (error) {
+		showError(error.message);
+	} finally {
+		state.historyLoading = false;
+		updateLoadEarlier();
+	}
 }
 
 // --- event handling --------------------------------------------------------
@@ -333,6 +440,7 @@ async function selectSession(sessionId, { resume }) {
 	connect();
 	els.input.disabled = false;
 	els.input.focus();
+	void loadHistory();
 }
 
 // --- transport -------------------------------------------------------------
@@ -431,12 +539,36 @@ els.newSession.addEventListener("click", () => {
 	createSession().catch((error) => showError(error.message));
 });
 
-els.composer.addEventListener("submit", (event) => {
-	event.preventDefault();
+els.loadEarlier.addEventListener("click", () => {
+	void loadHistory({ older: true });
+});
+
+// Auto-load the next older page when the reader reaches the top of the scroll.
+els.transcript.addEventListener("scroll", () => {
+	if (els.transcript.scrollTop > 64) return;
+	if (state.historyCursor === null || state.historyLoading) return;
+	void loadHistory({ older: true });
+});
+
+function submitComposer() {
+	if (!state.sessionId || state.turnActive) return;
 	const text = els.input.value.trim();
 	if (!text) return;
 	els.input.value = "";
 	void sendMessage(text);
+}
+
+els.composer.addEventListener("submit", (event) => {
+	event.preventDefault();
+	submitComposer();
+});
+
+// Enter sends; Shift+Enter keeps its newline so multi-line prompts still work.
+// IME composition (candidate selection) must not submit mid-word.
+els.input.addEventListener("keydown", (event) => {
+	if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+	event.preventDefault();
+	submitComposer();
 });
 
 els.interrupt.addEventListener("click", () => {

@@ -18,7 +18,12 @@ import type {
 	SessionTurnOutcome,
 	SessionTurnRunner,
 } from "../src/session/controller.js";
-import type { RuntimeLogger, TurnProgressEvent } from "../src/types.js";
+import type {
+	PersistedSession,
+	RuntimeLogger,
+	SessionEntry,
+	TurnProgressEvent,
+} from "../src/types.js";
 
 const noopLogger: RuntimeLogger = {
 	debug() {},
@@ -240,4 +245,49 @@ test("sweepIdle is a no-op without a TTL", async () => {
 test("listStoredSessions returns null for an unknown project", async () => {
 	const { manager } = makeManager();
 	assert.equal(await manager.listStoredSessions("nope"), null);
+});
+
+function messageEntry(
+	role: "user" | "assistant",
+	content: string,
+	id: string,
+): SessionEntry {
+	return {
+		kind: "message",
+		id,
+		turnId: null,
+		timestamp: "2025-01-01T00:00:00.000Z",
+		message: { role, content, id: `${id}-msg` },
+	};
+}
+
+test("readSessionEntries returns a stored session's entry stream", async () => {
+	const dir = await tempDir();
+	const entries: SessionEntry[] = [
+		messageEntry("user", "hi", "m1"),
+		messageEntry("assistant", "hello", "m2"),
+	];
+	const { manager } = makeManager({
+		readStoredSession: async () => ({ entries }) as unknown as PersistedSession,
+	});
+	const project = await manager.addProject(dir);
+
+	assert.deepEqual(
+		await manager.readSessionEntries(project.key, "s1"),
+		entries,
+	);
+});
+
+test("readSessionEntries is null for an unknown project or session", async () => {
+	const dir = await tempDir();
+	const { manager } = makeManager({
+		readStoredSession: async () => {
+			throw new Error("Session not found");
+		},
+	});
+
+	assert.equal(await manager.readSessionEntries("nope", "s1"), null);
+
+	const project = await manager.addProject(dir);
+	assert.equal(await manager.readSessionEntries(project.key, "s1"), null);
 });

@@ -53,6 +53,7 @@ body.busy .status::before {
 .layout {
 	display: grid;
 	grid-template-columns: 280px 1fr;
+	grid-template-rows: minmax(0, 1fr);
 	height: calc(100% - 45px);
 }
 
@@ -138,10 +139,24 @@ button:disabled {
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
+	min-height: 0;
+}
+
+.load-earlier {
+	margin: 10px 16px 0;
+	padding: 6px 12px;
+	align-self: center;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+
+.load-earlier[hidden] {
+	display: none;
 }
 
 .transcript {
 	flex: 1;
+	min-height: 0;
 	overflow-y: auto;
 	padding: 16px;
 	display: flex;

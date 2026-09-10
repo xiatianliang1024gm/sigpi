@@ -9,6 +9,7 @@ import {
 	DirectoryPickerUnavailableError,
 	pickDirectory as defaultPickDirectory,
 } from "./directory-picker.js";
+import { projectHistoryPage } from "./history.js";
 import {
 	handleSessionEvents,
 	handleSessionMessage,
@@ -55,6 +56,7 @@ const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
  * GET    /projects/:key/sessions                    list stored + live sessions
  * POST   /projects/:key/sessions  { sessionId? }    create (or resume) a live session
  * GET    /projects/:key/sessions/:id/events         stream the session's SSE events
+ * GET    /projects/:key/sessions/:id/messages       page persisted history (newest first)
  * POST   /projects/:key/sessions/:id/message        submit one turn
  * POST   /projects/:key/sessions/:id/interrupt      interrupt the in-flight turn
  * DELETE /projects/:key/sessions/:id                retire the live session
@@ -185,11 +187,22 @@ async function route(
 
 	// /projects/:key/sessions/:id/<sub>
 	if (segments.length === 5) {
+		const sub = segments[4];
+		// History reads a stored session and must not require it to be live.
+		if (method === "GET" && sub === "messages") {
+			await handleSessionHistory(
+				res,
+				manager,
+				projectKey,
+				sessionId,
+				url.searchParams,
+			);
+			return;
+		}
 		const session = resolveSession(manager, projectKey, sessionId, res);
 		if (!session) {
 			return;
 		}
-		const sub = segments[4];
 		if (method === "GET" && sub === "events") {
 			manager.touch(session);
 			handleSessionEvents(req, res, session.controller);
@@ -293,6 +306,44 @@ async function handleListSessions(
 			turnActive: session.controller.isTurnActive(),
 		})),
 	});
+}
+
+/**
+ * Page a session's persisted history, newest-first. Unlike the live routes,
+ * this resolves a *stored* session (so a session that is not currently live
+ * still loads), returning one page of renderable items plus a cursor for the
+ * next-older page.
+ */
+async function handleSessionHistory(
+	res: ServerResponse,
+	manager: SessionManager,
+	projectKey: string,
+	sessionId: string,
+	params: URLSearchParams,
+): Promise<void> {
+	if (!manager.getProject(projectKey)) {
+		writeJson(res, 404, { error: "project_not_found" });
+		return;
+	}
+	const entries = await manager.readSessionEntries(projectKey, sessionId);
+	if (entries === null) {
+		writeJson(res, 404, { error: "session_not_found" });
+		return;
+	}
+	const page = projectHistoryPage(entries, {
+		before: parseNumberParam(params.get("before")),
+		limit: parseNumberParam(params.get("limit")),
+	});
+	writeJson(res, 200, { items: page.items, cursor: page.cursor });
+}
+
+/** Parse an optional numeric query param; non-numeric or absent → undefined. */
+function parseNumberParam(raw: string | null): number | undefined {
+	if (raw === null || raw.trim() === "") {
+		return undefined;
+	}
+	const value = Number(raw);
+	return Number.isFinite(value) ? value : undefined;
 }
 
 async function handleCreateSession(
