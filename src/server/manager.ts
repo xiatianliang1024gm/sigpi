@@ -1,0 +1,357 @@
+import { stat } from "node:fs/promises";
+import path from "node:path";
+import { createAgentRuntime, createRuntimeSessionStore } from "../runtime.js";
+import {
+	SessionController,
+	type SessionControllerRuntime,
+} from "../session/controller.js";
+import { createProjectKey } from "../session/paths.js";
+import type { SessionSummary } from "../types.js";
+
+/**
+ * The slice of a runtime a {@link SessionManager} owns: the headless
+ * `SessionControllerRuntime` surface plus the identity (`sessionId`) and
+ * teardown (`dispose`) the registry needs. `AgentRuntime` satisfies this once
+ * adapted (see {@link defaultCreateRuntime}), and tests inject a lighter fake.
+ */
+export interface ManagedRuntime extends SessionControllerRuntime {
+	/** Persisted id of the runtime's active session. */
+	readonly sessionId: string;
+	/** Release the runtime's per-session resources. */
+	dispose(): void | Promise<void>;
+}
+
+/** A directory the server has been told to host sessions for. */
+export interface ProjectEntry {
+	/** Stable `<slug>-<sha256前16>` key from {@link createProjectKey}. */
+	key: string;
+	/** Absolute, normalized project directory. */
+	cwd: string;
+	addedAt: number;
+}
+
+/** One live, in-process session and everything needed to drive and retire it. */
+export interface SessionEntry {
+	/** `${cwd}\u0000${sessionId}` — unique across projects. */
+	key: string;
+	projectKey: string;
+	cwd: string;
+	sessionId: string;
+	controller: SessionController;
+	runtime: ManagedRuntime;
+	createdAt: number;
+	lastActivityAt: number;
+}
+
+export interface SessionManagerOptions {
+	/**
+	 * Build a runtime for a project. Mirrors `createAgentRuntime`'s session
+	 * arguments: pass `sessionId` to resume, omit it to start a fresh session.
+	 * Injected in tests so no real runtime/provider is constructed.
+	 */
+	createRuntime?: (args: {
+		cwd: string;
+		sessionId?: string;
+	}) => Promise<ManagedRuntime>;
+	/** Wrap a runtime in a controller. Defaults to `new SessionController`. */
+	createController?: (runtime: ManagedRuntime) => SessionController;
+	/** List persisted session summaries for a project directory. */
+	listStoredSessions?: (cwd: string) => Promise<SessionSummary[]>;
+	/** Injectable clock (tests). Defaults to `Date.now`. */
+	now?: () => number;
+	/** Idle TTL in ms; sessions idle longer are retired by {@link sweepIdle}. */
+	idleTtlMs?: number;
+	/** Max concurrent live sessions; `0` (default) means unlimited. */
+	maxSessions?: number;
+}
+
+export type SessionManagerErrorCode =
+	| "invalid_project_path"
+	| "project_not_found"
+	| "session_not_found"
+	| "session_limit_reached";
+
+/** Typed failure so the HTTP layer can map a manager error to a status code. */
+export class SessionManagerError extends Error {
+	readonly code: SessionManagerErrorCode;
+
+	constructor(code: SessionManagerErrorCode, message: string) {
+		super(message);
+		this.name = "SessionManagerError";
+		this.code = code;
+	}
+}
+
+/** Canonical key for a `(cwd, sessionId)` pair. */
+export function sessionKey(cwd: string, sessionId: string): string {
+	return `${path.resolve(cwd)}\u0000${sessionId}`;
+}
+
+async function defaultCreateRuntime(args: {
+	cwd: string;
+	sessionId?: string;
+}): Promise<ManagedRuntime> {
+	// No `sessionId` → start a fresh session; otherwise resume the given one.
+	const runtime = await createAgentRuntime({
+		cwd: args.cwd,
+		sessionId: args.sessionId,
+		createSession: args.sessionId ? undefined : true,
+	});
+	return {
+		runner: runtime.runner,
+		turn: runtime.turn,
+		logger: runtime.logger,
+		sessionId: runtime.session?.sessionId ?? "",
+		dispose: () => runtime.dispose(),
+	};
+}
+
+async function defaultListStoredSessions(
+	cwd: string,
+): Promise<SessionSummary[]> {
+	return createRuntimeSessionStore({ cwd }).listSessions();
+}
+
+/**
+ * Process-level registry of hosted projects and their live sessions. A single
+ * `SessionManager` backs the multi-session web frontend: each added directory
+ * becomes a project (one `projectKey`, so its session files land under that
+ * project's directory automatically), and each project can run many sessions
+ * in parallel — each with its own runtime, tools, context, and controller.
+ *
+ * This layer is deliberately UI-neutral and git-free (see the multi-frontend
+ * handover): it never touches the terminal, `src/tui/`, or the branch watcher,
+ * and it defines no SSE/HTTP concerns — it only owns session lifecycle.
+ */
+export class SessionManager {
+	private readonly projects = new Map<string, ProjectEntry>();
+	private readonly sessions = new Map<string, SessionEntry>();
+	private readonly createRuntimeFn: (args: {
+		cwd: string;
+		sessionId?: string;
+	}) => Promise<ManagedRuntime>;
+	private readonly createControllerFn: (
+		runtime: ManagedRuntime,
+	) => SessionController;
+	private readonly listStoredSessionsFn: (
+		cwd: string,
+	) => Promise<SessionSummary[]>;
+	private readonly now: () => number;
+	readonly idleTtlMs: number;
+	readonly maxSessions: number;
+
+	constructor(options: SessionManagerOptions = {}) {
+		this.createRuntimeFn = options.createRuntime ?? defaultCreateRuntime;
+		this.createControllerFn =
+			options.createController ?? ((runtime) => new SessionController(runtime));
+		this.listStoredSessionsFn =
+			options.listStoredSessions ?? defaultListStoredSessions;
+		this.now = options.now ?? (() => Date.now());
+		this.idleTtlMs = options.idleTtlMs ?? 0;
+		this.maxSessions = options.maxSessions ?? 0;
+	}
+
+	// --- projects ---------------------------------------------------------
+
+	/**
+	 * Register a project directory. Validates that the path exists and is a
+	 * directory, then keys it by {@link createProjectKey}. Idempotent: adding
+	 * an already-known directory returns the existing entry.
+	 */
+	async addProject(cwd: string): Promise<ProjectEntry> {
+		const resolved = path.resolve(cwd);
+		const key = createProjectKey(resolved);
+		const existing = this.projects.get(key);
+		if (existing) {
+			return existing;
+		}
+
+		let stats: Awaited<ReturnType<typeof stat>>;
+		try {
+			stats = await stat(resolved);
+		} catch {
+			throw new SessionManagerError(
+				"invalid_project_path",
+				`Project directory does not exist: ${resolved}`,
+			);
+		}
+		if (!stats.isDirectory()) {
+			throw new SessionManagerError(
+				"invalid_project_path",
+				`Project path is not a directory: ${resolved}`,
+			);
+		}
+
+		const entry: ProjectEntry = { key, cwd: resolved, addedAt: this.now() };
+		this.projects.set(key, entry);
+		return entry;
+	}
+
+	/** All registered projects, oldest first. */
+	listProjects(): ProjectEntry[] {
+		return [...this.projects.values()].sort((a, b) => a.addedAt - b.addedAt);
+	}
+
+	getProject(projectKey: string): ProjectEntry | undefined {
+		return this.projects.get(projectKey);
+	}
+
+	/**
+	 * Remove a project and retire every session it hosts. Returns `false` when
+	 * the project was never registered.
+	 */
+	async removeProject(projectKey: string): Promise<boolean> {
+		const project = this.projects.get(projectKey);
+		if (!project) {
+			return false;
+		}
+		for (const session of [...this.sessions.values()]) {
+			if (session.projectKey === projectKey) {
+				await this.disposeSessionEntry(session);
+			}
+		}
+		this.projects.delete(projectKey);
+		return true;
+	}
+
+	/** Persisted session summaries for a project, or `null` if unknown. */
+	async listStoredSessions(
+		projectKey: string,
+	): Promise<SessionSummary[] | null> {
+		const project = this.projects.get(projectKey);
+		if (!project) {
+			return null;
+		}
+		return this.listStoredSessionsFn(project.cwd);
+	}
+
+	// --- sessions ---------------------------------------------------------
+
+	/**
+	 * Create (or resume) a live session under a project. Omit `sessionId` to
+	 * start a fresh session; pass one to reattach an existing persisted
+	 * session. Returns the existing entry when already live so clients can
+	 * re-`POST` idempotently.
+	 */
+	async createSession(args: {
+		projectKey: string;
+		sessionId?: string;
+	}): Promise<SessionEntry> {
+		const project = this.projects.get(args.projectKey);
+		if (!project) {
+			throw new SessionManagerError(
+				"project_not_found",
+				`Unknown project: ${args.projectKey}`,
+			);
+		}
+
+		if (args.sessionId) {
+			const existing = this.sessions.get(
+				sessionKey(project.cwd, args.sessionId),
+			);
+			if (existing) {
+				return existing;
+			}
+		}
+
+		if (this.maxSessions > 0 && this.sessions.size >= this.maxSessions) {
+			throw new SessionManagerError(
+				"session_limit_reached",
+				`Live session limit reached (${this.maxSessions}).`,
+			);
+		}
+
+		const runtime = await this.createRuntimeFn({
+			cwd: project.cwd,
+			sessionId: args.sessionId,
+		});
+		const sessionId = runtime.sessionId || args.sessionId || "";
+		const entry: SessionEntry = {
+			key: sessionKey(project.cwd, sessionId),
+			projectKey: project.key,
+			cwd: project.cwd,
+			sessionId,
+			controller: this.createControllerFn(runtime),
+			runtime,
+			createdAt: this.now(),
+			lastActivityAt: this.now(),
+		};
+		this.sessions.set(entry.key, entry);
+		return entry;
+	}
+
+	/** Look up a live session by project and persisted session id. */
+	getSession(projectKey: string, sessionId: string): SessionEntry | undefined {
+		const project = this.projects.get(projectKey);
+		if (!project) {
+			return undefined;
+		}
+		return this.sessions.get(sessionKey(project.cwd, sessionId));
+	}
+
+	/** Live sessions, most recently active first; scoped to a project if given. */
+	listSessions(projectKey?: string): SessionEntry[] {
+		return [...this.sessions.values()]
+			.filter((session) => !projectKey || session.projectKey === projectKey)
+			.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+	}
+
+	/** Mark a session as active now, so idle sweeping spares it. */
+	touch(session: SessionEntry): void {
+		session.lastActivityAt = this.now();
+	}
+
+	/** Retire one live session. Returns `false` when it was not live. */
+	async disposeSession(
+		projectKey: string,
+		sessionId: string,
+	): Promise<boolean> {
+		const session = this.getSession(projectKey, sessionId);
+		if (!session) {
+			return false;
+		}
+		await this.disposeSessionEntry(session);
+		return true;
+	}
+
+	/** Retire every live session (e.g. on server shutdown). */
+	async disposeAll(): Promise<void> {
+		for (const session of [...this.sessions.values()]) {
+			await this.disposeSessionEntry(session);
+		}
+		this.projects.clear();
+	}
+
+	/**
+	 * Retire every session idle longer than `idleTtlMs` (a running turn keeps a
+	 * session alive). No-op when no TTL is configured. Returns the count
+	 * retired.
+	 */
+	async sweepIdle(): Promise<number> {
+		if (this.idleTtlMs <= 0) {
+			return 0;
+		}
+		const cutoff = this.now() - this.idleTtlMs;
+		let retired = 0;
+		for (const session of [...this.sessions.values()]) {
+			if (session.controller.isTurnActive()) {
+				continue;
+			}
+			if (session.lastActivityAt < cutoff) {
+				await this.disposeSessionEntry(session);
+				retired += 1;
+			}
+		}
+		return retired;
+	}
+
+	private async disposeSessionEntry(session: SessionEntry): Promise<void> {
+		this.sessions.delete(session.key);
+		try {
+			await session.runtime.dispose();
+		} catch {
+			// Teardown is best-effort: a failed dispose must not wedge the
+			// registry or block retiring the remaining sessions.
+		}
+	}
+}

@@ -36,3 +36,20 @@ turn summary is a separate, user-facing artifact. Retired: turn checkpoint,
   See `AGENTS.md` for the reading path.
 - **ADR 0027** — Drop turn history from the session meta file.
   `docs/adr/0027-drop-turn-history.md`.
+- **ADR 0028** — Frontend-agnostic session controller: a headless
+  `SessionController` between the runtime and every frontend, plus the UI-neutral
+  reducer and an SSE transport. `docs/adr/0028-frontend-agnostic-session-controller.md`.
+
+## Terms (continued)
+
+### Session controller
+The headless orchestrator (`src/session/controller.ts`) that owns an agent
+turn's lifecycle and its `TurnInterruptController`, and exposes one
+`onProgress` stream plus `submit`/`requestInterrupt`. Both the TUI and the
+web/SSE frontend hold one; it never touches the terminal.
+
+### Turn transcript view
+The minimal output surface (`TurnTranscriptView`, `src/session/events.ts`) that
+`applyTurnProgress` folds `TurnProgressEvent`s into. `ReplView` (TUI) and a web
+transcript sink both implement it, which is what lets one reducer drive every
+frontend.
