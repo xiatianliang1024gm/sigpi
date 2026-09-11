@@ -9,6 +9,10 @@
 	--accent: #6ea8fe;
 	--error: #ff6b6b;
 	--ok: #5fd08a;
+	/* Workspace column width; driven by the draggable divider in `app.js`. */
+	--sidebar-width: 280px;
+	/* Max width of the centered message/input column inside the chat pane. */
+	--chat-max: 820px;
 }
 
 * {
@@ -52,18 +56,55 @@ body.busy .status::before {
 
 .layout {
 	display: grid;
-	grid-template-columns: 280px 1fr;
+	grid-template-columns: var(--sidebar-width) 7px minmax(0, 1fr);
 	grid-template-rows: minmax(0, 1fr);
 	height: calc(100% - 45px);
 }
 
 .sidebar {
-	border-right: 1px solid var(--border);
 	padding: 12px;
 	overflow-y: auto;
 	display: flex;
 	flex-direction: column;
 	gap: 16px;
+}
+
+/* --- draggable workspace / conversation divider ---------------------------- */
+
+.resizer {
+	position: relative;
+	cursor: col-resize;
+	background: transparent;
+	touch-action: none;
+}
+
+/* The visible one-pixel rule sits centered in the wider grab target. */
+.resizer::after {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 50%;
+	width: 1px;
+	background: var(--border);
+	transform: translateX(-50%);
+}
+
+.resizer:hover::after,
+.resizer:focus-visible::after,
+.resizer.dragging::after {
+	width: 2px;
+	background: var(--accent);
+}
+
+.resizer:focus-visible {
+	outline: none;
+}
+
+/* Keep the pointer column-resize cursor while a drag is in progress. */
+body.resizing {
+	cursor: col-resize;
+	user-select: none;
 }
 
 .panel h2 {
@@ -83,8 +124,8 @@ body.busy .status::before {
 
 .list-item {
 	text-align: left;
-	background: var(--panel);
-	border: 1px solid var(--border);
+	background: transparent;
+	border: none;
 	color: var(--text);
 	border-radius: 6px;
 	padding: 6px 8px;
@@ -92,6 +133,7 @@ body.busy .status::before {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	min-width: 0;
 }
 
 .list-item:hover {
@@ -99,7 +141,7 @@ body.busy .status::before {
 }
 
 .list-item.active {
-	border-color: var(--accent);
+	color: var(--accent);
 }
 
 /* --- project → session tree ------------------------------------------------ */
@@ -153,6 +195,7 @@ body.busy .status::before {
 	display: flex;
 	align-items: center;
 	gap: 4px;
+	position: relative;
 }
 
 .project-toggle {
@@ -161,14 +204,16 @@ body.busy .status::before {
 	border: none;
 	color: var(--muted);
 	font-size: 12px;
+	cursor: pointer;
+	line-height: 1;
 }
 
 .project-name {
 	flex: 1;
 	min-width: 0;
 	text-align: left;
-	background: var(--panel);
-	border: 1px solid var(--border);
+	background: transparent;
+	border: none;
 	color: var(--text);
 	border-radius: 6px;
 	padding: 6px 8px;
@@ -178,8 +223,12 @@ body.busy .status::before {
 	white-space: nowrap;
 }
 
+.project-name:hover {
+	background: var(--panel-2);
+}
+
 .project.active > .project-header .project-name {
-	border-color: var(--accent);
+	color: var(--accent);
 }
 
 .sessions {
@@ -193,6 +242,7 @@ body.busy .status::before {
 	display: flex;
 	align-items: center;
 	gap: 4px;
+	position: relative;
 }
 
 .session-row .session {
@@ -201,7 +251,91 @@ body.busy .status::before {
 }
 
 .session-row.active .session {
-	border-color: var(--accent);
+	color: var(--accent);
+}
+
+/* The last-update time pinned to the row's right edge; never truncated. */
+.session-row .session-time {
+	flex: none;
+	color: var(--muted);
+	font-size: 12px;
+	white-space: nowrap;
+	text-align: right;
+}
+
+/* --- row menus ------------------------------------------------------------- */
+
+/* The "⋯" trigger stays hidden until its row is hovered (or focused). */
+.menu-button {
+	flex: none;
+	padding: 2px 6px;
+	line-height: 1.2;
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	border-radius: 6px;
+	cursor: pointer;
+	opacity: 0;
+}
+
+.project-header:hover .menu-button,
+.session-row:hover .menu-button,
+.menu-button:focus-visible {
+	opacity: 1;
+}
+
+.menu-button:hover {
+	color: var(--text);
+	background: var(--panel-2);
+}
+
+.menu {
+	position: absolute;
+	top: calc(100% - 2px);
+	right: 0;
+	z-index: 20;
+	min-width: 148px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 4px;
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.menu-item {
+	text-align: left;
+	background: transparent;
+	border: none;
+	color: var(--text);
+	border-radius: 6px;
+	padding: 6px 10px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.menu-item:hover {
+	background: var(--panel);
+}
+
+.menu-item.danger {
+	color: var(--error);
+}
+
+.menu-item.danger:hover {
+	background: rgba(255, 107, 107, 0.14);
+}
+
+.menu-item.armed {
+	font-weight: 700;
+}
+
+.rename-input {
+	flex: 1;
+	min-width: 0;
+	padding: 4px 6px;
 }
 
 .empty {
@@ -266,7 +400,8 @@ button:disabled {
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
-	padding: 16px;
+	/* Center the message column, keeping equal whitespace on either side. */
+	padding: 16px max(16px, calc((100% - var(--chat-max)) / 2));
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
@@ -286,12 +421,141 @@ button:disabled {
 	border-radius: 10px;
 }
 
+/* --- collapsible reasoning ------------------------------------------------- */
+
 .msg.assistant .reasoning {
+	margin-bottom: 6px;
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.reasoning[hidden] {
+	display: none;
+}
+
+/* The single always-visible line: a disclosure arrow, a label, and a preview. */
+.reasoning-summary {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 8px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	cursor: pointer;
+	list-style: none;
+	overflow: hidden;
+}
+.reasoning-summary::-webkit-details-marker {
+	display: none;
+}
+.reasoning-summary::before {
+	content: "▸";
+	flex: none;
+	color: var(--muted);
+	font-size: 10px;
+	transition: transform 0.12s ease;
+}
+.reasoning[open] .reasoning-summary::before {
+	transform: rotate(90deg);
+}
+.reasoning-summary:hover {
+	border-color: var(--accent);
+}
+
+.reasoning-label {
+	flex: none;
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+/* The first line of the reasoning, clipped to keep the summary to one row. */
+.reasoning-preview {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	color: var(--muted);
 	font-style: italic;
-	font-size: 13px;
+}
+
+.reasoning-body {
+	margin-top: 4px;
+	padding: 8px 10px;
+	border-left: 2px solid var(--border);
+	color: var(--muted);
+	font-style: italic;
 	white-space: pre-wrap;
-	margin-bottom: 4px;
+	overflow-wrap: anywhere;
+}
+
+/* --- markdown-rendered assistant content ----------------------------------- */
+
+/* Markdown supplies its own block structure, so drop the transcript's
+   pre-wrap (which would otherwise preserve inter-element newlines). */
+.msg.assistant .content {
+	white-space: normal;
+}
+
+.content > :first-child {
+	margin-top: 0;
+}
+.content > :last-child {
+	margin-bottom: 0;
+}
+.content p {
+	margin: 0 0 8px;
+}
+.content h1,
+.content h2,
+.content h3,
+.content h4,
+.content h5,
+.content h6 {
+	margin: 12px 0 6px;
+	line-height: 1.3;
+}
+.content ul,
+.content ol {
+	margin: 0 0 8px;
+	padding-left: 22px;
+}
+.content li {
+	margin: 2px 0;
+}
+.content a {
+	color: var(--accent);
+}
+.content code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12.5px;
+	background: var(--panel-2);
+	padding: 1px 4px;
+	border-radius: 4px;
+}
+.content pre {
+	margin: 0 0 8px;
+	padding: 10px 12px;
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	overflow-x: auto;
+}
+.content pre code {
+	padding: 0;
+	background: none;
+}
+.content blockquote {
+	margin: 0 0 8px;
+	padding-left: 10px;
+	border-left: 3px solid var(--border);
+	color: var(--muted);
+}
+.content hr {
+	margin: 10px 0;
+	border: none;
+	border-top: 1px solid var(--border);
 }
 
 .tool {
@@ -333,7 +597,8 @@ button:disabled {
 
 .composer {
 	border-top: 1px solid var(--border);
-	padding: 12px 16px;
+	/* Match the transcript so the input column lines up with the messages. */
+	padding: 12px max(16px, calc((100% - var(--chat-max)) / 2));
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
@@ -341,6 +606,62 @@ button:disabled {
 
 .composer-actions {
 	display: flex;
-	justify-content: flex-end;
+	align-items: center;
+	justify-content: space-between;
 	gap: 8px;
+}
+
+.model-select {
+	max-width: 60%;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	color: var(--text);
+	border-radius: 6px;
+	padding: 6px 9px;
+	font: inherit;
+	cursor: pointer;
+}
+
+/* One button for both actions: an up-arrow when idle, a stop square mid-turn. */
+.composer-submit {
+	flex: none;
+	width: 38px;
+	height: 38px;
+	padding: 0;
+	border-radius: 50%;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--accent);
+	border-color: var(--accent);
+	color: #0b1220;
+}
+
+.composer-submit:disabled {
+	background: var(--panel-2);
+	border-color: var(--border);
+	color: var(--muted);
+}
+
+.composer-submit .icon {
+	width: 20px;
+	height: 20px;
+	fill: currentColor;
+}
+
+.composer-submit .icon-stop {
+	display: none;
+}
+
+.composer-submit.is-stop .icon-send {
+	display: none;
+}
+
+.composer-submit.is-stop .icon-stop {
+	display: block;
+}
+
+.composer-submit.is-stop:not(:disabled) {
+	background: var(--error);
+	border-color: var(--error);
 }

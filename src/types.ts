@@ -639,6 +639,12 @@ export interface PersistedSession {
 	turnCount: number;
 	lastCompletedUserInput: string | null;
 	lastTurn: SessionTurnRecord | null;
+	/**
+	 * Whether the session is archived: its history is retained on disk but the
+	 * session is hidden from the workspace tree. Absent on sessions saved before
+	 * this field existed (treated as `false`).
+	 */
+	archived?: boolean;
 }
 
 export interface SessionSummary {
@@ -654,6 +660,8 @@ export interface SessionSummary {
 	 * `null` for sessions saved before this field existed.
 	 */
 	estimatedTokens: number | null;
+	/** Whether the session is archived (hidden from the tree). Defaults false. */
+	archived?: boolean;
 }
 
 export interface LoadedSession {

@@ -9,6 +9,8 @@ import path from "node:path";
 export interface RegisteredProject {
 	cwd: string;
 	addedAt: number;
+	/** Optional user-chosen display name; falls back to the folder name. */
+	name?: string;
 }
 
 interface ProjectStoreOptions {
@@ -82,11 +84,16 @@ function parseProjectRegistry(raw: string): RegisteredProject[] {
 			continue;
 		}
 		const addedAt = (entry as { addedAt?: unknown }).addedAt;
-		projects.push({
+		const project: RegisteredProject = {
 			cwd,
 			addedAt:
 				typeof addedAt === "number" && Number.isFinite(addedAt) ? addedAt : 0,
-		});
+		};
+		const name = (entry as { name?: unknown }).name;
+		if (typeof name === "string" && name.trim()) {
+			project.name = name.trim();
+		}
+		projects.push(project);
 	}
 	return projects;
 }

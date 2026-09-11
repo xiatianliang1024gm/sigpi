@@ -24,6 +24,10 @@ const ASSETS: Record<string, { file: string; contentType: string }> = {
 		file: "reducer.js",
 		contentType: "text/javascript; charset=utf-8",
 	},
+	"/markdown.js": {
+		file: "markdown.js",
+		contentType: "text/javascript; charset=utf-8",
+	},
 	"/styles.css": { file: "styles.css", contentType: "text/css; charset=utf-8" },
 };
 

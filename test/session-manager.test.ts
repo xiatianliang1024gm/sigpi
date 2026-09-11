@@ -111,6 +111,54 @@ test("addProject validates the directory and is idempotent", async () => {
 	);
 });
 
+test("renameProject sets and clears the display name and persists", async () => {
+	const dir = await tempDir();
+	const saved: Array<Array<{ cwd: string; name?: string }>> = [];
+	const { manager } = makeManager({
+		saveProjectRegistry: async (projects) => {
+			saved.push(
+				projects.map((project) => ({ cwd: project.cwd, name: project.name })),
+			);
+		},
+	});
+	const project = await manager.addProject(dir);
+
+	const renamed = await manager.renameProject(project.key, "我的工作区");
+	assert.equal(renamed?.name, "我的工作区");
+	assert.equal(saved.at(-1)?.[0]?.name, "我的工作区");
+
+	// A blank name clears the override back to the folder name.
+	await manager.renameProject(project.key, "   ");
+	assert.equal(manager.getProject(project.key)?.name, undefined);
+
+	assert.equal(await manager.renameProject("nope", "x"), undefined);
+});
+
+test("renameSession and setSessionArchived delegate to the stored store", async () => {
+	const dir = await tempDir();
+	const renamed: Array<[string, string | null]> = [];
+	const archived: Array<[string, boolean]> = [];
+	const { manager } = makeManager({
+		renameStoredSession: async (_cwd, sessionId, title) => {
+			renamed.push([sessionId, title]);
+			return true;
+		},
+		setStoredSessionArchived: async (_cwd, sessionId, value) => {
+			archived.push([sessionId, value]);
+			return true;
+		},
+	});
+	const project = await manager.addProject(dir);
+
+	assert.equal(await manager.renameSession(project.key, "s1", "Title"), true);
+	assert.deepEqual(renamed, [["s1", "Title"]]);
+	assert.equal(await manager.setSessionArchived(project.key, "s1", true), true);
+	assert.deepEqual(archived, [["s1", true]]);
+
+	assert.equal(await manager.renameSession("nope", "s1", "T"), false);
+	assert.equal(await manager.setSessionArchived("nope", "s1", true), false);
+});
+
 test("createSession starts fresh sessions with isolated runtimes", async () => {
 	const dir = await tempDir();
 	const { manager } = makeManager();

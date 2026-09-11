@@ -170,6 +170,11 @@ test("client assets are served and unknown paths still 404", async () => {
 		assert.equal(reducer.status, 200);
 		assert.match(await reducer.text(), /export function applyTurnProgress/);
 
+		const markdown = await fetch(`${baseUrl}/markdown.js`);
+		assert.equal(markdown.status, 200);
+		assert.match(markdown.headers.get("content-type") ?? "", /javascript/);
+		assert.match(await markdown.text(), /export function renderMarkdown/);
+
 		const css = await fetch(`${baseUrl}/styles.css`);
 		assert.equal(css.status, 200);
 		assert.match(css.headers.get("content-type") ?? "", /text\/css/);
@@ -294,6 +299,104 @@ test("a session round-trips submit + SSE + interrupt under a project", async () 
 	});
 });
 
+test("GET/POST .../model lists and switches a live session's model", async () => {
+	const switched: string[] = [];
+	const manager = new SessionManager({
+		createRuntime: async () => {
+			let current = "m1";
+			const bus = new FakeProgressBus();
+			return {
+				runner: bus,
+				turn: new FakeTurnRunner(bus),
+				logger: noopLogger,
+				sessionId: "sess",
+				dispose() {},
+				getModelState: () => ({
+					current,
+					models: [
+						{ id: "m1", name: "Model One" },
+						{ id: "m2", name: "Model Two" },
+					],
+				}),
+				setModel: (modelId: string) => {
+					if (modelId !== "m1" && modelId !== "m2") {
+						return false;
+					}
+					current = modelId;
+					switched.push(modelId);
+					return true;
+				},
+			};
+		},
+		listStoredSessions: async () => [],
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+		const base = `${baseUrl}/projects/${key}/sessions/sess/model`;
+
+		const list = await fetch(base);
+		assert.equal(list.status, 200);
+		assert.deepEqual(await list.json(), {
+			current: "m1",
+			models: [
+				{ id: "m1", name: "Model One" },
+				{ id: "m2", name: "Model Two" },
+			],
+		});
+
+		const switchResponse = await fetch(base, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ modelId: "m2" }),
+		});
+		assert.equal(switchResponse.status, 200);
+		assert.equal(
+			((await switchResponse.json()) as { current: string }).current,
+			"m2",
+		);
+		assert.deepEqual(switched, ["m2"]);
+
+		const unknown = await fetch(base, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ modelId: "nope" }),
+		});
+		assert.equal(unknown.status, 404);
+		assert.deepEqual(await unknown.json(), { error: "unknown_model" });
+
+		const missing = await fetch(base, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		assert.equal(missing.status, 400);
+		assert.deepEqual(await missing.json(), { error: "missing_model_id" });
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("GET .../model reports 501 when the runtime has no model control", async () => {
+	await withServer(async (baseUrl) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess-1/model`,
+		);
+		assert.equal(response.status, 501);
+		assert.deepEqual(await response.json(), {
+			error: "model_control_unavailable",
+		});
+	});
+});
+
 test("routes to unknown projects and sessions return 404", async () => {
 	await withServer(async (baseUrl) => {
 		let response = await fetch(`${baseUrl}/projects/missing/sessions`);
@@ -309,6 +412,113 @@ test("routes to unknown projects and sessions return 404", async () => {
 		assert.equal(response.status, 404);
 		assert.deepEqual(await response.json(), { error: "session_not_found" });
 	});
+});
+
+test("PATCH /projects/:key renames and persists the workspace", async () => {
+	const saved: Array<Array<{ cwd: string; name?: string }>> = [];
+	const manager = new SessionManager({
+		createRuntime: async () => makeRuntime("sess"),
+		listStoredSessions: async () => [],
+		saveProjectRegistry: async (projects) => {
+			saved.push(
+				projects.map((project) => ({ cwd: project.cwd, name: project.name })),
+			);
+		},
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+
+		const response = await fetch(`${baseUrl}/projects/${key}`, {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name: "我的工作区" }),
+		});
+		assert.equal(response.status, 200);
+		const body = (await response.json()) as { name: string | null };
+		assert.equal(body.name, "我的工作区");
+		assert.equal(manager.getProject(key)?.name, "我的工作区");
+		assert.equal(saved.at(-1)?.[0]?.name, "我的工作区");
+
+		// GET /projects surfaces the custom name for the client tree.
+		const list = await fetch(`${baseUrl}/projects`);
+		const listed = (await list.json()) as {
+			projects: Array<{ key: string; name: string | null }>;
+		};
+		assert.equal(listed.projects[0]?.name, "我的工作区");
+
+		const missing = await fetch(`${baseUrl}/projects/nope`, {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name: "x" }),
+		});
+		assert.equal(missing.status, 404);
+		assert.deepEqual(await missing.json(), { error: "project_not_found" });
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("PATCH /projects/:key/sessions/:id renames and archives a session", async () => {
+	const renamed: Array<[string, string | null]> = [];
+	const archived: Array<[string, boolean]> = [];
+	const manager = new SessionManager({
+		createRuntime: async () => makeRuntime("sess"),
+		listStoredSessions: async () => [],
+		renameStoredSession: async (_cwd, sessionId, title) => {
+			renamed.push([sessionId, title]);
+			return sessionId === "sess";
+		},
+		setStoredSessionArchived: async (_cwd, sessionId, value) => {
+			archived.push([sessionId, value]);
+			return sessionId === "sess";
+		},
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		const base = `${baseUrl}/projects/${key}/sessions/sess`;
+
+		const renameResponse = await fetch(base, {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ title: "Renamed" }),
+		});
+		assert.equal(renameResponse.status, 200);
+		assert.deepEqual(renamed, [["sess", "Renamed"]]);
+
+		const archiveResponse = await fetch(base, {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ archived: true }),
+		});
+		assert.equal(archiveResponse.status, 200);
+		assert.deepEqual(archived, [["sess", true]]);
+
+		const unknown = await fetch(`${baseUrl}/projects/${key}/sessions/nope`, {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ archived: true }),
+		});
+		assert.equal(unknown.status, 404);
+		assert.deepEqual(await unknown.json(), { error: "session_not_found" });
+
+		const emptyBody = await fetch(base, {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		assert.equal(emptyBody.status, 400);
+		assert.deepEqual(await emptyBody.json(), { error: "missing_update" });
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
 });
 
 test("DELETE /projects/:key/sessions/:id retires the session", async () => {

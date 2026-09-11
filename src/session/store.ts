@@ -161,6 +161,9 @@ const persistedSessionSchema = z.object({
 	turnCount: z.number().int().nonnegative(),
 	lastCompletedUserInput: z.string().nullable(),
 	lastTurn: sessionTurnRecordSchema.nullable(),
+	// Optional for backward compatibility: sessions saved before archiving
+	// existed simply omit it and read back as `false`.
+	archived: z.boolean().optional(),
 });
 
 const sessionHeaderSchema = persistedSessionSchema
@@ -176,6 +179,7 @@ const sessionSummarySchema = z.object({
 	turnCount: z.number().int().nonnegative(),
 	lastTurnStatus: turnStatusSchema.nullable(),
 	estimatedTokens: z.number().int().nonnegative().nullable().optional(),
+	archived: z.boolean().optional(),
 });
 
 const sessionIndexSchema = z.object({
@@ -211,6 +215,22 @@ export interface SessionStore {
 	 * `404` without treating it as an error).
 	 */
 	deleteSession(sessionId: string): Promise<boolean>;
+	/**
+	 * Set a session's display title (an empty/blank title clears it, falling
+	 * back to the derived one). Returns the updated session.
+	 */
+	renameSession(
+		sessionId: string,
+		title: string | null,
+	): Promise<PersistedSession>;
+	/**
+	 * Archive or unarchive a session. An archived session keeps its messages on
+	 * disk but is hidden from the workspace tree. Returns the updated session.
+	 */
+	setSessionArchived(
+		sessionId: string,
+		archived: boolean,
+	): Promise<PersistedSession>;
 	pruneEmptySessions(): Promise<number>;
 	markTurnStarted(args: {
 		sessionId: string;
@@ -380,6 +400,25 @@ export class DiskSessionStore implements SessionStore {
 			await this.writeIndex({ version: SESSION_VERSION, sessions: remaining });
 		}
 		return existed;
+	}
+
+	async renameSession(
+		sessionId: string,
+		title: string | null,
+	): Promise<PersistedSession> {
+		const session = await this.readSession(sessionId);
+		return this.commit({
+			...session,
+			title: normalizeTitle(title ?? undefined),
+		});
+	}
+
+	async setSessionArchived(
+		sessionId: string,
+		archived: boolean,
+	): Promise<PersistedSession> {
+		const session = await this.readSession(sessionId);
+		return this.commit({ ...session, archived });
 	}
 
 	async pruneEmptySessions(): Promise<number> {
@@ -644,6 +683,7 @@ export class DiskSessionStore implements SessionStore {
 		const { persistedEntryCount: _omit, ...headerFields } = metaParsed.data;
 		return normalizePersistedSessionTimestamps({
 			...headerFields,
+			archived: headerFields.archived ?? false,
 			entries,
 		} as PersistedSession);
 	}
@@ -826,6 +866,7 @@ export class DiskSessionStore implements SessionStore {
 						...session,
 						lastCompletedUserInput: session.lastCompletedUserInput ?? null,
 						estimatedTokens: session.estimatedTokens ?? null,
+						archived: session.archived ?? false,
 					}),
 				),
 			};
@@ -896,6 +937,7 @@ function toSessionSummary(session: PersistedSession): SessionSummary {
 		turnCount: session.turnCount,
 		lastTurnStatus: session.lastTurn?.status ?? null,
 		estimatedTokens: estimateSessionTokens(session),
+		archived: session.archived ?? false,
 	};
 }
 

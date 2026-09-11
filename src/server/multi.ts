@@ -52,11 +52,15 @@ const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
  * GET    /projects                                  list registered projects
  * POST   /projects                { path }          add a project directory
  * POST   /projects/pick                             open a native folder chooser
+ * PATCH  /projects/:key           { name }          rename a project's display name
  * DELETE /projects/:key                             remove a project + its sessions + stored messages
  * GET    /projects/:key/sessions                    list stored + live sessions
  * POST   /projects/:key/sessions  { sessionId? }    create (or resume) a live session
+ * PATCH  /projects/:key/sessions/:id { title?, archived? }  rename/archive a session
  * GET    /projects/:key/sessions/:id/events         stream the session's SSE events
  * GET    /projects/:key/sessions/:id/messages       page persisted history (newest first)
+ * GET    /projects/:key/sessions/:id/model          list models + the active id
+ * POST   /projects/:key/sessions/:id/model          switch the active model
  * POST   /projects/:key/sessions/:id/message        submit one turn
  * POST   /projects/:key/sessions/:id/interrupt      interrupt the in-flight turn
  * DELETE /projects/:key/sessions/:id                delete the session + its stored messages
@@ -116,6 +120,7 @@ async function route(
 					key: project.key,
 					cwd: project.cwd,
 					addedAt: project.addedAt,
+					name: project.name ?? null,
 				})),
 			});
 			return;
@@ -134,6 +139,10 @@ async function route(
 	if (segments.length === 2) {
 		if (method === "POST" && projectKey === "pick") {
 			await handlePickDirectory(res, pickDirectory);
+			return;
+		}
+		if (method === "PATCH") {
+			await handleRenameProject(req, res, manager, projectKey, maxBodyBytes);
 			return;
 		}
 		if (method === "DELETE") {
@@ -172,6 +181,17 @@ async function route(
 
 	// /projects/:key/sessions/:id
 	if (segments.length === 4) {
+		if (method === "PATCH") {
+			await handleUpdateSession(
+				req,
+				res,
+				manager,
+				projectKey,
+				sessionId,
+				maxBodyBytes,
+			);
+			return;
+		}
 		if (method === "DELETE") {
 			const removed = await manager.deleteSession(projectKey, sessionId);
 			if (!removed) {
@@ -218,6 +238,11 @@ async function route(
 			writeJson(res, 200, session.controller.requestInterrupt());
 			return;
 		}
+		if (sub === "model") {
+			manager.touch(session);
+			await handleSessionModel(req, res, session, maxBodyBytes);
+			return;
+		}
 		methodNotAllowed(res);
 		return;
 	}
@@ -260,6 +285,113 @@ async function handleAddProject(
 			code === "invalid_project_path" ? 400 : 500,
 		);
 	}
+}
+
+/**
+ * Rename a project's display name. A blank name clears the override so the
+ * project falls back to showing its folder name. `404` when the project is
+ * unknown, `400` when the body carries no string `name`.
+ */
+async function handleRenameProject(
+	req: IncomingMessage,
+	res: ServerResponse,
+	manager: SessionManager,
+	projectKey: string,
+	maxBodyBytes: number,
+): Promise<void> {
+	let body: string;
+	try {
+		body = await readBody(req, maxBodyBytes);
+	} catch {
+		writeJson(res, 413, { error: "body_too_large" });
+		return;
+	}
+
+	let name: unknown;
+	try {
+		const parsed = JSON.parse(body || "{}") as { name?: unknown };
+		name = parsed.name;
+	} catch {
+		writeJson(res, 400, { error: "invalid_json" });
+		return;
+	}
+	if (typeof name !== "string") {
+		writeJson(res, 400, { error: "missing_name" });
+		return;
+	}
+
+	const updated = await manager.renameProject(projectKey, name);
+	if (!updated) {
+		writeJson(res, 404, { error: "project_not_found" });
+		return;
+	}
+	writeJson(res, 200, {
+		key: updated.key,
+		cwd: updated.cwd,
+		name: updated.name ?? null,
+	});
+}
+
+/**
+ * Rename and/or archive a session. The body may carry `title` (string, blank
+ * clears it) and/or `archived` (boolean). Responds `404` when the session is
+ * unknown, `400` when the body carries neither field.
+ */
+async function handleUpdateSession(
+	req: IncomingMessage,
+	res: ServerResponse,
+	manager: SessionManager,
+	projectKey: string,
+	sessionId: string,
+	maxBodyBytes: number,
+): Promise<void> {
+	let body: string;
+	try {
+		body = await readBody(req, maxBodyBytes);
+	} catch {
+		writeJson(res, 413, { error: "body_too_large" });
+		return;
+	}
+
+	let title: unknown;
+	let archived: unknown;
+	try {
+		const parsed = JSON.parse(body || "{}") as {
+			title?: unknown;
+			archived?: unknown;
+		};
+		title = parsed.title;
+		archived = parsed.archived;
+	} catch {
+		writeJson(res, 400, { error: "invalid_json" });
+		return;
+	}
+	if (title !== undefined && typeof title !== "string") {
+		writeJson(res, 400, { error: "invalid_title" });
+		return;
+	}
+	if (archived !== undefined && typeof archived !== "boolean") {
+		writeJson(res, 400, { error: "invalid_archived" });
+		return;
+	}
+	if (title === undefined && archived === undefined) {
+		writeJson(res, 400, { error: "missing_update" });
+		return;
+	}
+
+	if (typeof title === "string") {
+		if (!(await manager.renameSession(projectKey, sessionId, title))) {
+			writeJson(res, 404, { error: "session_not_found" });
+			return;
+		}
+	}
+	if (typeof archived === "boolean") {
+		if (!(await manager.setSessionArchived(projectKey, sessionId, archived))) {
+			writeJson(res, 404, { error: "session_not_found" });
+			return;
+		}
+	}
+	writeJson(res, 200, { updated: true });
 }
 
 /**
@@ -313,8 +445,14 @@ async function handleListSessions(
 				lastCompletedUserInput: summary?.lastCompletedUserInput ?? null,
 				turnCount: summary?.turnCount ?? 0,
 				createdAt: session.createdAt,
+				// The persisted `updatedAt` (set when a message is submitted, not
+				// when the session is merely opened) is what the client shows and
+				// sorts by; `lastActivityAt` only keeps the runtime warm against
+				// idle sweeping, so it must not drive the row's time.
+				updatedAt: summary?.updatedAt ?? null,
 				lastActivityAt: session.lastActivityAt,
 				turnActive: session.controller.isTurnActive(),
+				archived: summary?.archived ?? false,
 			};
 		}),
 	});
@@ -347,6 +485,59 @@ async function handleSessionHistory(
 		limit: parseNumberParam(params.get("limit")),
 	});
 	writeJson(res, 200, { items: page.items, cursor: page.cursor });
+}
+
+/**
+ * Read or switch the live session's active model. `GET` returns the picker
+ * snapshot (`{ current, models }`); `POST` with `{ modelId }` switches the
+ * runtime's provider and returns the updated snapshot. Session-scoped because
+ * each live session owns its own runtime and provider.
+ */
+async function handleSessionModel(
+	req: IncomingMessage,
+	res: ServerResponse,
+	session: SessionEntry,
+	maxBodyBytes: number,
+): Promise<void> {
+	const { getModelState, setModel } = session.runtime;
+	if (!getModelState || !setModel) {
+		writeJson(res, 501, { error: "model_control_unavailable" });
+		return;
+	}
+	const method = req.method ?? "GET";
+	if (method === "GET") {
+		writeJson(res, 200, getModelState());
+		return;
+	}
+	if (method !== "POST") {
+		methodNotAllowed(res);
+		return;
+	}
+
+	let body: string;
+	try {
+		body = await readBody(req, maxBodyBytes);
+	} catch {
+		writeJson(res, 413, { error: "body_too_large" });
+		return;
+	}
+	let modelId = "";
+	try {
+		const parsed = JSON.parse(body || "{}") as { modelId?: unknown };
+		modelId = typeof parsed.modelId === "string" ? parsed.modelId : "";
+	} catch {
+		writeJson(res, 400, { error: "invalid_json" });
+		return;
+	}
+	if (!modelId.trim()) {
+		writeJson(res, 400, { error: "missing_model_id" });
+		return;
+	}
+	if (!setModel(modelId)) {
+		writeJson(res, 404, { error: "unknown_model" });
+		return;
+	}
+	writeJson(res, 200, getModelState());
 }
 
 /** Parse an optional numeric query param; non-numeric or absent → undefined. */

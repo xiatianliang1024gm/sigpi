@@ -37,6 +37,7 @@ interface HttpCall {
 interface Project {
 	key: string;
 	cwd: string;
+	name?: string;
 }
 
 interface LiveSession {
@@ -45,6 +46,9 @@ interface LiveSession {
 	title?: string | null;
 	lastCompletedUserInput?: string | null;
 	turnCount?: number;
+	archived?: boolean;
+	lastActivityAt?: number;
+	updatedAt?: string | null;
 }
 
 interface SessionList {
@@ -135,6 +139,17 @@ class Harness {
 		string,
 		{ items: Array<Record<string, unknown>>; cursor: number | null }
 	>();
+	/** The model-picker snapshot served by `GET .../model`. */
+	modelState: {
+		current: string;
+		models: Array<{ id: string; name: string }>;
+	} = {
+		current: "m1",
+		models: [
+			{ id: "m1", name: "Model One" },
+			{ id: "m2", name: "Model Two" },
+		],
+	};
 
 	private constructor(dom: JSDOM) {
 		this.dom = dom;
@@ -162,6 +177,12 @@ class Harness {
 			this.dom.window as unknown as { KeyboardEvent: typeof KeyboardEvent }
 		).KeyboardEvent;
 		return new ctor("keydown", { bubbles: true, cancelable: true, ...init });
+	}
+
+	/** A bubbling `change` `Event` from this document's realm. */
+	changeEvent(): Event {
+		const ctor = (this.dom.window as unknown as { Event: typeof Event }).Event;
+		return new ctor("change", { bubbles: true });
 	}
 
 	/** HTTP calls recorded for a given method + path. */
@@ -207,6 +228,14 @@ class Harness {
 			this.projects = [project];
 			return jsonResponse(201, { key: project.key });
 		}
+		if (method === "PATCH" && /^\/projects\/[^/]+$/.test(pathname)) {
+			const key = decodeURIComponent(pathname.split("/")[2] ?? "");
+			const project = this.projects.find((p) => p.key === key);
+			if (project && typeof body?.name === "string") {
+				project.name = body.name;
+			}
+			return jsonResponse(200, { key, name: body?.name ?? null });
+		}
 
 		const sessions = /^\/projects\/([^/]+)\/sessions$/.exec(pathname);
 		if (sessions) {
@@ -241,6 +270,22 @@ class Harness {
 			return jsonResponse(200, page);
 		}
 		if (
+			method === "GET" &&
+			/^\/projects\/[^/]+\/sessions\/[^/]+\/model$/.test(pathname)
+		) {
+			return jsonResponse(200, this.modelState);
+		}
+		if (
+			method === "POST" &&
+			/^\/projects\/[^/]+\/sessions\/[^/]+\/model$/.test(pathname)
+		) {
+			this.modelState = {
+				...this.modelState,
+				current: String(body?.modelId ?? this.modelState.current),
+			};
+			return jsonResponse(200, this.modelState);
+		}
+		if (
 			method === "POST" &&
 			/^\/projects\/[^/]+\/sessions\/[^/]+\/message$/.test(pathname)
 		) {
@@ -251,6 +296,30 @@ class Harness {
 			/^\/projects\/[^/]+\/sessions\/[^/]+\/interrupt$/.test(pathname)
 		) {
 			return jsonResponse(200, { accepted: true });
+		}
+
+		const sessionPatch = /^\/projects\/([^/]+)\/sessions\/([^/]+)$/.exec(
+			pathname,
+		);
+		if (method === "PATCH" && sessionPatch) {
+			const key = decodeURIComponent(sessionPatch[1] ?? "");
+			const id = decodeURIComponent(sessionPatch[2] ?? "");
+			const list = this.sessions.get(key);
+			if (list) {
+				const apply = (s: LiveSession | Record<string, unknown>): void => {
+					if (typeof body?.title === "string") {
+						(s as { title?: string }).title = body.title as string;
+					}
+					if (body?.archived === true) {
+						(s as { archived?: boolean }).archived = true;
+					}
+				};
+				list.live.forEach(apply);
+				list.stored.forEach(apply);
+			}
+			// A renamed/archived session keeps its id; the id is unused here.
+			void id;
+			return jsonResponse(200, { updated: true });
 		}
 
 		const sessionDelete = /^\/projects\/([^/]+)\/sessions\/([^/]+)$/.exec(
@@ -286,14 +355,27 @@ function element<T extends HTMLElement>(doc: Document, id: string): T {
 	return found as unknown as T;
 }
 
+/** Open the (first) project's "⋯" menu and return the item matching `selector`. */
+async function chooseProjectMenu(
+	harness: Harness,
+	selector: string,
+): Promise<HTMLButtonElement | null> {
+	const trigger = harness.document.querySelector<HTMLButtonElement>(
+		".project-header .menu-button",
+	);
+	assert.ok(trigger, "the project header renders a menu trigger");
+	trigger.click();
+	await flush();
+	return harness.document.querySelector<HTMLButtonElement>(selector);
+}
+
 /** Add a project and open a fresh session, leaving the SSE stream connected. */
 async function openSession(): Promise<Harness> {
 	const harness = await Harness.create();
 	element<HTMLButtonElement>(harness.document, "add-project").click();
 	await flush();
-	const newSession =
-		harness.document.querySelector<HTMLButtonElement>(".project-new");
-	assert.ok(newSession, "the added project renders a new-session control");
+	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
+	assert.ok(newSession, "the project menu offers a new session");
 	newSession.click();
 	await flush();
 	return harness;
@@ -329,9 +411,8 @@ test("boots empty, then wires project → session → SSE stream", async () => {
 	);
 	assert.match(project.className, /active/);
 
-	const newSession =
-		harness.document.querySelector<HTMLButtonElement>(".project-new");
-	assert.ok(newSession, "the project renders a new-session control");
+	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
+	assert.ok(newSession, "the project menu offers a new session");
 	newSession.click();
 	await flush();
 
@@ -345,7 +426,7 @@ test("boots empty, then wires project → session → SSE stream", async () => {
 	const liveLabel = live[0]?.querySelector(".session")?.textContent;
 	assert.equal(
 		liveLabel,
-		"(new session)",
+		"新会话",
 		"a fresh session shows a friendly placeholder, never its id",
 	);
 	assert.doesNotMatch(liveLabel ?? "", /s1/);
@@ -357,14 +438,9 @@ test("boots empty, then wires project → session → SSE stream", async () => {
 	// The server replays a `ready` frame; it flips the composer out of idle.
 	source.message({ type: "ready", turnActive: false });
 	await flush();
-	assert.equal(
-		element<HTMLButtonElement>(harness.document, "send").disabled,
-		false,
-	);
-	assert.equal(
-		element<HTMLButtonElement>(harness.document, "interrupt").disabled,
-		true,
-	);
+	const submit = element<HTMLButtonElement>(harness.document, "submit");
+	assert.equal(submit.disabled, false);
+	assert.equal(submit.classList.contains("is-stop"), false);
 });
 
 test("a live session shows its derived title once the server reports one", async () => {
@@ -399,6 +475,116 @@ test("a live session falls back to the last input when it has no title", async (
 
 	const row = harness.document.querySelector("#projects .session-row .session");
 	assert.equal(row?.textContent, "run the tests");
+});
+
+test("renders each session row's last-update time relative to now", async () => {
+	const harness = await Harness.create();
+	const now = Date.now();
+	const ago = (ms: number) => new Date(now - ms).toISOString();
+	harness.sessions.set("k1", {
+		stored: [
+			{
+				sessionId: "s1",
+				title: "Moments ago",
+				updatedAt: ago(30 * 1000),
+				cwd: "/tmp/demo",
+				turnCount: 1,
+			},
+			{
+				sessionId: "s2",
+				title: "Days ago",
+				updatedAt: ago(2 * 24 * 60 * 60 * 1000),
+				cwd: "/tmp/demo",
+				turnCount: 2,
+			},
+			{
+				sessionId: "s3",
+				title: "A year ago",
+				updatedAt: ago(400 * 24 * 60 * 60 * 1000),
+				cwd: "/tmp/demo",
+				turnCount: 3,
+			},
+		],
+		live: [],
+	});
+
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	const times = Array.from(
+		harness.document.querySelectorAll("#projects .session-time"),
+	).map((el) => el.textContent);
+	assert.deepEqual(times, ["刚刚", "2天", "1年"]);
+
+	// The time trails the label and menu, pinned to the row's right edge.
+	const row = harness.document.querySelector("#projects .session-row");
+	assert.equal(row?.lastElementChild?.className, "session-time");
+});
+
+test("uses a live session's last activity for its row time", async () => {
+	const harness = await openSession();
+	const liveSession = harness.sessions.get("k1")?.live[0];
+	assert.ok(liveSession, "the live session is registered");
+	liveSession.lastActivityAt = Date.now() - 3 * 60 * 60 * 1000;
+
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	source.message({ type: "turn_finished", step: 1 });
+	await flush();
+
+	const time = harness.document.querySelector("#projects .session-time");
+	assert.equal(time?.textContent, "3h");
+});
+
+test("selecting a session does not bump its row time or reorder it", async () => {
+	const harness = await Harness.create();
+	const now = Date.now();
+	const ago = (ms: number) => new Date(now - ms).toISOString();
+	const hour = 60 * 60 * 1000;
+	harness.sessions.set("k1", {
+		stored: [
+			{
+				sessionId: "older",
+				title: "Older",
+				updatedAt: ago(3 * hour),
+				cwd: "/tmp/demo",
+				turnCount: 1,
+			},
+			{
+				sessionId: "newer",
+				title: "Newer",
+				updatedAt: ago(hour),
+				cwd: "/tmp/demo",
+				turnCount: 2,
+			},
+		],
+		live: [
+			// "older" is live because it was just selected, so it was touched now
+			// (lastActivityAt) even though no message was sent. Its persisted
+			// updatedAt is unchanged, so its row must keep the older time and stay
+			// below "newer" instead of jumping to the top.
+			{
+				sessionId: "older",
+				title: "Older",
+				turnActive: false,
+				updatedAt: ago(3 * hour),
+				lastActivityAt: now,
+			},
+		],
+	});
+
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	const labels = Array.from(
+		harness.document.querySelectorAll("#projects .session-row .session"),
+	).map((el) => el.textContent);
+	assert.deepEqual(labels, ["Newer · 2 turns", "Older"]);
+
+	const times = Array.from(
+		harness.document.querySelectorAll("#projects .session-time"),
+	).map((el) => el.textContent);
+	assert.deepEqual(times, ["1h", "3h"]);
 });
 
 test("add-project asks the server to pick a folder and registers the result", async () => {
@@ -442,14 +628,9 @@ test("folds a streamed turn into the DOM transcript", async () => {
 
 	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
 	await flush();
-	assert.equal(
-		element<HTMLButtonElement>(harness.document, "send").disabled,
-		true,
-	);
-	assert.equal(
-		element<HTMLButtonElement>(harness.document, "interrupt").disabled,
-		false,
-	);
+	const submit = element<HTMLButtonElement>(harness.document, "submit");
+	assert.equal(submit.disabled, false);
+	assert.equal(submit.classList.contains("is-stop"), true);
 	assert.equal(harness.document.body.classList.contains("busy"), true);
 
 	source.message({ type: "model_delta", step: 1, contentDelta: "Hel" });
@@ -484,10 +665,8 @@ test("folds a streamed turn into the DOM transcript", async () => {
 	const before = harness.callsTo("GET", "/projects/k1/sessions").length;
 	source.message({ type: "turn_finished", step: 1 });
 	await flush();
-	assert.equal(
-		element<HTMLButtonElement>(harness.document, "send").disabled,
-		false,
-	);
+	assert.equal(submit.disabled, false);
+	assert.equal(submit.classList.contains("is-stop"), false);
 	assert.equal(harness.document.body.classList.contains("busy"), false);
 	assert.ok(
 		harness.callsTo("GET", "/projects/k1/sessions").length > before,
@@ -515,16 +694,11 @@ test("sends a turn and interrupts through the composer", async () => {
 	const sent = harness.callsTo("POST", "/projects/k1/sessions/s1/message");
 	assert.equal(sent.length, 1);
 	assert.deepEqual(sent[0]?.body, { input: "hello agent" });
-	assert.equal(
-		element<HTMLButtonElement>(harness.document, "send").disabled,
-		true,
-	);
-	assert.equal(
-		element<HTMLButtonElement>(harness.document, "interrupt").disabled,
-		false,
-	);
+	const submit = element<HTMLButtonElement>(harness.document, "submit");
+	assert.equal(submit.classList.contains("is-stop"), true);
 
-	element<HTMLButtonElement>(harness.document, "interrupt").click();
+	// The merged button interrupts instead of sending while a turn runs.
+	submit.click();
 	await flush();
 	assert.equal(
 		harness.callsTo("POST", "/projects/k1/sessions/s1/interrupt").length,
@@ -534,10 +708,8 @@ test("sends a turn and interrupts through the composer", async () => {
 	// A terminal frame clears the busy state and re-enables the composer.
 	source.message({ type: "turn_finished", step: 1 });
 	await flush();
-	assert.equal(
-		element<HTMLButtonElement>(harness.document, "send").disabled,
-		false,
-	);
+	assert.equal(submit.classList.contains("is-stop"), false);
+	assert.equal(submit.disabled, false);
 });
 
 test("Enter sends the composer, but empty input and Shift+Enter do not", async () => {
@@ -591,9 +763,8 @@ test("loads a resumed session's history and pages older messages", async () => {
 		],
 		cursor: 4,
 	});
-	const newSession =
-		harness.document.querySelector<HTMLButtonElement>(".project-new");
-	assert.ok(newSession, "the project renders a new-session control");
+	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
+	assert.ok(newSession, "the project menu offers a new session");
 	newSession.click();
 	await flush();
 
@@ -644,55 +815,296 @@ test("loads a resumed session's history and pages older messages", async () => {
 	);
 });
 
-test("deletes a session only after a confirming second click", async () => {
+test("archives a session from its row menu", async () => {
 	const harness = await openSession();
 	const source = harness.sources.at(-1);
 	assert.ok(source, "an EventSource was opened");
 	source.message({ type: "ready", turnActive: false });
 	await flush();
 
+	const trigger = harness.document.querySelector<HTMLButtonElement>(
+		".session-row .menu-button",
+	);
+	assert.ok(trigger, "the session row has a menu trigger");
+	trigger.click();
+	await flush();
+
+	const archive =
+		harness.document.querySelector<HTMLButtonElement>(".menu-archive");
+	assert.ok(archive, "the session menu offers archive");
+	archive.click();
+	await flush();
+
+	const updates = harness.callsTo("PATCH", "/projects/k1/sessions/s1");
+	assert.equal(updates.length, 1);
+	assert.deepEqual(updates[0]?.body, { archived: true });
+	assert.equal(
+		harness.document.querySelector(".session-row"),
+		null,
+		"the archived session disappears from the tree",
+	);
+});
+
+test("renames a session from its row menu", async () => {
+	const harness = await openSession();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	source.message({ type: "ready", turnActive: false });
+	await flush();
+
+	const trigger = harness.document.querySelector<HTMLButtonElement>(
+		".session-row .menu-button",
+	);
+	assert.ok(trigger);
+	trigger.click();
+	await flush();
+
+	const rename =
+		harness.document.querySelector<HTMLButtonElement>(".menu-rename");
+	assert.ok(rename, "the session menu offers rename");
+	rename.click();
+	await flush();
+
+	const input =
+		harness.document.querySelector<HTMLInputElement>(".rename-input");
+	assert.ok(input, "the label becomes an editable input");
+	input.value = "My session";
+	input.dispatchEvent(harness.keydownEvent({ key: "Enter" }));
+	await flush();
+
+	const updates = harness.callsTo("PATCH", "/projects/k1/sessions/s1");
+	assert.equal(updates.length, 1);
+	assert.deepEqual(updates[0]?.body, { title: "My session" });
+});
+
+test("renames a workspace from its menu", async () => {
+	const harness = await openSession();
+	const trigger = harness.document.querySelector<HTMLButtonElement>(
+		".project-header .menu-button",
+	);
+	assert.ok(trigger);
+	trigger.click();
+	await flush();
+
+	const rename =
+		harness.document.querySelector<HTMLButtonElement>(".menu-rename");
+	assert.ok(rename, "the workspace menu offers rename");
+	rename.click();
+	await flush();
+
+	const input =
+		harness.document.querySelector<HTMLInputElement>(".rename-input");
+	assert.ok(input, "the workspace name becomes an editable input");
+	input.value = "我的工作区";
+	input.dispatchEvent(harness.keydownEvent({ key: "Enter" }));
+	await flush();
+
+	assert.equal(harness.callsTo("PATCH", "/projects/k1").length, 1);
+	assert.deepEqual(harness.callsTo("PATCH", "/projects/k1")[0]?.body, {
+		name: "我的工作区",
+	});
+	assert.equal(
+		harness.document.querySelector(".project-name")?.textContent,
+		"我的工作区",
+	);
+});
+
+test("deletes a workspace from its menu after a confirming second click", async () => {
+	const harness = await openSession();
+
 	const del = () =>
-		harness.document.querySelector<HTMLButtonElement>(".session-delete");
-	let button = del();
-	assert.ok(button, "the session row has a delete control");
+		harness.document.querySelector<HTMLButtonElement>(".menu-delete");
+	let button = await chooseProjectMenu(harness, ".menu-delete");
+	assert.ok(button, "the workspace menu offers delete");
 
 	// First click only arms the confirmation; no request goes out.
 	button.click();
 	await flush();
-	assert.equal(harness.callsTo("DELETE", "/projects/k1/sessions/s1").length, 0);
-	button = del();
-	assert.ok(button, "the delete control is re-rendered armed");
-	assert.match(button.textContent ?? "", /✓/);
-
-	// Second click confirms and issues the DELETE.
-	button.click();
-	await flush();
-	assert.equal(harness.callsTo("DELETE", "/projects/k1/sessions/s1").length, 1);
-	assert.equal(
-		harness.document.querySelector(".session-row"),
-		null,
-		"the deleted session disappears from the tree",
-	);
-});
-
-test("deletes a project (and its sessions) after a confirming second click", async () => {
-	const harness = await openSession();
-
-	const del = () =>
-		harness.document.querySelector<HTMLButtonElement>(".project-delete");
-	let button = del();
-	assert.ok(button, "the project header has a delete control");
-
-	button.click();
-	await flush();
 	assert.equal(harness.callsTo("DELETE", "/projects/k1").length, 0);
 	button = del();
-	assert.ok(button);
-	assert.match(button.textContent ?? "", /✓/);
+	assert.ok(button, "the delete item is armed in place");
+	assert.match(button.className, /armed/);
 
+	// Second click confirms and issues the DELETE.
 	button.click();
 	await flush();
 	assert.equal(harness.callsTo("DELETE", "/projects/k1").length, 1);
 	assert.equal(harness.document.querySelector("#projects .project"), null);
 	assert.equal(harness.document.querySelectorAll("#projects .empty").length, 1);
+});
+
+test("shows the session's models and switches from the dropdown", async () => {
+	const harness = await openSession();
+	await flush();
+
+	const select = element<HTMLSelectElement>(harness.document, "model-select");
+	assert.equal(select.disabled, false);
+	assert.deepEqual(
+		Array.from(select.options).map((option) => option.value),
+		["m1", "m2"],
+	);
+	assert.equal(select.value, "m1");
+
+	select.value = "m2";
+	select.dispatchEvent(harness.changeEvent());
+	await flush();
+
+	const switched = harness.callsTo("POST", "/projects/k1/sessions/s1/model");
+	assert.equal(switched.length, 1);
+	assert.deepEqual(switched[0]?.body, { modelId: "m2" });
+	assert.equal(select.value, "m2");
+	assert.equal(
+		harness.callsTo("GET", "/projects/k1/sessions/s1/model").length,
+		1,
+	);
+});
+
+test("renders streamed reasoning in a collapsed details panel", async () => {
+	const harness = await openSession();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	source.message({ type: "ready", turnActive: false });
+	await flush();
+
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	source.message({
+		type: "model_delta",
+		step: 1,
+		reasoningDelta: "Let me think",
+	});
+	source.message({ type: "model_delta", step: 1, reasoningDelta: " about it" });
+
+	const details = harness.document.querySelector<HTMLDetailsElement>(
+		"#transcript .msg.assistant details.reasoning",
+	);
+	assert.ok(details, "reasoning renders as a <details> panel");
+	assert.equal(details.hidden, false);
+	assert.equal(details.open, false, "collapsed by default (a single line)");
+	assert.equal(
+		details.querySelector("summary")?.textContent?.includes("思考"),
+		true,
+		"the summary carries a label",
+	);
+	assert.equal(
+		details.querySelector(".reasoning-preview")?.textContent,
+		"Let me think about it",
+		"the summary previews the first line",
+	);
+	assert.equal(
+		details.querySelector(".reasoning-body")?.textContent,
+		"Let me think about it",
+		"the full reasoning is retained for when it is expanded",
+	);
+
+	// The panel expands on demand.
+	details.open = true;
+	assert.equal(details.open, true);
+
+	// Finalizing without content keeps the reasoning panel in place.
+	source.message({ type: "model_request_finished", step: 1 });
+	await flush();
+	assert.ok(
+		harness.document.querySelector("#transcript details.reasoning"),
+		"reasoning survives finalize when the model emitted only reasoning",
+	);
+});
+
+test("renders assistant output as markdown and hides absent reasoning", async () => {
+	const harness = await openSession();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	source.message({ type: "ready", turnActive: false });
+	await flush();
+
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	source.message({
+		type: "model_delta",
+		step: 1,
+		contentDelta: "# Title\n\n- one\n- two\n\n**bold** and `code`",
+	});
+	await flush();
+
+	const content = harness.document.querySelector(
+		"#transcript .msg.assistant .content",
+	);
+	assert.ok(content, "the assistant content node renders");
+	assert.equal(content.querySelector("h1")?.textContent, "Title");
+	assert.deepEqual(
+		Array.from(content.querySelectorAll("ul li")).map((li) => li.textContent),
+		["one", "two"],
+	);
+	assert.equal(content.querySelector("strong")?.textContent, "bold");
+	assert.equal(content.querySelector("code")?.textContent, "code");
+
+	// No reasoning was emitted, so the panel is hidden until finalize drops it.
+	const details = harness.document.querySelector<HTMLDetailsElement>(
+		"#transcript details.reasoning",
+	);
+	assert.equal(details?.hidden, true);
+	source.message({ type: "model_request_finished", step: 1 });
+	await flush();
+	assert.equal(
+		harness.document.querySelector("#transcript details.reasoning"),
+		null,
+		"an empty reasoning panel is removed once the message finalizes",
+	);
+});
+
+test("renders resumed history reasoning and markdown content", async () => {
+	const harness = await Harness.create();
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	harness.historyPages.set("", {
+		items: [
+			{
+				kind: "assistant",
+				text: "## Answer\n\n- a\n- b",
+				reasoning: "first line\nsecond line",
+			},
+		],
+		cursor: null,
+	});
+	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
+	assert.ok(newSession, "the project menu offers a new session");
+	newSession.click();
+	await flush();
+
+	const details = harness.document.querySelector<HTMLDetailsElement>(
+		"#transcript details.reasoning",
+	);
+	assert.ok(details, "history reasoning renders as a <details> panel");
+	assert.equal(details.open, false, "collapsed by default");
+	assert.equal(
+		details.querySelector(".reasoning-preview")?.textContent,
+		"first line",
+		"the summary shows the first reasoning line",
+	);
+	assert.equal(
+		details.querySelector(".reasoning-body")?.textContent,
+		"first line\nsecond line",
+	);
+
+	const content = harness.document.querySelector(
+		"#transcript .msg.assistant .content",
+	);
+	assert.equal(content?.querySelector("h2")?.textContent, "Answer");
+	assert.equal(content?.querySelectorAll("ul li").length, 2);
+});
+
+test("adjusts the workspace width with the divider", async () => {
+	const harness = await Harness.create();
+	const root = harness.document.documentElement;
+	assert.equal(root.style.getPropertyValue("--sidebar-width"), "280px");
+
+	const resizer = element<HTMLDivElement>(harness.document, "resizer");
+	resizer.dispatchEvent(
+		harness.keydownEvent({ key: "ArrowRight", shiftKey: true }),
+	);
+	assert.equal(root.style.getPropertyValue("--sidebar-width"), "304px");
+
+	resizer.dispatchEvent(
+		harness.keydownEvent({ key: "ArrowLeft", shiftKey: true }),
+	);
+	assert.equal(root.style.getPropertyValue("--sidebar-width"), "280px");
 });

@@ -15,6 +15,7 @@ const assets = [
 	"src/server/web/index.html",
 	"src/server/web/app.js",
 	"src/server/web/reducer.js",
+	"src/server/web/markdown.js",
 	"src/server/web/styles.css",
 ];
 

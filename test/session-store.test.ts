@@ -107,6 +107,38 @@ test("session store persists and restores session state", async () => {
 	]);
 });
 
+test("session store renames and archives a session", async () => {
+	const cwd = await createTempDir("sigpi-session-rename-");
+	const store = createTestSessionStore({ cwd, homeDir: cwd });
+	const fingerprint = createSystemPromptFingerprint("system prompt");
+	const created = await store.createSession({
+		cwd,
+		systemPromptFingerprint: fingerprint,
+	});
+
+	const renamed = await store.renameSession(created.sessionId, "My title");
+	assert.equal(renamed.title, "My title");
+
+	const archived = await store.setSessionArchived(created.sessionId, true);
+	assert.equal(archived.archived, true);
+
+	const reloaded = await store.getSession(created.sessionId);
+	assert.equal(reloaded.title, "My title");
+	assert.equal(reloaded.archived, true);
+
+	const summary = (await store.listSessions()).find(
+		(session) => session.sessionId === created.sessionId,
+	);
+	assert.equal(summary?.title, "My title");
+	assert.equal(summary?.archived, true);
+
+	// A blank title clears the override.
+	const cleared = await store.renameSession(created.sessionId, "");
+	assert.equal(cleared.title, null);
+	await store.setSessionArchived(created.sessionId, false);
+	assert.equal((await store.getSession(created.sessionId)).archived, false);
+});
+
 test("session store round-trips provider usage on assistant message entries", async () => {
 	const cwd = await createTempDir("sigpi-session-usage-");
 	const store = createTestSessionStore({ cwd, homeDir: cwd });

@@ -15,7 +15,7 @@
 			<aside class="sidebar">
 				<section class="panel">
 					<div class="panel-head">
-						<h2>Projects</h2>
+						<h2>工作区</h2>
 						<button
 							id="add-project"
 							type="button"
@@ -28,6 +28,14 @@
 					<div id="projects" class="tree"></div>
 				</section>
 			</aside>
+			<div
+				id="resizer"
+				class="resizer"
+				role="separator"
+				aria-orientation="vertical"
+				aria-label="调整工作区宽度"
+				tabindex="0"
+			></div>
 			<section class="chat">
 				<button id="load-earlier" class="load-earlier" type="button" hidden>
 					Load earlier messages
@@ -42,8 +50,38 @@
 						disabled
 					></textarea>
 					<div class="composer-actions">
-						<button id="interrupt" type="button" disabled>Interrupt</button>
-						<button id="send" type="submit" disabled>Send</button>
+						<select
+							id="model-select"
+							class="model-select"
+							title="选择模型"
+							aria-label="选择模型"
+							disabled
+						></select>
+						<button
+							id="submit"
+							class="composer-submit"
+							type="submit"
+							title="发送"
+							aria-label="发送"
+							disabled
+						>
+							<svg
+								class="icon icon-send"
+								viewBox="0 0 24 24"
+								aria-hidden="true"
+							>
+								<path
+									d="M12 4a1 1 0 0 1 .7.29l6 6a1 1 0 0 1-1.4 1.42L13 7.41V19a1 1 0 1 1-2 0V7.41l-4.3 4.3a1 1 0 0 1-1.4-1.42l6-6A1 1 0 0 1 12 4Z"
+								/>
+							</svg>
+							<svg
+								class="icon icon-stop"
+								viewBox="0 0 24 24"
+								aria-hidden="true"
+							>
+								<rect x="6" y="6" width="12" height="12" rx="2" />
+							</svg>
+						</button>
 					</div>
 				</form>
 			</section>

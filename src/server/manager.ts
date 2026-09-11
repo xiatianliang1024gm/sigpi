@@ -1,6 +1,7 @@
 import { rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { getDefaultSessionsRoot } from "../config.js";
+import { createModelProvider } from "../model/provider.js";
 import { createAgentRuntime, createRuntimeSessionStore } from "../runtime.js";
 import {
 	SessionController,
@@ -27,6 +28,28 @@ export interface ManagedRuntime extends SessionControllerRuntime {
 	readonly sessionId: string;
 	/** Release the runtime's per-session resources. */
 	dispose(): void | Promise<void>;
+	/**
+	 * The active model id plus every configured model, when the runtime exposes
+	 * model switching. Optional so lightweight test runtimes need not implement
+	 * it; the HTTP layer degrades gracefully when it is absent.
+	 */
+	getModelState?(): RuntimeModelState;
+	/** Switch the active model; returns `false` for an unknown model id. */
+	setModel?(modelId: string): boolean;
+}
+
+/** One model the user can switch to: its config id and display name. */
+export interface ModelOption {
+	id: string;
+	name: string;
+}
+
+/** A runtime's model-picker snapshot. */
+export interface RuntimeModelState {
+	/** The id of the model currently in use. */
+	current: string;
+	/** Every model the runtime can switch to. */
+	models: ModelOption[];
 }
 
 /** A directory the server has been told to host sessions for. */
@@ -36,6 +59,8 @@ export interface ProjectEntry {
 	/** Absolute, normalized project directory. */
 	cwd: string;
 	addedAt: number;
+	/** Optional user-chosen display name; falls back to the folder name. */
+	name?: string;
 }
 
 /** One live, in-process session and everything needed to drive and retire it. */
@@ -57,6 +82,8 @@ export interface RegisteredProject {
 	cwd: string;
 	/** Epoch ms the directory was first registered (stables list ordering). */
 	addedAt: number;
+	/** Optional user-chosen display name; falls back to the folder name. */
+	name?: string;
 }
 
 export interface SessionManagerOptions {
@@ -88,6 +115,18 @@ export interface SessionManagerOptions {
 	 * needs no real disk store.
 	 */
 	deleteStoredSession?: (cwd: string, sessionId: string) => Promise<boolean>;
+	/** Rename a persisted session's display title. Returns whether it existed. */
+	renameStoredSession?: (
+		cwd: string,
+		sessionId: string,
+		title: string | null,
+	) => Promise<boolean>;
+	/** Archive/unarchive a persisted session. Returns whether it existed. */
+	setStoredSessionArchived?: (
+		cwd: string,
+		sessionId: string,
+		archived: boolean,
+	) => Promise<boolean>;
 	/**
 	 * Permanently delete a project's entire on-disk archive (every session file
 	 * plus the index). Injected in tests so it never touches a real archive.
@@ -145,12 +184,32 @@ async function defaultCreateRuntime(args: {
 		sessionId: args.sessionId,
 		createSession: args.sessionId ? undefined : true,
 	});
+	// Track the active model locally: the runtime's `config.modelId` is only the
+	// startup default, and `/model`-style switches must be reflected here.
+	let currentModelId = runtime.config.modelId;
 	return {
 		runner: runtime.runner,
 		turn: runtime.turn,
 		logger: runtime.logger,
 		sessionId: runtime.session?.sessionId ?? "",
 		dispose: () => runtime.dispose(),
+		getModelState: () => ({
+			current: currentModelId,
+			models: Object.entries(runtime.config.models).map(([id, model]) => ({
+				id,
+				name: model.name,
+			})),
+		}),
+		setModel: (modelId: string) => {
+			const model = runtime.config.models[modelId];
+			if (!model) {
+				return false;
+			}
+			runtime.turn.setProvider(createModelProvider(model, runtime.logger));
+			runtime.setActiveModel(model);
+			currentModelId = modelId;
+			return true;
+		},
 	};
 }
 
@@ -173,6 +232,37 @@ async function defaultDeleteStoredSession(
 	sessionId: string,
 ): Promise<boolean> {
 	return createRuntimeSessionStore({ cwd }).deleteSession(sessionId);
+}
+
+/** Rename one persisted session's title. Returns whether it existed. */
+async function defaultRenameStoredSession(
+	cwd: string,
+	sessionId: string,
+	title: string | null,
+): Promise<boolean> {
+	try {
+		await createRuntimeSessionStore({ cwd }).renameSession(sessionId, title);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Archive/unarchive one persisted session. Returns whether it existed. */
+async function defaultSetStoredSessionArchived(
+	cwd: string,
+	sessionId: string,
+	archived: boolean,
+): Promise<boolean> {
+	try {
+		await createRuntimeSessionStore({ cwd }).setSessionArchived(
+			sessionId,
+			archived,
+		);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /** Delete a project's whole on-disk archive (all sessions + index). */
@@ -225,6 +315,16 @@ export class SessionManager {
 		cwd: string,
 		sessionId: string,
 	) => Promise<boolean>;
+	private readonly renameStoredSessionFn: (
+		cwd: string,
+		sessionId: string,
+		title: string | null,
+	) => Promise<boolean>;
+	private readonly setStoredSessionArchivedFn: (
+		cwd: string,
+		sessionId: string,
+		archived: boolean,
+	) => Promise<boolean>;
 	private readonly deleteStoredProjectFn: (cwd: string) => Promise<void>;
 	private readonly loadProjectRegistryFn: () => Promise<RegisteredProject[]>;
 	private readonly saveProjectRegistryFn: (
@@ -245,6 +345,10 @@ export class SessionManager {
 			options.readStoredSession ?? defaultReadStoredSession;
 		this.deleteStoredSessionFn =
 			options.deleteStoredSession ?? defaultDeleteStoredSession;
+		this.renameStoredSessionFn =
+			options.renameStoredSession ?? defaultRenameStoredSession;
+		this.setStoredSessionArchivedFn =
+			options.setStoredSessionArchived ?? defaultSetStoredSessionArchived;
 		this.deleteStoredProjectFn =
 			options.deleteStoredProject ?? defaultDeleteStoredProject;
 		this.loadProjectRegistryFn =
@@ -318,7 +422,15 @@ export class SessionManager {
 				pruned = true;
 				continue;
 			}
-			this.projects.set(key, { key, cwd: resolved, addedAt: entry.addedAt });
+			const restored: ProjectEntry = {
+				key,
+				cwd: resolved,
+				addedAt: entry.addedAt,
+			};
+			if (entry.name) {
+				restored.name = entry.name;
+			}
+			this.projects.set(key, restored);
 		}
 		if (pruned) {
 			await this.persistProjects();
@@ -341,6 +453,29 @@ export class SessionManager {
 
 	getProject(projectKey: string): ProjectEntry | undefined {
 		return this.projects.get(projectKey);
+	}
+
+	/**
+	 * Set a project's user-chosen display name (an empty/blank name clears it,
+	 * falling back to the folder name) and persist the registry. Returns the
+	 * updated entry, or `undefined` when the project is not registered.
+	 */
+	async renameProject(
+		projectKey: string,
+		name: string,
+	): Promise<ProjectEntry | undefined> {
+		const project = this.projects.get(projectKey);
+		if (!project) {
+			return undefined;
+		}
+		const trimmed = name.trim();
+		if (trimmed) {
+			project.name = trimmed;
+		} else {
+			delete project.name;
+		}
+		await this.persistProjects();
+		return project;
 	}
 
 	/**
@@ -521,6 +656,40 @@ export class SessionManager {
 			// Best-effort disk removal; a live session is still retired.
 		}
 		return Boolean(live) || storedRemoved;
+	}
+
+	/**
+	 * Rename a session's display title (blank clears it). Works for live and
+	 * stored sessions alike since the title lives in the persisted header.
+	 * Returns `false` when the project or session is unknown.
+	 */
+	async renameSession(
+		projectKey: string,
+		sessionId: string,
+		title: string | null,
+	): Promise<boolean> {
+		const project = this.projects.get(projectKey);
+		if (!project) {
+			return false;
+		}
+		return this.renameStoredSessionFn(project.cwd, sessionId, title);
+	}
+
+	/**
+	 * Archive or unarchive a session. Archived sessions keep their messages on
+	 * disk but are hidden from the workspace tree. Returns `false` when the
+	 * project or session is unknown.
+	 */
+	async setSessionArchived(
+		projectKey: string,
+		sessionId: string,
+		archived: boolean,
+	): Promise<boolean> {
+		const project = this.projects.get(projectKey);
+		if (!project) {
+			return false;
+		}
+		return this.setStoredSessionArchivedFn(project.cwd, sessionId, archived);
 	}
 
 	/** Retire every live session (e.g. on server shutdown). */

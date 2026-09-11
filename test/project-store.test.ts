@@ -47,6 +47,22 @@ test("saveProjectRegistry round-trips through loadProjectRegistry", async () => 
 	assert.equal(parsed.projects.length, 2);
 });
 
+test("saveProjectRegistry round-trips an optional display name", async () => {
+	const homeDir = await tempHome();
+	await saveProjectRegistry(
+		[
+			{ cwd: "/tmp/a", addedAt: 10, name: "Work" },
+			{ cwd: "/tmp/b", addedAt: 20 },
+		],
+		{ homeDir },
+	);
+
+	assert.deepEqual(await loadProjectRegistry({ homeDir }), [
+		{ cwd: "/tmp/a", addedAt: 10, name: "Work" },
+		{ cwd: "/tmp/b", addedAt: 20 },
+	]);
+});
+
 test("loadProjectRegistry survives a corrupt file", async () => {
 	const homeDir = await tempHome();
 	await writeRegistry(homeDir, "{ not json");
