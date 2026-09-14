@@ -199,6 +199,14 @@ test("bash truncates long output and marks truncation flags", {
 	assert.ok(typeof overflowFile === "string", "expected an overflow file path");
 	const overflow = await readFile(overflowFile, "utf8");
 	assert.match(overflow, /x{200}/);
+	// The rendered text the model reads must point at the full output, not
+	// just show a truncated preview.
+	const rendered = (result.data as { rendered?: string }).rendered ?? "";
+	assert.match(rendered, /truncated/);
+	assert.ok(
+		rendered.includes(overflowFile),
+		"expected rendered output to include the overflow file path",
+	);
 });
 
 test("bash starts every command in the project directory (no cd carry-over)", {
