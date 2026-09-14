@@ -762,12 +762,13 @@ test("GET .../messages pages a stored session's history newest-first", async () 
 async function withPickedServer(
 	pickDirectory: () => Promise<string | null>,
 	run: (baseUrl: string) => Promise<void>,
+	onError?: (error: unknown, context: { method: string; path: string }) => void,
 ): Promise<void> {
 	const manager = new SessionManager({
 		createRuntime: async () => makeRuntime("sess"),
 		listStoredSessions: async () => [],
 	});
-	const server = createMultiSessionServer({ manager, pickDirectory });
+	const server = createMultiSessionServer({ manager, pickDirectory, onError });
 	const baseUrl = await listen(server);
 	try {
 		await run(baseUrl);
@@ -816,6 +817,68 @@ test("POST /projects/pick maps an unavailable picker to 501", async () => {
 			assert.deepEqual(await response.json(), { error: "picker_unavailable" });
 		},
 	);
+});
+
+test("POST /projects/pick reports an unexpected picker error as 500", async () => {
+	const reports: Array<{ message: string; path: string }> = [];
+	await withPickedServer(
+		async () => {
+			throw new Error("dialog crashed");
+		},
+		async (baseUrl) => {
+			const response = await fetch(`${baseUrl}/projects/pick`, {
+				method: "POST",
+			});
+			assert.equal(response.status, 500);
+			assert.deepEqual(await response.json(), { error: "dialog crashed" });
+			assert.equal(reports.length, 1);
+			assert.equal(reports[0]?.message, "dialog crashed");
+			assert.equal(reports[0]?.path, "/projects/pick");
+		},
+		(error, context) => {
+			reports.push({
+				message: error instanceof Error ? error.message : String(error),
+				path: context.path,
+			});
+		},
+	);
+});
+
+test("an unexpected request error is reported via onError and returned as 500", async () => {
+	const reports: Array<{ message: string; method: string; path: string }> = [];
+	const manager = new SessionManager({
+		createRuntime: async () => makeRuntime("sess"),
+		listStoredSessions: async () => {
+			throw new Error("store exploded");
+		},
+	});
+	const server = createMultiSessionServer({
+		manager,
+		onError: (error, context) => {
+			reports.push({
+				message: error instanceof Error ? error.message : String(error),
+				method: context.method,
+				path: context.path,
+			});
+		},
+	});
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+
+		const response = await fetch(`${baseUrl}/projects/${key}/sessions`);
+		assert.equal(response.status, 500);
+		assert.deepEqual(await response.json(), { error: "store exploded" });
+
+		assert.equal(reports.length, 1);
+		assert.equal(reports[0]?.method, "GET");
+		assert.equal(reports[0]?.path, `/projects/${key}/sessions`);
+		assert.equal(reports[0]?.message, "store exploded");
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
 });
 
 test("GET /projects/pick is not allowed", async () => {

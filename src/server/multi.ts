@@ -37,9 +37,52 @@ export interface MultiSessionServerOptions {
 	 * platform chooser in `./directory-picker.ts`.
 	 */
 	pickDirectory?: DirectoryPicker;
+	/**
+	 * Report an unexpected server-side error — one that is about to become a
+	 * bare `5xx` for the browser. Defaults to a single line on stderr so a
+	 * `serve` operator sees failures without opening the browser console or
+	 * the log file (`TINYPI_DEBUG_STACK=1` appends the stack, matching the
+	 * CLI's top-level handler). Injectable so tests can capture reports.
+	 */
+	onError?: (error: unknown, context: ServerErrorContext) => void;
+}
+
+/** The request a reported error belongs to, for the console line. */
+export interface ServerErrorContext {
+	method: string;
+	path: string;
 }
 
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Default {@link MultiSessionServerOptions.onError}: print a one-line report to
+ * stderr so a running `serve` process surfaces request failures the same way
+ * the browser receives them, instead of failing silently off-screen.
+ */
+function defaultOnError(error: unknown, context: ServerErrorContext): void {
+	const message = error instanceof Error ? error.message : String(error);
+	console.error(`[serve] ${context.method} ${context.path} failed: ${message}`);
+	if (process.env.TINYPI_DEBUG_STACK === "1" && error instanceof Error) {
+		console.error(error.stack);
+	}
+}
+
+/**
+ * Invoke a reporter without letting it break the request: a faulty `onError`
+ * (including test doubles) must never mask the original failure.
+ */
+function reportError(
+	onError: (error: unknown, context: ServerErrorContext) => void,
+	error: unknown,
+	req: IncomingMessage,
+): void {
+	try {
+		onError(error, { method: req.method ?? "GET", path: req.url ?? "/" });
+	} catch {
+		// Swallow: reporting must not throw.
+	}
+}
 
 /**
  * The multi-session web frontend: a proof that one process hosts many
@@ -74,15 +117,21 @@ export function createMultiSessionServer(
 	const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 	const { manager } = options;
 	const pickDirectory = options.pickDirectory ?? defaultPickDirectory;
+	const onError = options.onError ?? defaultOnError;
 	const server = createServer((req, res) => {
-		route(req, res, manager, maxBodyBytes, pickDirectory).catch((error) => {
-			const message = error instanceof Error ? error.message : String(error);
-			if (!res.headersSent) {
-				writeJson(res, 500, { error: message });
-				return;
-			}
-			res.end();
-		});
+		route(req, res, manager, maxBodyBytes, pickDirectory, onError).catch(
+			(error) => {
+				// Log before responding so an operator watching the terminal sees the
+				// failure that the browser only sees as a bare 500.
+				reportError(onError, error, req);
+				const message = error instanceof Error ? error.message : String(error);
+				if (!res.headersSent) {
+					writeJson(res, 500, { error: message });
+					return;
+				}
+				res.end();
+			},
+		);
 	});
 	return server;
 }
@@ -93,6 +142,7 @@ async function route(
 	manager: SessionManager,
 	maxBodyBytes: number,
 	pickDirectory: DirectoryPicker,
+	onError: (error: unknown, context: ServerErrorContext) => void,
 ): Promise<void> {
 	const url = new URL(req.url ?? "/", "http://localhost");
 
@@ -128,7 +178,7 @@ async function route(
 			return;
 		}
 		if (method === "POST") {
-			await handleAddProject(req, res, manager, maxBodyBytes);
+			await handleAddProject(req, res, manager, maxBodyBytes, onError);
 			return;
 		}
 		methodNotAllowed(res);
@@ -140,7 +190,7 @@ async function route(
 	// /projects/:key
 	if (segments.length === 2) {
 		if (method === "POST" && projectKey === "pick") {
-			await handlePickDirectory(res, pickDirectory);
+			await handlePickDirectory(req, res, pickDirectory, onError);
 			return;
 		}
 		if (method === "PATCH") {
@@ -172,7 +222,14 @@ async function route(
 			return;
 		}
 		if (method === "POST") {
-			await handleCreateSession(req, res, manager, projectKey, maxBodyBytes);
+			await handleCreateSession(
+				req,
+				res,
+				manager,
+				projectKey,
+				maxBodyBytes,
+				onError,
+			);
 			return;
 		}
 		methodNotAllowed(res);
@@ -257,6 +314,7 @@ async function handleAddProject(
 	res: ServerResponse,
 	manager: SessionManager,
 	maxBodyBytes: number,
+	onError: (error: unknown, context: ServerErrorContext) => void,
 ): Promise<void> {
 	let body: string;
 	try {
@@ -283,8 +341,11 @@ async function handleAddProject(
 		const project = await manager.addProject(input);
 		writeJson(res, 201, { key: project.key, cwd: project.cwd });
 	} catch (error) {
-		sendManagerError(res, error, (code) =>
-			code === "invalid_project_path" ? 400 : 500,
+		sendManagerError(
+			res,
+			error,
+			(code) => (code === "invalid_project_path" ? 400 : 500),
+			(err) => reportError(onError, err, req),
 		);
 	}
 }
@@ -402,8 +463,10 @@ async function handleUpdateSession(
  * when the host has no chooser, and `{ path: null }` when the user cancels.
  */
 async function handlePickDirectory(
+	req: IncomingMessage,
 	res: ServerResponse,
 	pickDirectory: DirectoryPicker,
+	onError: (error: unknown, context: ServerErrorContext) => void,
 ): Promise<void> {
 	let picked: string | null;
 	try {
@@ -413,6 +476,7 @@ async function handlePickDirectory(
 			writeJson(res, 501, { error: "picker_unavailable" });
 			return;
 		}
+		reportError(onError, error, req);
 		writeJson(res, 500, {
 			error: error instanceof Error ? error.message : String(error),
 		});
@@ -574,6 +638,7 @@ async function handleCreateSession(
 	manager: SessionManager,
 	projectKey: string,
 	maxBodyBytes: number,
+	onError: (error: unknown, context: ServerErrorContext) => void,
 ): Promise<void> {
 	let sessionId: string | undefined;
 	let body: string;
@@ -598,7 +663,9 @@ async function handleCreateSession(
 	try {
 		session = await manager.createSession({ projectKey, sessionId });
 	} catch (error) {
-		sendManagerError(res, error, mapSessionErrorStatus);
+		sendManagerError(res, error, mapSessionErrorStatus, (err) =>
+			reportError(onError, err, req),
+		);
 		return;
 	}
 	writeJson(res, 201, {
@@ -642,11 +709,15 @@ function sendManagerError(
 	res: ServerResponse,
 	error: unknown,
 	mapStatus: (code: SessionManagerErrorCode) => number,
+	report: (error: unknown) => void,
 ): void {
 	if (error instanceof SessionManagerError) {
 		writeJson(res, mapStatus(error.code), { error: error.code });
 		return;
 	}
+	// An unexpected error is a bug, not a modelled outcome: surface it on the
+	// console before turning it into the browser's bare 500.
+	report(error);
 	writeJson(res, 500, {
 		error: error instanceof Error ? error.message : String(error),
 	});
