@@ -4,9 +4,10 @@
  * The browser client ships as plain ES modules with no bundler, so pulling in a
  * full Markdown library (and its build step) would be out of proportion for what
  * assistant output needs. This covers the common subset — fenced code, ATX
- * headings, unordered/ordered lists, blockquotes, horizontal rules, paragraphs,
- * inline code / bold / italic, and links — while building DOM nodes directly so
- * nothing is ever assigned through `innerHTML` (no HTML-injection surface).
+ * headings, unordered/ordered lists, blockquotes, horizontal rules, GFM tables,
+ * paragraphs, inline code / bold / italic, and links — while building DOM nodes
+ * directly so nothing is ever assigned through `innerHTML` (no HTML-injection
+ * surface).
  *
  * Emphasis deliberately supports only the asterisk forms: treating `_` as
  * emphasis would mangle identifiers like `snake_case` that show up constantly in
@@ -72,6 +73,94 @@ function buildLink(token) {
 	return anchor;
 }
 
+/** True when `line` could be part of a GFM table (it carries a `|` separator). */
+function looksLikeTableRow(line) {
+	return line.includes("|");
+}
+
+/**
+ * Split a `| a | b |` row into trimmed cells. The outer pipes are optional, so
+ * `a | b` and `| a | b |` yield the same two cells.
+ */
+function splitTableRow(line) {
+	let text = line.trim();
+	if (text.startsWith("|")) text = text.slice(1);
+	if (text.endsWith("|")) text = text.slice(0, -1);
+	return text.split("|").map((cell) => cell.trim());
+}
+
+/** One `:---:` alignment cell of a GFM delimiter row. */
+const DELIMITER_CELL = /^:?-+:?$/;
+
+/** True when `line` is a table delimiter row (`|---|:--:|`). */
+function isTableDelimiter(line) {
+	const cells = splitTableRow(line);
+	return cells.length > 0 && cells.every((cell) => DELIMITER_CELL.test(cell));
+}
+
+/** Apply a GFM column alignment (`left`/`center`/`right`) to a header/body cell. */
+function applyAlignment(cell, alignment) {
+	if (alignment) cell.style.textAlign = alignment;
+}
+
+/**
+ * Render a GFM table starting at `lines[start]` (the header row), whose next
+ * line is the delimiter row. Returns the wrapper element and the index of the
+ * first line after the table. Body rows continue while lines still carry a
+ * `|`, matching how a stray paragraph immediately below a pipe row would have
+ * been glued to the table by other GFM parsers.
+ */
+function renderTable(lines, start) {
+	const header = splitTableRow(lines[start]);
+	const alignments = splitTableRow(lines[start + 1]).map((cell) => {
+		const left = cell.startsWith(":");
+		const right = cell.endsWith(":");
+		if (left && right) return "center";
+		if (right) return "right";
+		if (left) return "left";
+		return null;
+	});
+
+	const table = document.createElement("table");
+	const thead = document.createElement("thead");
+	const headRow = document.createElement("tr");
+	header.forEach((text, column) => {
+		const th = document.createElement("th");
+		applyAlignment(th, alignments[column]);
+		th.append(renderInline(text));
+		headRow.append(th);
+	});
+	thead.append(headRow);
+	table.append(thead);
+
+	const tbody = document.createElement("tbody");
+	let index = start + 2;
+	while (
+		index < lines.length &&
+		looksLikeTableRow(lines[index]) &&
+		!isTableDelimiter(lines[index])
+	) {
+		const cells = splitTableRow(lines[index]);
+		const row = document.createElement("tr");
+		// Pad/truncate to the header's column count so rows stay aligned.
+		header.forEach((_, column) => {
+			const td = document.createElement("td");
+			applyAlignment(td, alignments[column]);
+			td.append(renderInline(cells[column] ?? ""));
+			row.append(td);
+		});
+		tbody.append(row);
+		index += 1;
+	}
+	table.append(tbody);
+
+	// Wrap in a scroll container so wide tables scroll rather than overflow.
+	const wrapper = document.createElement("div");
+	wrapper.className = "table-wrap";
+	wrapper.append(table);
+	return { element: wrapper, index };
+}
+
 /** Flush the buffered paragraph lines into a `<p>` (with `<br>` between lines). */
 function flushParagraph(fragment, lines) {
 	if (lines.length === 0) return;
@@ -135,6 +224,18 @@ export function renderMarkdown(text) {
 			flushParagraph(fragment, paragraph);
 			fragment.append(document.createElement("hr"));
 			index += 1;
+			continue;
+		}
+
+		if (
+			looksLikeTableRow(line) &&
+			index + 1 < lines.length &&
+			isTableDelimiter(lines[index + 1])
+		) {
+			flushParagraph(fragment, paragraph);
+			const table = renderTable(lines, index);
+			fragment.append(table.element);
+			index = table.index;
 			continue;
 		}
 

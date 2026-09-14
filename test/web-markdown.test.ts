@@ -94,6 +94,36 @@ test("parses several emphasis spans without losing its place", async () => {
 	assert.equal(el.querySelector("em")?.textContent, "italic");
 });
 
+test("renders a GFM table with header, alignment, and body rows", async () => {
+	const el = await render(
+		"| 关闭方式 | 后台任务 |\n| :-- | --: |\n| SIGTERM | 通常能收 |\n| 硬杀 | 不清理 |",
+	);
+	const table = el.querySelector("table");
+	assert.ok(table, "a pipe table becomes a <table>");
+	assert.deepEqual(
+		Array.from(table.querySelectorAll("th")).map((th) => th.textContent),
+		["关闭方式", "后台任务"],
+	);
+	assert.deepEqual(
+		Array.from(table.querySelectorAll("tbody tr")).map((tr) =>
+			Array.from(tr.querySelectorAll("td")).map((td) => td.textContent),
+		),
+		[
+			["SIGTERM", "通常能收"],
+			["硬杀", "不清理"],
+		],
+	);
+	const headers = Array.from(table.querySelectorAll("th"));
+	assert.equal(headers[0]?.style.textAlign, "left");
+	assert.equal(headers[1]?.style.textAlign, "right");
+});
+
+test("does not treat a lone pipe line as a table", async () => {
+	const el = await render("a | b");
+	assert.equal(el.querySelector("table"), null);
+	assert.equal(el.querySelector("p")?.textContent, "a | b");
+});
+
 test("renders horizontal rules and a trailing paragraph", async () => {
 	const el = await render("intro\n\n---\n\npartial");
 	assert.notEqual(el.querySelector("hr"), null);

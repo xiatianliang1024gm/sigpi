@@ -557,6 +557,25 @@ button:disabled {
 	border: none;
 	border-top: 1px solid var(--border);
 }
+/* Tables scroll horizontally when wider than the message column. */
+.content .table-wrap {
+	margin: 0 0 8px;
+	overflow-x: auto;
+}
+.content table {
+	border-collapse: collapse;
+	font-size: 13px;
+}
+.content th,
+.content td {
+	border: 1px solid var(--border);
+	padding: 4px 8px;
+	text-align: left;
+}
+.content th {
+	background: var(--panel-2);
+	font-weight: 600;
+}
 
 .tool {
 	color: var(--muted);
