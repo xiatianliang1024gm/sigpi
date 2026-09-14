@@ -472,8 +472,13 @@ export class DiskSessionStore implements SessionStore {
 	}): Promise<PersistedSession> {
 		const session = await this.readSession(args.sessionId);
 		const startedAt = formatLocalTimestamp(new Date());
+		// Auto-title brand-new sessions from their first user message so the
+		// sidebar stops showing the generic placeholder as soon as the turn
+		// starts. Manual renames (a non-null title) are left untouched.
+		const title = session.title ?? deriveTitle(args.userInput);
 		const updated: PersistedSession = {
 			...session,
+			title,
 			updatedAt: startedAt,
 			lastTurn: {
 				startedAt,

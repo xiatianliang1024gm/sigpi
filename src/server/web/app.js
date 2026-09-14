@@ -1134,6 +1134,15 @@ async function sendMessage(text) {
 	if (!state.sessionId || state.turnActive) return;
 	addUserMessage(text);
 	setTurnActive(true);
+	// The server titles untitled sessions from their first user message; mirror
+	// that locally so the sidebar updates immediately instead of waiting for the
+	// turn to finish.
+	const bucket = state.sessionsByProject.get(state.projectKey);
+	const summary = bucket?.stored.find((s) => s.sessionId === state.sessionId);
+	if (summary && !summary.title) {
+		summary.title = truncateTitle(text);
+		renderProjects();
+	}
 	try {
 		const response = await fetch(`${sessionBase()}/message`, {
 			method: "POST",
@@ -1187,6 +1196,12 @@ function baseName(p) {
  */
 function sessionLabel(session) {
 	return session.title || session.lastCompletedUserInput || "新会话";
+}
+
+/** Mirror the server's title derivation (whitespace-collapsed, ≤80 chars). */
+function truncateTitle(text) {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	return normalized.length <= 80 ? normalized : `${normalized.slice(0, 77)}...`;
 }
 
 // --- relative time ---------------------------------------------------------
