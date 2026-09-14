@@ -24,8 +24,9 @@
   `createProjectKey(cwd)`（`<slug>-<sha256前16>`）把会话存到
   `~/.sigpi/projects/<projectKey>/sessions/`。**天然支持多目录** —— 每个 cwd 一个
   projectKey。
-- 最小 HTTP/SSE 传输（`src/server/http.ts`、`src/server/sse.ts`）：`POST /message`、
-  `POST /interrupt`、`GET /events`。目前是**单会话**的验证版。
+- 最小 HTTP/SSE 传输（`src/server/http.ts`、`src/server/sse.ts`）：共享处理器
+  `POST /message`、`POST /interrupt`、`GET /events`，由多会话服务 `createMultiSessionServer`
+  （`src/server/multi.ts`）按 `projectKey`/`sessionId` 路由复用。
 
 ## 2. 前端边界原则（务必遵守）
 
@@ -34,7 +35,7 @@ AgentRunner (纯事件, 无 UI)
    ↑ 被
 SessionController  ← 每个会话一个；不 import 任何 tui/、不碰 process.*、不含 git
    ├── TUI:  ChatRenderer (ReplView) ← applyTurnProgress   [+ git 分支显示]
-   └── Web:  createChatServer → SSE frames                  [无 git]
+   └── Web:  createMultiSessionServer → SSE frames            [无 git]
 ```
 
 **底线**：`src/session/**` 与 `src/agent/**` 里**不得**出现终端、`pi-tui`、git 分支
@@ -159,9 +160,10 @@ SessionManager
 
 1. **SessionManager（内存）**：`projects` + `sessions` 两张 map，`create/get/dispose`。
    先写单元测试，用 fake `createAgentRuntime` 依赖注入。✅
-2. **路由改造**：把 `server/http.ts` 从单会话改为按 `sessionKey` 取 controller；
-   保留旧接口作为"默认会话"的便捷入口（可选）。✅（旧单会话 `createChatServer`
-   保留；新增按 `projectKey`/`sessionId` 路由的多会话服务）
+2. **路由改造**：把 `server/http.ts` 从单会话改为按 `sessionKey` 取 controller。
+    ✅（新增按 `projectKey`/`sessionId` 路由的多会话服务 `createMultiSessionServer`；
+    `http.ts` 只保留共享处理器 `handleSessionEvents` / `handleSessionMessage` /
+    `readBody` / `writeJson`，旧的单会话 `createChatServer` 已删除）
 3. **多目录 API**：`/projects` 增删查 + 目录校验；会话列表复用 session store index。✅
 4. **生命周期**：空闲 TTL、连接关闭清理、`dispose()` 串接。✅
 5. **前端**：最小页面，`EventSource` 订阅 + `applyTurnProgress` 移植。✅
