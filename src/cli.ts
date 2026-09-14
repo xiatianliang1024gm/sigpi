@@ -429,6 +429,13 @@ async function runChatReplLoop(
 	unsubscribeProgress();
 	unsubscribeBranchChange();
 	stopBranchWatcher();
+	// Teardown for the interactive CLI: the runtime's background tasks were
+	// spawned detached (see `BackgroundTaskManager`), so without this they
+	// would outlive the process as orphans once the loop breaks (via `/exit`
+	// or EOF/Ctrl+D). Best-effort: each running group is SIGTERMed, then
+	// SIGKILLed on a short grace timer. Idempotent, so a runtime that never
+	// started a task is a no-op.
+	state.runtime.dispose();
 	// The terminal is restored, so a plain stdout line is safe here. Print
 	// the run's cumulative agent time and billed tokens (no-op on an empty
 	// session with no turns).
