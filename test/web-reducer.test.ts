@@ -231,3 +231,37 @@ test("applyTurnProgress surfaces interrupts, failures, and compactions as system
 	assert.equal(isTurnTerminalEvent({ type: "turn_failed" }), true);
 	assert.equal(isTurnTerminalEvent({ type: "model_delta" }), false);
 });
+
+test("applyTurnProgress surfaces a failed turn's user-facing message", async () => {
+	const { applyTurnProgress } = await loadReducer();
+	const { view, log } = makeView();
+	const toolLines = new Map<string, unknown>();
+
+	applyTurnProgress(
+		view,
+		{
+			type: "turn_failed",
+			step: 1,
+			elapsedMs: 12,
+			failureType: "ModelRequestError",
+			message: "Model request failed: 401 Unauthorized",
+			userMessage:
+				"Authentication failed (HTTP 401/403). Check your api_key and base_url, then retry.",
+		},
+		null,
+		toolLines,
+	);
+	assert.deepEqual(log, [
+		"sys:error:Authentication failed (HTTP 401/403). Check your api_key and base_url, then retry.",
+	]);
+
+	// A failure event carrying only the raw message stays silent (no user text).
+	const { view: view2, log: log2 } = makeView();
+	applyTurnProgress(
+		view2,
+		{ type: "turn_failed", step: 1, message: "boom" },
+		null,
+		new Map<string, unknown>(),
+	);
+	assert.deepEqual(log2, []);
+});

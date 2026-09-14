@@ -406,7 +406,19 @@ async function runChatReplLoop(
 		// runner ever returns without one (an error before its own try block),
 		// stop the clock here rather than leave a stuck ticking timer.
 		turnStartedAt = null;
-		if (!turn.ok) {
+		// A turn that emitted `turn_failed` already rendered its user-facing
+		// message through the progress reducer; only fall back to writing the
+		// outcome's errorMessage when no such event reached us (e.g. a failure
+		// before the runner's own try block). Guards against a duplicate line.
+		// Cast: TS's flow analysis narrows `latestProgressEvent` to its last
+		// direct assignment (`null`), ignoring the listener closure that sets it
+		// during the turn.
+		const lastEvent = latestProgressEvent as TurnProgressEvent | null;
+		const failureRendered =
+			lastEvent !== null &&
+			lastEvent.type === "turn_failed" &&
+			Boolean(lastEvent.userMessage);
+		if (!turn.ok && !failureRendered) {
 			writeError(turn.errorMessage);
 		}
 	}

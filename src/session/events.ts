@@ -153,6 +153,12 @@ export function applyTurnProgress(
 			handle.fail("interrupted");
 		}
 		toolLines.clear();
+		if (event.type === "turn_failed" && event.userMessage) {
+			// Without this the transcript silently swallows a failed turn (the
+			// reported web bug); the TUI/CLI used to show it only because it
+			// rendered the submit outcome's errorMessage separately.
+			view.appendSystem(event.userMessage, "error");
+		}
 		if (event.type === "turn_interrupted") {
 			view.appendSystem("Turn interrupted.", "info");
 		}
