@@ -383,7 +383,7 @@ test("a session round-trips submit + SSE + interrupt under a project", async () 
 	});
 });
 
-test("a reconnecting client is caught up via its Last-Event-ID cursor", async () => {
+test("a reconnecting client replays the whole open turn from its start", async () => {
 	await withControlledServer(async ({ baseUrl, bus }) => {
 		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
 		const key = await addProject(baseUrl, dir);
@@ -416,19 +416,23 @@ test("a reconnecting client is caught up via its Last-Event-ID cursor", async ()
 		bus.fire({ type: "model_delta", step: 1, contentDelta: "Hel" });
 		bus.fire({ type: "model_delta", step: 1, contentDelta: "lo" });
 
-		// Reconnecting with the last id replays exactly the missed frames.
+		// Reconnecting replays the open turn from `turn_started` — even though the
+		// browser echoed back a (here, stale) `Last-Event-ID`. Honoring that cursor
+		// is exactly what used to make the client skip the turn's early frames.
 		const second = new AbortController();
 		try {
 			const again = await fetch(eventsUrl, {
-				headers: { "last-event-id": "1" },
+				headers: { "last-event-id": "2" },
 				signal: second.signal,
 			});
-			const replay = await readFrames(again, 4);
+			const replay = await readFrames(again, 5);
 			assert.match(replay[1] ?? "", /"type":"ready"/);
-			assert.match(replay[2] ?? "", /id: 2/);
-			assert.match(replay[2] ?? "", /"contentDelta":"Hel"/);
-			assert.match(replay[3] ?? "", /id: 3/);
-			assert.match(replay[3] ?? "", /"contentDelta":"lo"/);
+			assert.match(replay[2] ?? "", /id: 1/);
+			assert.match(replay[2] ?? "", /"type":"turn_started"/);
+			assert.match(replay[3] ?? "", /id: 2/);
+			assert.match(replay[3] ?? "", /"contentDelta":"Hel"/);
+			assert.match(replay[4] ?? "", /id: 3/);
+			assert.match(replay[4] ?? "", /"contentDelta":"lo"/);
 		} finally {
 			second.abort();
 		}

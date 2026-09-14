@@ -683,6 +683,38 @@ test("folds a streamed turn into the DOM transcript", async () => {
 	);
 });
 
+test("rebuilds the in-flight turn when a reconnect replays turn_started", async () => {
+	const harness = await openSession();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+
+	source.message({ type: "ready", turnActive: true });
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	source.message({ type: "model_delta", step: 1, contentDelta: "Hel" });
+	source.message({ type: "model_delta", step: 1, contentDelta: "lo" });
+	await flush();
+	const content = () =>
+		harness.document.querySelector("#transcript .msg.assistant .content")
+			?.textContent;
+	assert.equal(content(), "Hello");
+
+	// The stream drops and reconnects; the server replays the whole open turn
+	// from its start. The client must rebuild in place, not append a second copy.
+	source.message({ type: "ready", turnActive: true });
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	source.message({ type: "model_delta", step: 1, contentDelta: "Hel" });
+	source.message({ type: "model_delta", step: 1, contentDelta: "lo" });
+	source.message({ type: "model_delta", step: 1, contentDelta: "!!" });
+	await flush();
+
+	assert.equal(
+		harness.document.querySelectorAll("#transcript .msg.assistant").length,
+		1,
+		"the replayed turn replaces the prior partial copy instead of stacking",
+	);
+	assert.equal(content(), "Hello!!");
+});
+
 test("sends a turn and interrupts through the composer", async () => {
 	const harness = await openSession();
 	const source = harness.sources.at(-1);

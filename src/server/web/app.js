@@ -46,6 +46,12 @@ const state = {
 	modelId: null,
 	currentAssistant: null,
 	toolLines: new Map(),
+	/**
+	 * Transcript nodes rendered for the currently open turn. A reconnect replays
+	 * the whole open turn from its `turn_started`, so the client drops these
+	 * before rebuilding rather than appending a duplicate copy.
+	 */
+	turnNodes: [],
 	/** Exclusive end index for the next older history page; null when none. */
 	historyCursor: null,
 	historyLoading: false,
@@ -102,13 +108,29 @@ function renderContent(element, text) {
 	element.replaceChildren(renderMarkdown(text));
 }
 
+/** Append a node to the transcript and remember it as part of the open turn. */
+function appendTurnNode(node) {
+	els.transcript.append(node);
+	state.turnNodes.push(node);
+	scrollToEnd();
+}
+
+/**
+ * Drop the open turn's transcript nodes. Called when a (re)played
+ * `turn_started` arrives so the freshly streamed turn rebuilds in place instead
+ * of being appended below a stale partial copy.
+ */
+function clearTurnNodes() {
+	for (const node of state.turnNodes) node.remove();
+	state.turnNodes = [];
+}
+
 /** The DOM-backed {@link TurnTranscriptView} the shared reducer writes to. */
 const view = {
 	beginAssistantMessage() {
 		const { root, reasoning, preview, body, content } =
 			createAssistantMessage();
-		els.transcript.append(root);
-		scrollToEnd();
+		appendTurnNode(root);
 		let reasoningText = "";
 		let contentText = "";
 		let done = false;
@@ -141,8 +163,7 @@ const view = {
 		labelEl.className = "tool-label";
 		labelEl.textContent = `⚙ ${label}`;
 		line.append(labelEl);
-		els.transcript.append(line);
-		scrollToEnd();
+		appendTurnNode(line);
 		return {
 			finish() {
 				line.classList.remove("running");
@@ -167,8 +188,7 @@ const view = {
 		const line = document.createElement("div");
 		line.className = tone ? `system ${tone}` : "system";
 		line.textContent = text;
-		els.transcript.append(line);
-		scrollToEnd();
+		appendTurnNode(line);
 	},
 };
 
@@ -179,6 +199,7 @@ function scrollToEnd() {
 function clearTranscript() {
 	state.currentAssistant = null;
 	state.toolLines.clear();
+	state.turnNodes = [];
 	els.transcript.textContent = "";
 	resetHistory();
 }
@@ -296,6 +317,9 @@ function handleEvent(event) {
 		return;
 	}
 	if (event.type === "turn_started") {
+		// A (re)played turn_started begins a fresh in-flight turn: drop whatever
+		// partial copy the transcript holds so a reconnect rebuilds in place.
+		clearTurnNodes();
 		state.currentAssistant = null;
 		state.toolLines.clear();
 		setTurnActive(true);
@@ -308,6 +332,9 @@ function handleEvent(event) {
 		state.toolLines,
 	);
 	if (isTurnTerminalEvent(event)) {
+		// The turn is committed to history now; stop tracking its nodes so the
+		// next turn's turn_started does not remove it.
+		state.turnNodes = [];
 		setTurnActive(false);
 		void loadSessions();
 	}
