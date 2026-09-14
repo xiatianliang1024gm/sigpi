@@ -185,6 +185,12 @@ class Harness {
 		return new ctor("change", { bubbles: true });
 	}
 
+	/** A bubbling `input` `Event` from this document's realm. */
+	inputEvent(): Event {
+		const ctor = (this.dom.window as unknown as { Event: typeof Event }).Event;
+		return new ctor("input", { bubbles: true });
+	}
+
 	/** HTTP calls recorded for a given method + path. */
 	callsTo(method: string, path: string): HttpCall[] {
 		return this.calls.filter(
@@ -746,6 +752,66 @@ test("Enter sends the composer, but empty input and Shift+Enter do not", async (
 	assert.equal(
 		harness.document.querySelector("#transcript .msg.user")?.textContent,
 		"hello from enter",
+	);
+});
+
+test("keeps unsubmitted composer text per session across switches", async () => {
+	const harness = await Harness.create();
+	// Two live sessions in one workspace so switching never hits the resume POST.
+	harness.sessions.set("k1", {
+		stored: [],
+		live: [
+			{ sessionId: "s1", title: "One", turnActive: false },
+			{ sessionId: "s2", title: "Two", turnActive: false },
+		],
+	});
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	const input = element<HTMLTextAreaElement>(harness.document, "input");
+	const openRow = async (label: string): Promise<void> => {
+		const button = Array.from(
+			harness.document.querySelectorAll<HTMLButtonElement>(
+				"#projects .session-row .session",
+			),
+		).find((el) => el.textContent === label);
+		assert.ok(button, `the ${label} session row exists`);
+		button.click();
+		await flush();
+	};
+
+	// Draft in session one, then switch away before submitting.
+	await openRow("One");
+	input.value = "draft one";
+	input.dispatchEvent(harness.inputEvent());
+	await openRow("Two");
+	assert.equal(
+		input.value,
+		"",
+		"a fresh session starts with an empty composer, not the previous draft",
+	);
+
+	// Draft in session two, then switch back: each session keeps its own text.
+	input.value = "draft two";
+	input.dispatchEvent(harness.inputEvent());
+	await openRow("One");
+	assert.equal(input.value, "draft one", "session one restores its own draft");
+	await openRow("Two");
+	assert.equal(input.value, "draft two", "session two restores its own draft");
+
+	// Submitting clears the box and the stored draft.
+	await openRow("One");
+	harness.document
+		.getElementById("composer")
+		?.dispatchEvent(harness.submitEvent());
+	await flush();
+	assert.equal(input.value, "");
+	await openRow("Two");
+	await openRow("One");
+	assert.equal(
+		input.value,
+		"",
+		"a submitted draft is not restored on the next visit",
 	);
 });
 
