@@ -16,6 +16,7 @@ import type {
 	SessionEntry as SessionStreamEntry,
 	SessionSummary,
 } from "../types.js";
+import { SessionEventLog } from "./event-log.js";
 
 /**
  * The slice of a runtime a {@link SessionManager} owns: the headless
@@ -71,6 +72,12 @@ export interface SessionEntry {
 	cwd: string;
 	sessionId: string;
 	controller: SessionController;
+	/**
+	 * Retained, sequenced copy of the session's progress events, so an SSE client
+	 * that connects (or reconnects) after the fact can be caught up rather than
+	 * losing whatever was emitted while it was away.
+	 */
+	events: SessionEventLog;
 	runtime: ManagedRuntime;
 	createdAt: number;
 	lastActivityAt: number;
@@ -583,12 +590,16 @@ export class SessionManager {
 			sessionId: args.sessionId,
 		});
 		const sessionId = runtime.sessionId || args.sessionId || "";
+		const controller = this.createControllerFn(runtime);
 		const entry: SessionEntry = {
 			key: sessionKey(project.cwd, sessionId),
 			projectKey: project.key,
 			cwd: project.cwd,
 			sessionId,
-			controller: this.createControllerFn(runtime),
+			controller,
+			// The log subscribes to the controller for the session's whole life, so
+			// events are retained even while no browser is streaming.
+			events: new SessionEventLog(controller),
 			runtime,
 			createdAt: this.now(),
 			lastActivityAt: this.now(),
@@ -725,6 +736,7 @@ export class SessionManager {
 
 	private async disposeSessionEntry(session: SessionEntry): Promise<void> {
 		this.sessions.delete(session.key);
+		session.events.dispose();
 		try {
 			await session.runtime.dispose();
 		} catch {

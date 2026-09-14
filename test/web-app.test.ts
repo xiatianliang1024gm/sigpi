@@ -139,6 +139,8 @@ class Harness {
 		string,
 		{ items: Array<Record<string, unknown>>; cursor: number | null }
 	>();
+	/** When set, `GET .../messages` awaits it before responding (ordering tests). */
+	historyGate: Promise<void> | null = null;
 	/** The model-picker snapshot served by `GET .../model`. */
 	modelState: {
 		current: string;
@@ -266,6 +268,7 @@ class Harness {
 			method === "GET" &&
 			/^\/projects\/[^/]+\/sessions\/[^/]+\/messages$/.test(pathname)
 		) {
+			if (this.historyGate) await this.historyGate;
 			const before = new URLSearchParams(path.split("?")[1] ?? "").get(
 				"before",
 			);
@@ -881,6 +884,35 @@ test("loads a resumed session's history and pages older messages", async () => {
 		).length,
 		1,
 		"the cursor is sent back as `before`",
+	);
+});
+
+test("opens the event stream only after the session's history has loaded", async () => {
+	const harness = await Harness.create();
+	// Block the history response so we can observe that the stream waits for it.
+	let release: () => void = () => {};
+	harness.historyGate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
+	assert.ok(newSession, "the project menu offers a new session");
+	newSession.click();
+	await flush();
+
+	assert.equal(
+		harness.sources.length,
+		0,
+		"the stream is not opened while history is still loading",
+	);
+	release();
+	await flush();
+	assert.ok(
+		harness.sources.length > 0,
+		"the stream opens once history has rendered",
 	);
 });
 

@@ -227,7 +227,10 @@ async function route(
 		}
 		if (method === "GET" && sub === "events") {
 			manager.touch(session);
-			handleSessionEvents(req, res, session.controller);
+			handleSessionEvents(req, res, {
+				events: session.events,
+				isTurnActive: () => session.controller.isTurnActive(),
+			});
 			return;
 		}
 		if (method === "POST" && sub === "message") {

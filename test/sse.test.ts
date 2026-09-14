@@ -23,6 +23,13 @@ test("encodeSseEvent splits multi-line payloads into data: lines", () => {
 	assert.ok(frame.endsWith("\n\n"));
 });
 
+test("encodeSseEvent emits an id: line when given a sequence", () => {
+	assert.equal(
+		encodeSseEvent("message", { type: "turn_started" }, 7),
+		'id: 7\nevent: message\ndata: {"type":"turn_started"}\n\n',
+	);
+});
+
 test("encodeSseComment emits a comment frame", () => {
 	assert.equal(encodeSseComment("connected"), ": connected\n\n");
 });

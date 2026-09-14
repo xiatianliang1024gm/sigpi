@@ -549,11 +549,17 @@ async function selectSession(projectKey, sessionId, { resume }) {
 	clearTranscript();
 	restoreDraft();
 	renderProjects();
+	// Load persisted history *before* opening the event stream. The stream
+	// replays any in-flight turn from its start, so awaiting history keeps the
+	// rebuilt turn below its user message instead of racing the fetch and
+	// rendering out of order.
+	await loadHistory();
+	// Abandon the connect when the user switched again while history loaded.
+	if (state.sessionId !== sessionId || state.projectKey !== projectKey) return;
 	connect();
 	els.input.disabled = false;
 	els.input.focus();
 	void loadModelState();
-	void loadHistory();
 }
 
 /** Delete one session and its stored messages; stop it first if it is live. */
