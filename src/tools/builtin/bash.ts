@@ -349,6 +349,15 @@ export function createBashTool(
 				? ""
 				: truncateHeadTail(stderr, DATA_TRUNCATION_CAP);
 
+			// The renderer that feeds the model only reads the `rendered`
+			// string, so the structured `overflowPath` above is invisible to
+			// it. Surface the path (and how to read it) inline: otherwise the
+			// model sees a truncated preview with no way to reach the full
+			// output, even though the tool description promises the path.
+			const overflowNotice = overflowPath
+				? `Output exceeded ${limit} chars and was truncated; the full output was saved to:\n${overflowPath}\nRead that file (e.g. with the read tool's offset/limit, or grep) for the complete output.`
+				: null;
+
 			// Surface the failure reason in the rendered text itself: the
 			// renderer that feeds the model only reads the `rendered` string,
 			// so structured fields like `timedOut`/`signal` would otherwise
@@ -385,7 +394,12 @@ export function createBashTool(
 						? true
 						: stderr.length > DATA_TRUNCATION_CAP,
 				},
-				joinRenderedSections([statusLine, renderedStdout, renderedStderr]),
+				joinRenderedSections([
+					statusLine,
+					overflowNotice,
+					renderedStdout,
+					renderedStderr,
+				]),
 			);
 		},
 		describeProgress(args) {
