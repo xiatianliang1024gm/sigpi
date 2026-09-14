@@ -108,6 +108,11 @@ export function applyTurnProgress(view, event, currentAssistant, toolLines) {
 			handle.fail("interrupted");
 		}
 		toolLines.clear();
+		if (event.type === "turn_failed" && event.userMessage) {
+			// Surface the failure as a transcript error line; without this the
+			// web client showed no reaction at all when a turn failed.
+			view.appendSystem(event.userMessage, "error");
+		}
 		if (event.type === "turn_interrupted") {
 			view.appendSystem("Turn interrupted.", "info");
 		}

@@ -239,6 +239,13 @@ export interface TurnProgressEventMap {
 		failureType: string;
 		/** Raw error message, for the log. */
 		message: string;
+		/**
+		 * User-facing, actionable failure message (see
+		 * {@link formatModelErrorMessage}). Frontends render this as the
+		 * transcript's error line; kept separate from the raw {@link message}
+		 * so the log entry stays technical.
+		 */
+		userMessage?: string;
 		usage: ModelUsage | null;
 	};
 	turn_max_steps_reached: {

@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { estimateContextTokens } from "../context-window.js";
 import type { TurnInterruptController } from "../interrupt.js";
 import { isTurnInterruptedError, TurnInterruptedError } from "../interrupt.js";
+import { formatModelErrorMessage } from "../model/error-format.js";
 import { ModelRequestError } from "../model/transport.js";
 import { summarizeAssistantProgressText } from "../progress.js";
 import type { ToolRegistry } from "../tools/registry.js";
@@ -408,6 +409,9 @@ export class AgentRunner extends EventEmitter {
 				elapsedMs: Date.now() - turn.startedAtMs,
 				failureType: error instanceof Error ? error.name : "unknown_error",
 				message: error instanceof Error ? error.message : String(error),
+				// The transcript line every frontend (TUI, web) renders; the raw
+				// `message` above stays for log consumers.
+				userMessage: formatModelErrorMessage(error),
 				usage: turn.turnUsageReported ? turn.turnUsage : null,
 			});
 			throw error;
