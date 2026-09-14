@@ -40,12 +40,27 @@ const state = {
 	sessionId: null,
 	source: null,
 	turnActive: false,
+	/**
+	 * Last SSE event sequence applied for the active session. Seeded from the
+	 * history response's `eventsCursor`, then advanced by each frame's `id:`, so
+	 * a (re)connect can subscribe with `?after=<seq>` and receive only the frames
+	 * it has not seen — no duplicate replay, no gap.
+	 */
+	seq: 0,
 	/** Configured models for the active session: `{ id, name }`. */
 	models: [],
 	/** The active session's current model id, or null when unknown. */
 	modelId: null,
 	currentAssistant: null,
 	toolLines: new Map(),
+	/**
+	 * Transcript nodes rendered for the currently open turn. Cleared when a
+	 * replayed `turn_started` arrives (a cursorless reconnect), so that turn
+	 * rebuilds in place instead of appending a duplicate below a stale partial.
+	 * The normal resume path replays only frames newer than `seq`, so it never
+	 * needs this.
+	 */
+	turnNodes: [],
 	/** Exclusive end index for the next older history page; null when none. */
 	historyCursor: null,
 	historyLoading: false,
@@ -102,13 +117,29 @@ function renderContent(element, text) {
 	element.replaceChildren(renderMarkdown(text));
 }
 
+/** Append a node to the transcript and remember it as part of the open turn. */
+function appendTurnNode(node) {
+	els.transcript.append(node);
+	state.turnNodes.push(node);
+	scrollToEnd();
+}
+
+/**
+ * Drop the open turn's transcript nodes. Called when a (re)played
+ * `turn_started` arrives so the freshly streamed turn rebuilds in place instead
+ * of being appended below a stale partial copy.
+ */
+function clearTurnNodes() {
+	for (const node of state.turnNodes) node.remove();
+	state.turnNodes = [];
+}
+
 /** The DOM-backed {@link TurnTranscriptView} the shared reducer writes to. */
 const view = {
 	beginAssistantMessage() {
 		const { root, reasoning, preview, body, content } =
 			createAssistantMessage();
-		els.transcript.append(root);
-		scrollToEnd();
+		appendTurnNode(root);
 		let reasoningText = "";
 		let contentText = "";
 		let done = false;
@@ -141,8 +172,7 @@ const view = {
 		labelEl.className = "tool-label";
 		labelEl.textContent = `⚙ ${label}`;
 		line.append(labelEl);
-		els.transcript.append(line);
-		scrollToEnd();
+		appendTurnNode(line);
 		return {
 			finish() {
 				line.classList.remove("running");
@@ -167,8 +197,7 @@ const view = {
 		const line = document.createElement("div");
 		line.className = tone ? `system ${tone}` : "system";
 		line.textContent = text;
-		els.transcript.append(line);
-		scrollToEnd();
+		appendTurnNode(line);
 	},
 };
 
@@ -179,6 +208,8 @@ function scrollToEnd() {
 function clearTranscript() {
 	state.currentAssistant = null;
 	state.toolLines.clear();
+	state.turnNodes = [];
+	state.seq = 0;
 	els.transcript.textContent = "";
 	resetHistory();
 }
@@ -279,6 +310,11 @@ async function loadHistory({ older = false } = {}) {
 		// Drop the result if the user switched sessions mid-flight.
 		if (state.sessionId !== sessionId || state.projectKey !== projectKey) return;
 		state.historyCursor = page?.cursor ?? null;
+		// The newest page reports how far the persisted transcript reaches; the
+		// event stream then resumes from there (older pages must not move it).
+		if (!older) {
+			state.seq = Number(page?.eventsCursor) || 0;
+		}
 		renderHistory(page?.items ?? [], { prepend: older });
 	} catch (error) {
 		showError(error.message);
@@ -296,6 +332,9 @@ function handleEvent(event) {
 		return;
 	}
 	if (event.type === "turn_started") {
+		// A (re)played turn_started begins a fresh in-flight turn: drop whatever
+		// partial copy the transcript holds so a reconnect rebuilds in place.
+		clearTurnNodes();
 		state.currentAssistant = null;
 		state.toolLines.clear();
 		setTurnActive(true);
@@ -308,6 +347,9 @@ function handleEvent(event) {
 		state.toolLines,
 	);
 	if (isTurnTerminalEvent(event)) {
+		// The turn is committed to history now; stop tracking its nodes so the
+		// next turn's turn_started does not remove it.
+		state.turnNodes = [];
 		setTurnActive(false);
 		void loadSessions();
 	}
@@ -549,11 +591,17 @@ async function selectSession(projectKey, sessionId, { resume }) {
 	clearTranscript();
 	restoreDraft();
 	renderProjects();
+	// Load persisted history *before* opening the event stream. The stream
+	// replays any in-flight turn from its start, so awaiting history keeps the
+	// rebuilt turn below its user message instead of racing the fetch and
+	// rendering out of order.
+	await loadHistory();
+	// Abandon the connect when the user switched again while history loaded.
+	if (state.sessionId !== sessionId || state.projectKey !== projectKey) return;
 	connect();
 	els.input.disabled = false;
 	els.input.focus();
 	void loadModelState();
-	void loadHistory();
 }
 
 /** Delete one session and its stored messages; stop it first if it is live. */
@@ -1048,7 +1096,10 @@ function swapForInput(el, initial, commit) {
 function connect() {
 	disconnect();
 	if (!state.projectKey || !state.sessionId) return;
-	const source = new EventSource(`${sessionBase()}/events`);
+		// Resume strictly after the last applied frame. `seq` starts at the history
+	// cursor, so the initial connect skips the frames history already rendered
+	// and receives the in-flight turn from exactly where it left off.
+	const source = new EventSource(`${sessionBase()}/events?after=${state.seq}`);
 	state.source = source;
 	setConnection("connecting…");
 	source.addEventListener("message", (event) => {
@@ -1057,6 +1108,10 @@ function connect() {
 			parsed = JSON.parse(event.data);
 		} catch {
 			return;
+		}
+		const seq = Number(event.lastEventId);
+		if (Number.isFinite(seq) && seq > state.seq) {
+			state.seq = seq;
 		}
 		handleEvent(parsed);
 	});

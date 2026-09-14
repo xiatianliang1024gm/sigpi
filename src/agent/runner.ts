@@ -451,6 +451,14 @@ export class AgentRunner extends EventEmitter {
 		}
 
 		await this.executeToolCalls(turn, response, step, interruptController);
+		// Durable checkpoint (ADR 0026, D5): flush this step's messages — the
+		// assistant tool-call message and every tool result — to the store as
+		// soon as the step's tools finish, so a client that reads history while
+		// the turn is still running sees everything produced so far. Flushing
+		// only here (never mid-batch) avoids persisting an assistant tool-call
+		// message before its results, which would close the call with a synthetic
+		// error and then duplicate it once the real result landed.
+		await turn.persistPendingMessages();
 		return { done: false };
 	}
 

@@ -1,0 +1,211 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { SessionEventLog } from "../src/server/event-log.js";
+import type { TurnProgressEvent } from "../src/types.js";
+
+/** A minimal stand-in for a session's progress bus. */
+class FakeBus {
+	private readonly listeners = new Set<(event: TurnProgressEvent) => void>();
+
+	onProgress(listener: (event: TurnProgressEvent) => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+
+	fire(event: TurnProgressEvent): void {
+		for (const listener of [...this.listeners]) {
+			listener(event);
+		}
+	}
+}
+
+const started = (turnId: string): TurnProgressEvent => ({
+	type: "turn_started",
+	turnId,
+	userInput: "hi",
+});
+
+const delta = (contentDelta: string): TurnProgressEvent => ({
+	type: "model_delta",
+	step: 1,
+	contentDelta,
+});
+
+const finished = (): TurnProgressEvent => ({
+	type: "turn_finished",
+	step: 1,
+	elapsedMs: 1,
+	usage: null,
+});
+
+test("assigns monotonic sequence numbers starting at 1", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+
+	assert.equal(log.latestSeq, 0, "no events yet");
+	bus.fire(started("t1"));
+	bus.fire(delta("a"));
+	bus.fire(delta("b"));
+
+	assert.equal(log.latestSeq, 3);
+	assert.deepEqual(
+		log.replayOpenTurn().map((entry) => entry.seq),
+		[1, 2, 3],
+	);
+});
+
+test("replayOpenTurn yields the frames emitted while no client was attached", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+	bus.fire(started("t1"));
+	// A client connected and saw seq 1, then dropped; these arrive in the gap.
+	bus.fire(delta("Hel"));
+	bus.fire(delta("lo"));
+
+	assert.deepEqual(
+		log.replayOpenTurn().map((entry) => entry.event),
+		[started("t1"), delta("Hel"), delta("lo")],
+		"the whole open turn is replayed, including its start",
+	);
+});
+
+test("replayOpenTurn returns from the most recent open turn_started", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+	bus.fire(started("t1"));
+	bus.fire(delta("first turn"));
+	bus.fire(finished());
+	bus.fire(started("t2"));
+	bus.fire(delta("second turn"));
+
+	assert.deepEqual(
+		log.replayOpenTurn().map((entry) => entry.event),
+		[started("t2"), delta("second turn")],
+		"an earlier completed turn is left to persisted history",
+	);
+});
+
+test("replayOpenTurn is empty once the last turn has terminated", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+	bus.fire(started("t1"));
+	bus.fire(delta("done"));
+	assert.equal(log.isTurnOpen, true);
+
+	bus.fire(finished());
+	assert.equal(log.isTurnOpen, false);
+	assert.deepEqual(log.replayOpenTurn(), []);
+});
+
+test("replayOpenTurn is empty before any turn has started", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+	assert.equal(log.isTurnOpen, false);
+	assert.deepEqual(log.replayOpenTurn(), []);
+});
+
+test("the bounded buffer evicts the oldest events", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus, 2);
+	bus.fire(started("t1"));
+	bus.fire(delta("a"));
+	bus.fire(delta("b"));
+
+	assert.equal(log.latestSeq, 3);
+	// The turn start (seq 1) was evicted; the fallback replays what remains so a
+	// client still gets a partial rebuild rather than nothing.
+	assert.deepEqual(
+		log.replayOpenTurn().map((entry) => entry.seq),
+		[2, 3],
+	);
+});
+
+test("persistedThroughSeq starts at 0 and follows markPersisted", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+	assert.equal(log.persistedThroughSeq, 0, "nothing persisted yet");
+
+	bus.fire(started("t1"));
+	bus.fire(delta("Hel"));
+	log.markPersisted();
+	assert.equal(
+		log.persistedThroughSeq,
+		2,
+		"the watermark tracks everything logged so far",
+	);
+
+	bus.fire(delta("lo"));
+	assert.equal(
+		log.persistedThroughSeq,
+		2,
+		"newly logged events do not advance it until the next flush",
+	);
+	log.markPersisted();
+	assert.equal(log.persistedThroughSeq, 3);
+});
+
+test("replayAfter yields only frames newer than the cursor", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+	bus.fire(started("t1"));
+	bus.fire(delta("Hel"));
+	bus.fire(delta("lo"));
+
+	assert.deepEqual(
+		log.replayAfter(0).map((entry) => entry.seq),
+		[1, 2, 3],
+		"cursor 0 replays the whole retained buffer",
+	);
+	assert.deepEqual(
+		log.replayAfter(1).map((entry) => entry.seq),
+		[2, 3],
+		"a client that rendered seq 1 receives only what follows",
+	);
+	assert.deepEqual(
+		log.replayAfter(3),
+		[],
+		"a fully caught-up client replays nothing",
+	);
+});
+
+test("replayAfter skips events evicted by the bounded buffer", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus, 2);
+	bus.fire(started("t1"));
+	bus.fire(delta("a"));
+	bus.fire(delta("b"));
+
+	// Seq 1 fell out of the buffer, so resuming from 0 can only hand back what
+	// remains — the persisted history is expected to cover the evicted frames.
+	assert.deepEqual(
+		log.replayAfter(0).map((entry) => entry.seq),
+		[2, 3],
+	);
+});
+
+test("subscribe delivers live entries and stops on unsubscribe", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+	const seen: number[] = [];
+	const unsubscribe = log.subscribe((entry) => seen.push(entry.seq));
+
+	bus.fire(started("t1"));
+	bus.fire(delta("a"));
+	unsubscribe();
+	bus.fire(delta("b"));
+
+	assert.deepEqual(seen, [1, 2]);
+});
+
+test("dispose stops recording and detaches from the source", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+	bus.fire(started("t1"));
+	log.dispose();
+	bus.fire(delta("after dispose"));
+
+	assert.equal(log.latestSeq, 1, "no event is recorded after dispose");
+	assert.deepEqual(log.replayOpenTurn(), [], "the buffer is dropped");
+});

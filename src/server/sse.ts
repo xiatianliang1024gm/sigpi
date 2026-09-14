@@ -13,14 +13,25 @@
  * Encode one SSE frame. `data` is JSON-serialized when it is not already a
  * string; multi-line payloads are split across `data:` lines as the SSE spec
  * requires (a bare newline would otherwise terminate the event).
+ *
+ * When `id` is given it becomes the frame's `id:` field, so a reconnect can
+ * resume from exactly where it left off. The server takes the resume cursor as
+ * the *larger* of the client's explicit `?after=` and the browser-supplied
+ * `Last-Event-ID` (see `handleSessionEvents`), so a stale echoed id can never
+ * roll a client back into re-skipping frames it is missing.
  */
-export function encodeSseEvent(event: string, data: unknown): string {
+export function encodeSseEvent(
+	event: string,
+	data: unknown,
+	id?: number | string,
+): string {
 	const payload = typeof data === "string" ? data : JSON.stringify(data);
 	const dataLines = payload
 		.split("\n")
 		.map((line) => `data: ${line}`)
 		.join("\n");
-	return `event: ${event}\n${dataLines}\n\n`;
+	const idLine = id === undefined ? "" : `id: ${id}\n`;
+	return `${idLine}event: ${event}\n${dataLines}\n\n`;
 }
 
 /**

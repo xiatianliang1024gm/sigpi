@@ -330,7 +330,10 @@ test("sweepIdle retires idle sessions but spares an active turn", async () => {
 	const activeManager = new SessionManager({
 		createRuntime: async () => active.runtime,
 		createController: () =>
-			({ isTurnActive: () => true }) as unknown as SessionController,
+			({
+				isTurnActive: () => true,
+				onProgress: () => () => {},
+			}) as unknown as SessionController,
 		now: () => clock,
 		idleTtlMs: 1_000,
 	});

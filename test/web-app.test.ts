@@ -137,8 +137,15 @@ class Harness {
 	 */
 	historyPages = new Map<
 		string,
-		{ items: Array<Record<string, unknown>>; cursor: number | null }
+		{
+			items: Array<Record<string, unknown>>;
+			cursor: number | null;
+			/** Persisted event seq the client resumes its stream from. */
+			eventsCursor?: number;
+		}
 	>();
+	/** When set, `GET .../messages` awaits it before responding (ordering tests). */
+	historyGate: Promise<void> | null = null;
 	/** The model-picker snapshot served by `GET .../model`. */
 	modelState: {
 		current: string;
@@ -266,6 +273,7 @@ class Harness {
 			method === "GET" &&
 			/^\/projects\/[^/]+\/sessions\/[^/]+\/messages$/.test(pathname)
 		) {
+			if (this.historyGate) await this.historyGate;
 			const before = new URLSearchParams(path.split("?")[1] ?? "").get(
 				"before",
 			);
@@ -424,7 +432,7 @@ test("boots empty, then wires project → session → SSE stream", async () => {
 
 	const source = harness.sources.at(-1);
 	assert.ok(source, "an EventSource was opened");
-	assert.equal(source.url, "/projects/k1/sessions/s1/events");
+	assert.equal(source.url, "/projects/k1/sessions/s1/events?after=0");
 	assert.equal(source.closed, false);
 
 	const live = harness.document.querySelectorAll("#projects .session-row");
@@ -680,6 +688,38 @@ test("folds a streamed turn into the DOM transcript", async () => {
 	);
 });
 
+test("rebuilds the in-flight turn when a reconnect replays turn_started", async () => {
+	const harness = await openSession();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+
+	source.message({ type: "ready", turnActive: true });
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	source.message({ type: "model_delta", step: 1, contentDelta: "Hel" });
+	source.message({ type: "model_delta", step: 1, contentDelta: "lo" });
+	await flush();
+	const content = () =>
+		harness.document.querySelector("#transcript .msg.assistant .content")
+			?.textContent;
+	assert.equal(content(), "Hello");
+
+	// The stream drops and reconnects; the server replays the whole open turn
+	// from its start. The client must rebuild in place, not append a second copy.
+	source.message({ type: "ready", turnActive: true });
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	source.message({ type: "model_delta", step: 1, contentDelta: "Hel" });
+	source.message({ type: "model_delta", step: 1, contentDelta: "lo" });
+	source.message({ type: "model_delta", step: 1, contentDelta: "!!" });
+	await flush();
+
+	assert.equal(
+		harness.document.querySelectorAll("#transcript .msg.assistant").length,
+		1,
+		"the replayed turn replaces the prior partial copy instead of stacking",
+	);
+	assert.equal(content(), "Hello!!");
+});
+
 test("sends a turn and interrupts through the composer", async () => {
 	const harness = await openSession();
 	const source = harness.sources.at(-1);
@@ -828,11 +868,21 @@ test("loads a resumed session's history and pages older messages", async () => {
 			{ kind: "assistant", text: "earlier answer", reasoning: null },
 		],
 		cursor: 4,
+		// The persisted transcript reaches event seq 7, so the event stream must
+		// resume strictly after it.
+		eventsCursor: 7,
 	});
 	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
 	assert.ok(newSession, "the project menu offers a new session");
 	newSession.click();
 	await flush();
+
+	// The stream resumes from the history cursor, so the frames the history
+	// already rendered are neither replayed nor skipped.
+	assert.equal(
+		harness.sources.at(-1)?.url,
+		"/projects/k1/sessions/s1/events?after=7",
+	);
 
 	const transcript = harness.document.getElementById("transcript");
 	assert.equal(transcript?.querySelectorAll(".msg.user").length, 1);
@@ -881,6 +931,35 @@ test("loads a resumed session's history and pages older messages", async () => {
 		).length,
 		1,
 		"the cursor is sent back as `before`",
+	);
+});
+
+test("opens the event stream only after the session's history has loaded", async () => {
+	const harness = await Harness.create();
+	// Block the history response so we can observe that the stream waits for it.
+	let release: () => void = () => {};
+	harness.historyGate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
+	assert.ok(newSession, "the project menu offers a new session");
+	newSession.click();
+	await flush();
+
+	assert.equal(
+		harness.sources.length,
+		0,
+		"the stream is not opened while history is still loading",
+	);
+	release();
+	await flush();
+	assert.ok(
+		harness.sources.length > 0,
+		"the stream opens once history has rendered",
 	);
 });
 

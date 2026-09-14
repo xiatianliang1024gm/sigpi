@@ -4,6 +4,7 @@ import type {
 	SessionTurnOutcome,
 } from "../session/controller.js";
 import type { TurnProgressEvent } from "../types.js";
+import type { LoggedEvent, SessionEventLog } from "./event-log.js";
 import { encodeSseComment, encodeSseEvent } from "./sse.js";
 
 /**
@@ -19,13 +20,32 @@ export interface ChatSessionSource {
 }
 
 /**
- * Stream one session's progress as SSE until the client disconnects. Reusable
- * by any server that can resolve a {@link ChatSessionSource} for a route.
+ * The event-stream surface `GET .../events` streams. The session's
+ * {@link SessionEventLog} carries the retained (replayable) events; the live
+ * flag lets the initial `ready` frame reflect whether a turn is in flight.
+ */
+export interface SessionEventStream {
+	events: SessionEventLog;
+	isTurnActive(): boolean;
+}
+
+/**
+ * Stream one session's progress as SSE until the client disconnects.
+ *
+ * Every frame carries the log's sequence number as its SSE `id:`. When `after`
+ * is given, only events with a greater sequence are replayed before the live
+ * stream begins — the resume path: a client that loaded history and passes the
+ * history's cursor back receives exactly the frames it has not seen, with no
+ * duplication and no gap. When `after` is `null` (no cursor supplied) the
+ * still-open turn is instead replayed from its `turn_started`, so a raw client
+ * that never learned a cursor still rebuilds the in-flight turn; a completed
+ * turn is not replayed in that case, since it is already persisted.
  */
 export function handleSessionEvents(
 	req: IncomingMessage,
 	res: ServerResponse,
-	session: ChatSessionSource,
+	session: SessionEventStream,
+	after: number | null = null,
 ): void {
 	res.writeHead(200, {
 		"content-type": "text/event-stream",
@@ -41,12 +61,25 @@ export function handleSessionEvents(
 	);
 
 	let closed = false;
-	const unsubscribe = session.onProgress((event) => {
+	const write = (entry: LoggedEvent): void => {
 		if (closed) {
 			return;
 		}
-		res.write(encodeSseEvent("message", event));
-	});
+		res.write(encodeSseEvent("message", entry.event, entry.seq));
+	};
+
+	// Catch the client up *before* subscribing: no event can be recorded between
+	// these two synchronous statements (recording happens from the runtime's own
+	// async context), so nothing slips between the replay and the live stream.
+	const replayed =
+		after === null
+			? session.events.replayOpenTurn()
+			: session.events.replayAfter(after);
+	for (const entry of replayed) {
+		write(entry);
+	}
+
+	const unsubscribe = session.events.subscribe(write);
 
 	req.on("close", () => {
 		closed = true;

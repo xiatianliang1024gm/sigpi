@@ -65,6 +65,56 @@ class FakeTurnRunner implements SessionTurnRunner {
 	}
 }
 
+/** A progress bus a test can drive directly, one frame at a time. */
+class ControlledBus implements SessionProgressBus {
+	private readonly listeners = new Set<(event: TurnProgressEvent) => void>();
+
+	onProgress(listener: (event: TurnProgressEvent) => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+
+	emitProgress(): void {}
+
+	fire(event: TurnProgressEvent): void {
+		for (const listener of [...this.listeners]) {
+			listener(event);
+		}
+	}
+}
+
+/**
+ * A turn that never resolves, so the session stays `turnActive` for the whole
+ * test and its progress can be fired by hand.
+ */
+class HangingTurnRunner implements SessionTurnRunner {
+	constructor(private readonly bus: ControlledBus) {}
+
+	async runTurn(input: string): Promise<SessionTurnOutcome> {
+		this.bus.fire({
+			type: "turn_started",
+			turnId: "t",
+			userInput: input,
+		} as TurnProgressEvent);
+		return new Promise<SessionTurnOutcome>(() => {});
+	}
+}
+
+function makeControlledRuntime(
+	bus: ControlledBus,
+	sessionId: string,
+): ManagedRuntime {
+	return {
+		runner: bus,
+		turn: new HangingTurnRunner(bus),
+		logger: noopLogger,
+		sessionId,
+		dispose() {},
+	};
+}
+
 function makeRuntime(sessionId: string): ManagedRuntime {
 	const bus = new FakeProgressBus();
 	return {
@@ -147,6 +197,29 @@ async function addProject(baseUrl: string, cwd: string): Promise<string> {
 	assert.equal(response.status, 201);
 	const body = (await response.json()) as { key: string };
 	return body.key;
+}
+
+/** A server backed by a single controllable session whose turn hangs in flight. */
+async function withControlledServer(
+	run: (context: {
+		baseUrl: string;
+		bus: ControlledBus;
+		sessionId: string;
+	}) => Promise<void>,
+): Promise<void> {
+	const bus = new ControlledBus();
+	const manager = new SessionManager({
+		createRuntime: async () => makeControlledRuntime(bus, "sess"),
+		listStoredSessions: async () => [],
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		await run({ baseUrl, bus, sessionId: "sess" });
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
 }
 
 test("GET / serves the bundled browser client", async () => {
@@ -304,6 +377,195 @@ test("a session round-trips submit + SSE + interrupt under a project", async () 
 				stage: null,
 				message: null,
 			});
+		} finally {
+			ac.abort();
+		}
+	});
+});
+
+test("a reconnecting client resumes after its cursor without replaying seen frames", async () => {
+	await withControlledServer(async ({ baseUrl, bus }) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+		const eventsUrl = `${baseUrl}/projects/${key}/sessions/sess/events`;
+
+		// Start a turn; it hangs, so the session stays `turnActive`.
+		const submitted = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess/message`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ input: "hi" }),
+			},
+		);
+		assert.equal(submitted.status, 202);
+
+		// A first client receives the live frames (comment, ready, turn_started)
+		// and then drops, having applied through seq 1.
+		const first = new AbortController();
+		const response = await fetch(eventsUrl, { signal: first.signal });
+		const frames = await readFrames(response, 3);
+		assert.match(frames[0] ?? "", /^: connected/);
+		assert.match(frames[1] ?? "", /"type":"ready"/);
+		assert.match(frames[2] ?? "", /id: 1/);
+		assert.match(frames[2] ?? "", /"type":"turn_started"/);
+		first.abort();
+
+		// Frames emitted while nobody is listening must be retained, not lost.
+		bus.fire({ type: "model_delta", step: 1, contentDelta: "Hel" });
+		bus.fire({ type: "model_delta", step: 1, contentDelta: "lo" });
+
+		// Reconnecting with the last id the browser saw resumes strictly after it:
+		// seq 1 is behind the cursor, so only seq 2 and 3 are replayed — the turn's
+		// early frames are neither duplicated nor skipped.
+		const second = new AbortController();
+		try {
+			const again = await fetch(eventsUrl, {
+				headers: { "last-event-id": "1" },
+				signal: second.signal,
+			});
+			const replay = await readFrames(again, 4);
+			assert.match(replay[1] ?? "", /"type":"ready"/);
+			assert.match(replay[2] ?? "", /id: 2/);
+			assert.match(replay[2] ?? "", /"contentDelta":"Hel"/);
+			assert.match(replay[3] ?? "", /id: 3/);
+			assert.match(replay[3] ?? "", /"contentDelta":"lo"/);
+		} finally {
+			second.abort();
+		}
+	});
+});
+
+test("an explicit resume cursor outranks a stale echoed Last-Event-ID", async () => {
+	await withControlledServer(async ({ baseUrl, bus }) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+		const eventsUrl = `${baseUrl}/projects/${key}/sessions/sess/events`;
+		await fetch(`${baseUrl}/projects/${key}/sessions/sess/message`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ input: "hi" }),
+		});
+		// Retained history now covers seq 1..3.
+		bus.fire({ type: "model_delta", step: 1, contentDelta: "a" });
+		bus.fire({ type: "model_delta", step: 1, contentDelta: "b" });
+
+		const ac = new AbortController();
+		try {
+			// The client rendered history through seq 3 (`?after=3`) but the
+			// browser also echoed a stale `Last-Event-ID: 1`; the max keeps seq 2-3
+			// from being replayed.
+			bus.fire({ type: "model_delta", step: 1, contentDelta: "c" });
+			const response = await fetch(`${eventsUrl}?after=3`, {
+				headers: { "last-event-id": "1" },
+				signal: ac.signal,
+			});
+			const frames = await readFrames(response, 3);
+			assert.match(frames[1] ?? "", /"type":"ready"/);
+			assert.match(frames[2] ?? "", /id: 4/);
+			assert.match(frames[2] ?? "", /"contentDelta":"c"/);
+		} finally {
+			ac.abort();
+		}
+	});
+});
+
+test("GET .../messages reports the persisted event cursor for resume", async () => {
+	const bus = new ControlledBus();
+	const persistedListeners = new Set<() => void>();
+	const manager = new SessionManager({
+		createRuntime: async (): Promise<ManagedRuntime> => ({
+			runner: bus,
+			turn: new HangingTurnRunner(bus),
+			logger: noopLogger,
+			sessionId: "sess",
+			dispose() {},
+			onPersisted: (listener) => {
+				persistedListeners.add(listener);
+				return () => {
+					persistedListeners.delete(listener);
+				};
+			},
+		}),
+		listStoredSessions: async () => [],
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+		await fetch(`${baseUrl}/projects/${key}/sessions/sess/message`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ input: "hi" }),
+		});
+
+		// turn_started (seq 1) then a delta (seq 2); a flush advances the watermark.
+		bus.fire({ type: "model_delta", step: 1, contentDelta: "Hel" });
+		for (const listener of persistedListeners) {
+			listener();
+		}
+
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess/messages`,
+		);
+		const body = (await response.json()) as { eventsCursor: number };
+		assert.equal(body.eventsCursor, 2);
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("a fresh connect mid-turn replays the in-flight turn from its start", async () => {
+	await withControlledServer(async ({ baseUrl, bus }) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+		await fetch(`${baseUrl}/projects/${key}/sessions/sess/message`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ input: "hi" }),
+		});
+		// Produced before any client ever connected.
+		bus.fire({ type: "model_delta", step: 1, contentDelta: "Hey" });
+
+		const ac = new AbortController();
+		try {
+			const response = await fetch(
+				`${baseUrl}/projects/${key}/sessions/sess/events`,
+				{ signal: ac.signal },
+			);
+			const frames = await readFrames(response, 4);
+			assert.match(frames[1] ?? "", /"turnActive":true/);
+			assert.match(frames[2] ?? "", /id: 1/);
+			assert.match(frames[2] ?? "", /"type":"turn_started"/);
+			assert.match(frames[3] ?? "", /id: 2/);
+			assert.match(frames[3] ?? "", /"contentDelta":"Hey"/);
+		} finally {
+			ac.abort();
+		}
+	});
+});
+
+test("a fresh connect with no active turn replays nothing", async () => {
+	await withControlledServer(async ({ baseUrl }) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const ac = new AbortController();
+		try {
+			const response = await fetch(
+				`${baseUrl}/projects/${key}/sessions/sess/events`,
+				{ signal: ac.signal },
+			);
+			const frames = await readFrames(response, 2);
+			assert.match(frames[1] ?? "", /"type":"ready"/);
+			assert.match(frames[1] ?? "", /"turnActive":false/);
 		} finally {
 			ac.abort();
 		}
