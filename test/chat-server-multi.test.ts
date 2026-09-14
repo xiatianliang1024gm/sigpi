@@ -252,6 +252,17 @@ test("a session round-trips submit + SSE + interrupt under a project", async () 
 			[sessionId],
 		);
 
+		const emptyResponse = await fetch(
+			`${baseUrl}/projects/${key}/sessions/${sessionId}/message`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ input: "   " }),
+			},
+		);
+		assert.equal(emptyResponse.status, 400);
+		assert.deepEqual(await emptyResponse.json(), { error: "empty_input" });
+
 		const ac = new AbortController();
 		try {
 			const eventsResponse = await fetch(

@@ -1,9 +1,4 @@
-import {
-	createServer,
-	type IncomingMessage,
-	type Server,
-	type ServerResponse,
-} from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
 	InterruptAck,
 	SessionTurnOutcome,
@@ -21,66 +16,6 @@ export interface ChatSessionSource {
 	submit(input: string): Promise<SessionTurnOutcome>;
 	requestInterrupt(): InterruptAck;
 	isTurnActive(): boolean;
-}
-
-export interface ChatServerOptions {
-	session: ChatSessionSource;
-	/** Max `POST /message` body size in bytes. Defaults to 1 MiB. */
-	maxBodyBytes?: number;
-}
-
-const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
-
-/**
- * A minimal HTTP/SSE frontend for one {@link SessionController}: the proof
- * that the agent loop is frontend-agnostic. `POST /message` submits a turn,
- * `POST /interrupt` stops it, and `GET /events` streams every turn-progress
- * event as an SSE `message` frame whose JSON body carries the same `type`
- * discriminator the TUI reducer switches on. A browser client can therefore
- * mirror `applyTurnProgress` almost verbatim.
- *
- * Multi-session hosting is out of scope here; a real deployment would key one
- * controller per session and route by path or query param.
- */
-export function createChatServer(options: ChatServerOptions): Server {
-	const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
-	const server = createServer((req, res) => {
-		handleRequest(req, res, options.session, maxBodyBytes).catch((error) => {
-			const message = error instanceof Error ? error.message : String(error);
-			if (!res.headersSent) {
-				writeJson(res, 500, { error: message });
-				return;
-			}
-			res.end();
-		});
-	});
-	return server;
-}
-
-async function handleRequest(
-	req: IncomingMessage,
-	res: ServerResponse,
-	session: ChatSessionSource,
-	maxBodyBytes: number,
-): Promise<void> {
-	const url = new URL(req.url ?? "/", "http://localhost");
-
-	if (req.method === "GET" && url.pathname === "/events") {
-		handleSessionEvents(req, res, session);
-		return;
-	}
-
-	if (req.method === "POST" && url.pathname === "/message") {
-		await handleSessionMessage(req, res, session, maxBodyBytes);
-		return;
-	}
-
-	if (req.method === "POST" && url.pathname === "/interrupt") {
-		writeJson(res, 200, session.requestInterrupt());
-		return;
-	}
-
-	writeJson(res, 404, { error: "not_found" });
 }
 
 /**
