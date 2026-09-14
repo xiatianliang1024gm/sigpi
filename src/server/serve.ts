@@ -15,6 +15,13 @@ export interface ServeOptions {
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 
+/**
+ * How long a graceful shutdown may run before the process is force-killed.
+ * Short enough to feel responsive, long enough for a normal teardown (closing
+ * the listener, dropping sockets, disposing every live session) to finish.
+ */
+const SHUTDOWN_GRACE_MS = 5_000;
+
 /** Parse `sigpi serve` flags. Pure, so it is unit-testable without a socket. */
 export function parseServeArgs(args: string[]): ServeOptions {
 	const options: ServeOptions = { host: "127.0.0.1", port: 7878 };
@@ -71,6 +78,27 @@ function parseInteger(
 }
 
 /**
+ * Resolve once the process receives its first Ctrl+C (SIGINT) or SIGTERM.
+ * Thereafter a second signal exits immediately, so an operator staring at a
+ * shutdown that appears wedged (e.g. a client holding a keep-alive stream open)
+ * always has an escape hatch short of killing the terminal.
+ */
+function waitForShutdownSignal(): Promise<void> {
+	return new Promise((resolve) => {
+		const onSignal = (): void => {
+			process.removeListener("SIGINT", onSignal);
+			process.removeListener("SIGTERM", onSignal);
+			// Any further signal during (or after) teardown: leave now.
+			process.once("SIGINT", () => process.exit(130));
+			process.once("SIGTERM", () => process.exit(130));
+			resolve();
+		};
+		process.once("SIGINT", onSignal);
+		process.once("SIGTERM", onSignal);
+	});
+}
+
+/**
  * Start the multi-session HTTP/SSE frontend and block until Ctrl+C / SIGTERM,
  * then retire every session and close the server. Session state lives in the
  * `~/.sigpi/projects/<projectKey>` archive and the set of added directories in
@@ -115,15 +143,35 @@ export async function runServeCommand(args: string[]): Promise<void> {
 			: null;
 	sweep?.unref?.();
 
-	await new Promise<void>((resolve) => {
-		process.once("SIGINT", resolve);
-		process.once("SIGTERM", resolve);
-	});
+	await waitForShutdownSignal();
+
+	// Teardown is now underway. Arm a hard deadline so a wedged shutdown — an
+	// in-flight turn, a child process that ignores its kill signal, a socket
+	// that never closes — can never leave the process stuck with no way out.
+	const forceExit = setTimeout(() => process.exit(1), SHUTDOWN_GRACE_MS);
+	forceExit.unref();
 
 	if (sweep) {
 		clearInterval(sweep);
 	}
-	server.closeAllConnections?.();
+
+	// Stop accepting new connections *before* dropping the live sessions. A
+	// browser tab's `EventSource` auto-reconnects within about a second of its
+	// stream dropping, so if we only killed the open sockets first it would
+	// dial back in during the (async) dispose window and `server.close()` would
+	// then wait forever on the fresh keep-alive stream. Closing the listener
+	// first, then dropping every remaining socket (idle keep-alives and open
+	// SSE streams alike), lets `close()` settle promptly.
+	await new Promise<void>((resolve) => {
+		server.close(() => resolve());
+		server.closeAllConnections?.();
+	});
+
 	await manager.disposeAll();
-	await new Promise<void>((resolve) => server.close(() => resolve()));
+
+	clearTimeout(forceExit);
+	// The server and every session are down, but a lingering handle (a stray
+	// socket, a child-process pipe, an un-awaited fetch) could still keep the
+	// event loop alive; end the process explicitly now that teardown is done.
+	process.exit(0);
 }
