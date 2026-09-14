@@ -785,7 +785,7 @@ test("loads a resumed session's history and pages older messages", async () => {
 
 	// The next older page arrives when the reader asks for it.
 	harness.historyPages.set("4", {
-		items: [{ kind: "tool", name: "read" }],
+		items: [{ kind: "tool", name: "bash", label: "shell git status" }],
 		cursor: null,
 	});
 	element<HTMLButtonElement>(harness.document, "load-earlier").click();
@@ -793,7 +793,10 @@ test("loads a resumed session's history and pages older messages", async () => {
 
 	const first = transcript?.firstElementChild;
 	assert.equal(first?.className, "tool ok");
-	assert.equal(first?.textContent, "✓ read");
+	// The historical tool line renders the server-reconstructed call summary,
+	// not just the bare tool name, matching the live `tool_execution_started`
+	// line the user saw during the turn.
+	assert.equal(first?.textContent, "✓ shell git status");
 	assert.equal(
 		transcript?.querySelectorAll(".msg.user").length,
 		1,

@@ -41,14 +41,42 @@ function assistantEntry(text: string, reasoning?: string): SessionEntry {
 	};
 }
 
-function toolEntry(name: string): SessionEntry {
+function toolEntry(name: string, toolCallId = nextId()): SessionEntry {
 	const id = nextId();
 	return {
 		kind: "message",
 		id,
 		turnId: null,
 		timestamp: "2025-01-01T00:00:00.000Z",
-		message: { role: "tool", name, toolCallId: id, content: "...", id },
+		message: { role: "tool", name, toolCallId, content: "...", id },
+	};
+}
+
+/** An assistant step that issued one tool call, so a later tool line can find it. */
+function toolCallEntry(
+	toolCallId: string,
+	name: string,
+	args: Record<string, unknown>,
+): SessionEntry {
+	const id = nextId();
+	return {
+		kind: "message",
+		id,
+		turnId: null,
+		timestamp: "2025-01-01T00:00:00.000Z",
+		message: {
+			role: "assistant",
+			content: null,
+			id,
+			toolCalls: [
+				{
+					id: toolCallId,
+					name,
+					arguments: args,
+					rawArguments: JSON.stringify(args),
+				},
+			],
+		},
 	};
 }
 
@@ -78,11 +106,63 @@ test("projects each entry kind into a renderable item", () => {
 	assert.deepEqual(items, [
 		{ kind: "user", text: "hi" },
 		{ kind: "assistant", text: "hello", reasoning: "thinking" },
-		{ kind: "tool", name: "read" },
+		{ kind: "tool", name: "read", label: "read" },
 		{
 			kind: "compaction",
 			text: "Context compacted: context window 1K → 200 tokens.",
 		},
+	]);
+});
+
+test("reconstructs a tool line's label from the persisted tool call", () => {
+	const callId = "call-1";
+	const entries: SessionEntry[] = [
+		toolCallEntry(callId, "bash", { command: "git status" }),
+		toolEntry("bash", callId),
+	];
+
+	const { items } = projectHistoryPage(entries, {
+		limit: 10,
+		describeToolCall: (call) => `shell ${String(call.arguments.command)}`,
+	});
+
+	// The assistant tool-call step has no text/reasoning, so it is skipped; the
+	// tool line carries the reconstructed label instead of the bare name.
+	assert.deepEqual(items, [
+		{ kind: "tool", name: "bash", label: "shell git status" },
+	]);
+});
+
+test("a tool line falls back to the tool name when no describer is given", () => {
+	const callId = "call-1";
+	const entries: SessionEntry[] = [
+		toolCallEntry(callId, "bash", { command: "git status" }),
+		toolEntry("bash", callId),
+	];
+
+	const { items } = projectHistoryPage(entries, { limit: 10 });
+	assert.deepEqual(items, [{ kind: "tool", name: "bash", label: "bash" }]);
+});
+
+test("a tool line falls back to the tool name when its call is missing or throwing", () => {
+	const orphan = toolEntry("bash", "no-such-call");
+	const thrown = toolEntry("bash", "call-2");
+	const entries: SessionEntry[] = [
+		toolCallEntry("call-2", "bash", {}),
+		orphan,
+		thrown,
+	];
+
+	const { items } = projectHistoryPage(entries, {
+		limit: 10,
+		describeToolCall: () => {
+			throw new Error("tool no longer registered");
+		},
+	});
+
+	assert.deepEqual(items, [
+		{ kind: "tool", name: "bash", label: "bash" },
+		{ kind: "tool", name: "bash", label: "bash" },
 	]);
 });
 
