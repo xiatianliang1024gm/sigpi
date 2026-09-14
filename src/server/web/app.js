@@ -214,7 +214,10 @@ function historyItemToElement(item) {
 		line.className = "tool ok";
 		const label = document.createElement("span");
 		label.className = "tool-label";
-		label.textContent = `✓ ${item.name}`;
+		// `label` is the server-reconstructed call summary (e.g. `shell git
+		// status`), matching the live `tool_execution_started` line; fall back
+		// to the bare tool name for older/stored items without one.
+		label.textContent = `✓ ${item.label ?? item.name}`;
 		line.append(label);
 		return line;
 	}

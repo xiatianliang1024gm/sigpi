@@ -4,6 +4,8 @@ import {
 	type Server,
 	type ServerResponse,
 } from "node:http";
+import { createDefaultToolRegistry } from "../tools/index.js";
+import type { ToolCall } from "../types.js";
 import {
 	type DirectoryPicker,
 	DirectoryPickerUnavailableError,
@@ -459,6 +461,22 @@ async function handleListSessions(
 }
 
 /**
+ * A describe-only registry shared by every history page request. Tool
+ * `describeProgress` is pure formatting (it never executes anything), so a
+ * single lazily-created default registry reconstructs the same `shell git
+ * status`-style labels the live turn showed. Built on first use so `serve`
+ * startup stays free of tool construction.
+ */
+let describeRegistry: ReturnType<typeof createDefaultToolRegistry> | null =
+	null;
+
+/** Reconstruct a historical tool line's label from its persisted call. */
+function describeToolCall(call: ToolCall): string {
+	describeRegistry ??= createDefaultToolRegistry();
+	return describeRegistry.describeProgress(call).summary;
+}
+
+/**
  * Page a session's persisted history, newest-first. Unlike the live routes,
  * this resolves a *stored* session (so a session that is not currently live
  * still loads), returning one page of renderable items plus a cursor for the
@@ -483,6 +501,7 @@ async function handleSessionHistory(
 	const page = projectHistoryPage(entries, {
 		before: parseNumberParam(params.get("before")),
 		limit: parseNumberParam(params.get("limit")),
+		describeToolCall,
 	});
 	writeJson(res, 200, { items: page.items, cursor: page.cursor });
 }
