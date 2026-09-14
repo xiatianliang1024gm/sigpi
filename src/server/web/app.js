@@ -49,6 +49,8 @@ const state = {
 	/** Exclusive end index for the next older history page; null when none. */
 	historyCursor: null,
 	historyLoading: false,
+	/** `${projectKey}\u0000${sessionId}` → unsubmitted composer text. */
+	drafts: new Map(),
 };
 
 /** Entries fetched per history page when resuming a session. */
@@ -421,11 +423,13 @@ function toggleProject(key) {
 }
 
 async function selectProject(key) {
+	saveDraft();
 	state.projectKey = key;
 	state.sessionId = null;
 	state.collapsed.delete(key);
 	disconnect();
 	clearTranscript();
+	restoreDraft();
 	renderProjects();
 	await loadSessions();
 }
@@ -445,10 +449,12 @@ async function deleteProject(key) {
 
 /** Clear the active project/session and stop streaming its events. */
 function resetActive() {
+	saveDraft();
 	state.projectKey = null;
 	state.sessionId = null;
 	disconnect();
 	clearTranscript();
+	restoreDraft();
 }
 
 // --- sessions --------------------------------------------------------------
@@ -520,14 +526,17 @@ async function archiveSession(projectKey, sessionId) {
 		},
 	);
 	if (state.projectKey === projectKey && state.sessionId === sessionId) {
+		saveDraft();
 		state.sessionId = null;
 		disconnect();
 		clearTranscript();
+		restoreDraft();
 	}
 	await loadSessions();
 }
 
 async function selectSession(projectKey, sessionId, { resume }) {
+	saveDraft();
 	state.projectKey = projectKey;
 	state.collapsed.delete(projectKey);
 	if (resume) {
@@ -538,6 +547,7 @@ async function selectSession(projectKey, sessionId, { resume }) {
 	}
 	state.sessionId = sessionId;
 	clearTranscript();
+	restoreDraft();
 	renderProjects();
 	connect();
 	els.input.disabled = false;
@@ -553,9 +563,11 @@ async function deleteSession(projectKey, sessionId) {
 		{ method: "DELETE" },
 	);
 	if (state.projectKey === projectKey && state.sessionId === sessionId) {
+		saveDraft();
 		state.sessionId = null;
 		disconnect();
 		clearTranscript();
+		restoreDraft();
 	}
 	await loadSessions();
 }
@@ -1209,11 +1221,41 @@ els.transcript.addEventListener("scroll", () => {
 	void loadHistory({ older: true });
 });
 
+// --- composer drafts -------------------------------------------------------
+
+/**
+ * The composer's unsubmitted text is remembered per session. Switching away
+ * saves the box against the session it belongs to and switching back restores
+ * it, so a half-typed prompt neither leaks into another session nor is lost.
+ */
+
+/** The draft key for a session, or null when no session is active. */
+function draftKey(projectKey, sessionId) {
+	if (!projectKey || !sessionId) return null;
+	return `${projectKey}\u0000${sessionId}`;
+}
+
+/** Persist the composer box against the active session (if any). */
+function saveDraft() {
+	const key = draftKey(state.projectKey, state.sessionId);
+	if (!key) return;
+	const text = els.input.value;
+	if (text) state.drafts.set(key, text);
+	else state.drafts.delete(key);
+}
+
+/** Repopulate the composer box from the active session's saved draft. */
+function restoreDraft() {
+	const key = draftKey(state.projectKey, state.sessionId);
+	els.input.value = (key && state.drafts.get(key)) || "";
+}
+
 function submitComposer() {
 	if (!state.sessionId || state.turnActive) return;
 	const text = els.input.value.trim();
 	if (!text) return;
 	els.input.value = "";
+	saveDraft();
 	void sendMessage(text);
 }
 
@@ -1221,6 +1263,10 @@ els.composer.addEventListener("submit", (event) => {
 	event.preventDefault();
 	submitComposer();
 });
+
+// Keep the active session's draft current as the user types, so switching
+// sessions (or a session list refresh) never loses the box contents.
+els.input.addEventListener("input", () => saveDraft());
 
 // Enter sends; Shift+Enter keeps its newline so multi-line prompts still work.
 // IME composition (candidate selection) must not submit mid-word.
