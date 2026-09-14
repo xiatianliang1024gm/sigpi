@@ -137,7 +137,12 @@ class Harness {
 	 */
 	historyPages = new Map<
 		string,
-		{ items: Array<Record<string, unknown>>; cursor: number | null }
+		{
+			items: Array<Record<string, unknown>>;
+			cursor: number | null;
+			/** Persisted event seq the client resumes its stream from. */
+			eventsCursor?: number;
+		}
 	>();
 	/** When set, `GET .../messages` awaits it before responding (ordering tests). */
 	historyGate: Promise<void> | null = null;
@@ -427,7 +432,7 @@ test("boots empty, then wires project → session → SSE stream", async () => {
 
 	const source = harness.sources.at(-1);
 	assert.ok(source, "an EventSource was opened");
-	assert.equal(source.url, "/projects/k1/sessions/s1/events");
+	assert.equal(source.url, "/projects/k1/sessions/s1/events?after=0");
 	assert.equal(source.closed, false);
 
 	const live = harness.document.querySelectorAll("#projects .session-row");
@@ -863,11 +868,21 @@ test("loads a resumed session's history and pages older messages", async () => {
 			{ kind: "assistant", text: "earlier answer", reasoning: null },
 		],
 		cursor: 4,
+		// The persisted transcript reaches event seq 7, so the event stream must
+		// resume strictly after it.
+		eventsCursor: 7,
 	});
 	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
 	assert.ok(newSession, "the project menu offers a new session");
 	newSession.click();
 	await flush();
+
+	// The stream resumes from the history cursor, so the frames the history
+	// already rendered are neither replayed nor skipped.
+	assert.equal(
+		harness.sources.at(-1)?.url,
+		"/projects/k1/sessions/s1/events?after=7",
+	);
 
 	const transcript = harness.document.getElementById("transcript");
 	assert.equal(transcript?.querySelectorAll(".msg.user").length, 1);

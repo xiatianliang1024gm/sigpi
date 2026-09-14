@@ -14,11 +14,11 @@
  * string; multi-line payloads are split across `data:` lines as the SSE spec
  * requires (a bare newline would otherwise terminate the event).
  *
- * When `id` is given it becomes the frame's `id:` field, so a reconnect can be
- * correlated. The server deliberately does not honor a client-supplied
- * `Last-Event-ID` — a browser may echo back a stale id from a previous
- * connection, which would make the client skip the frames it is missing — and
- * instead replays the open turn from its start (see `handleSessionEvents`).
+ * When `id` is given it becomes the frame's `id:` field, so a reconnect can
+ * resume from exactly where it left off. The server takes the resume cursor as
+ * the *larger* of the client's explicit `?after=` and the browser-supplied
+ * `Last-Event-ID` (see `handleSessionEvents`), so a stale echoed id can never
+ * roll a client back into re-skipping frames it is missing.
  */
 export function encodeSseEvent(
 	event: string,

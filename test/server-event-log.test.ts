@@ -122,6 +122,69 @@ test("the bounded buffer evicts the oldest events", () => {
 	);
 });
 
+test("persistedThroughSeq starts at 0 and follows markPersisted", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+	assert.equal(log.persistedThroughSeq, 0, "nothing persisted yet");
+
+	bus.fire(started("t1"));
+	bus.fire(delta("Hel"));
+	log.markPersisted();
+	assert.equal(
+		log.persistedThroughSeq,
+		2,
+		"the watermark tracks everything logged so far",
+	);
+
+	bus.fire(delta("lo"));
+	assert.equal(
+		log.persistedThroughSeq,
+		2,
+		"newly logged events do not advance it until the next flush",
+	);
+	log.markPersisted();
+	assert.equal(log.persistedThroughSeq, 3);
+});
+
+test("replayAfter yields only frames newer than the cursor", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus);
+	bus.fire(started("t1"));
+	bus.fire(delta("Hel"));
+	bus.fire(delta("lo"));
+
+	assert.deepEqual(
+		log.replayAfter(0).map((entry) => entry.seq),
+		[1, 2, 3],
+		"cursor 0 replays the whole retained buffer",
+	);
+	assert.deepEqual(
+		log.replayAfter(1).map((entry) => entry.seq),
+		[2, 3],
+		"a client that rendered seq 1 receives only what follows",
+	);
+	assert.deepEqual(
+		log.replayAfter(3),
+		[],
+		"a fully caught-up client replays nothing",
+	);
+});
+
+test("replayAfter skips events evicted by the bounded buffer", () => {
+	const bus = new FakeBus();
+	const log = new SessionEventLog(bus, 2);
+	bus.fire(started("t1"));
+	bus.fire(delta("a"));
+	bus.fire(delta("b"));
+
+	// Seq 1 fell out of the buffer, so resuming from 0 can only hand back what
+	// remains — the persisted history is expected to cover the evicted frames.
+	assert.deepEqual(
+		log.replayAfter(0).map((entry) => entry.seq),
+		[2, 3],
+	);
+});
+
 test("subscribe delivers live entries and stops on unsubscribe", () => {
 	const bus = new FakeBus();
 	const log = new SessionEventLog(bus);

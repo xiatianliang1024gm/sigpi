@@ -39,6 +39,15 @@ export class AgentTurn {
 		return this.runtime.getCurrentSession();
 	}
 
+	/**
+	 * Register a listener invoked after each successful persistence flush. With
+	 * `getCurrentSession` this is the whole surface the multi-session server
+	 * needs to keep its per-session event watermark in step with what is on disk.
+	 */
+	onPersisted(listener: () => void): () => void {
+		return this.runtime.onPersisted(listener);
+	}
+
 	setProvider(provider: ModelProvider): void {
 		this.runner.setProvider(provider);
 	}

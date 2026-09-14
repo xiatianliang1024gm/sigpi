@@ -40,6 +40,13 @@ const state = {
 	sessionId: null,
 	source: null,
 	turnActive: false,
+	/**
+	 * Last SSE event sequence applied for the active session. Seeded from the
+	 * history response's `eventsCursor`, then advanced by each frame's `id:`, so
+	 * a (re)connect can subscribe with `?after=<seq>` and receive only the frames
+	 * it has not seen — no duplicate replay, no gap.
+	 */
+	seq: 0,
 	/** Configured models for the active session: `{ id, name }`. */
 	models: [],
 	/** The active session's current model id, or null when unknown. */
@@ -47,9 +54,11 @@ const state = {
 	currentAssistant: null,
 	toolLines: new Map(),
 	/**
-	 * Transcript nodes rendered for the currently open turn. A reconnect replays
-	 * the whole open turn from its `turn_started`, so the client drops these
-	 * before rebuilding rather than appending a duplicate copy.
+	 * Transcript nodes rendered for the currently open turn. Cleared when a
+	 * replayed `turn_started` arrives (a cursorless reconnect), so that turn
+	 * rebuilds in place instead of appending a duplicate below a stale partial.
+	 * The normal resume path replays only frames newer than `seq`, so it never
+	 * needs this.
 	 */
 	turnNodes: [],
 	/** Exclusive end index for the next older history page; null when none. */
@@ -200,6 +209,7 @@ function clearTranscript() {
 	state.currentAssistant = null;
 	state.toolLines.clear();
 	state.turnNodes = [];
+	state.seq = 0;
 	els.transcript.textContent = "";
 	resetHistory();
 }
@@ -300,6 +310,11 @@ async function loadHistory({ older = false } = {}) {
 		// Drop the result if the user switched sessions mid-flight.
 		if (state.sessionId !== sessionId || state.projectKey !== projectKey) return;
 		state.historyCursor = page?.cursor ?? null;
+		// The newest page reports how far the persisted transcript reaches; the
+		// event stream then resumes from there (older pages must not move it).
+		if (!older) {
+			state.seq = Number(page?.eventsCursor) || 0;
+		}
 		renderHistory(page?.items ?? [], { prepend: older });
 	} catch (error) {
 		showError(error.message);
@@ -1081,7 +1096,10 @@ function swapForInput(el, initial, commit) {
 function connect() {
 	disconnect();
 	if (!state.projectKey || !state.sessionId) return;
-	const source = new EventSource(`${sessionBase()}/events`);
+		// Resume strictly after the last applied frame. `seq` starts at the history
+	// cursor, so the initial connect skips the frames history already rendered
+	// and receives the in-flight turn from exactly where it left off.
+	const source = new EventSource(`${sessionBase()}/events?after=${state.seq}`);
 	state.source = source;
 	setConnection("connecting…");
 	source.addEventListener("message", (event) => {
@@ -1090,6 +1108,10 @@ function connect() {
 			parsed = JSON.parse(event.data);
 		} catch {
 			return;
+		}
+		const seq = Number(event.lastEventId);
+		if (Number.isFinite(seq) && seq > state.seq) {
+			state.seq = seq;
 		}
 		handleEvent(parsed);
 	});

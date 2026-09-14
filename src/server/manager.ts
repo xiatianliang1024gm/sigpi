@@ -37,6 +37,16 @@ export interface ManagedRuntime extends SessionControllerRuntime {
 	getModelState?(): RuntimeModelState;
 	/** Switch the active model; returns `false` for an unknown model id. */
 	setModel?(modelId: string): boolean;
+	/**
+	 * Register a listener invoked after each successful flush of the runtime's
+	 * session store, i.e. whenever a message batch or turn boundary advances what
+	 * is on disk. The manager uses it to keep a session's event-log watermark in
+	 * step with persistence (see {@link SessionEventLog.markPersisted}), so a
+	 * reconnecting client can resume from where persisted history ends. Optional
+	 * so lightweight test runtimes need not implement it; when absent the
+	 * watermark simply never advances.
+	 */
+	onPersisted?(listener: () => void): () => void;
 }
 
 /** One model the user can switch to: its config id and display name. */
@@ -200,6 +210,7 @@ async function defaultCreateRuntime(args: {
 		logger: runtime.logger,
 		sessionId: runtime.session?.sessionId ?? "",
 		dispose: () => runtime.dispose(),
+		onPersisted: (listener) => runtime.turn.onPersisted(listener),
 		getModelState: () => ({
 			current: currentModelId,
 			models: Object.entries(runtime.config.models).map(([id, model]) => ({
@@ -549,6 +560,19 @@ export class SessionManager {
 		}
 	}
 
+	/**
+	 * Resume cursor for a session's live event stream: the event sequence
+	 * through which the persisted history is complete. A client loads history up
+	 * to this point and then subscribes to `GET .../events?after=<cursor>`, so it
+	 * neither replays frames the history already rendered nor skips frames it is
+	 * missing. `0` for a session that is not live (its history is fully
+	 * persisted, so there is nothing to resume).
+	 */
+	eventsCursor(projectKey: string, sessionId: string): number {
+		const session = this.getSession(projectKey, sessionId);
+		return session ? session.events.persistedThroughSeq : 0;
+	}
+
 	// --- sessions ---------------------------------------------------------
 
 	/**
@@ -604,6 +628,10 @@ export class SessionManager {
 			createdAt: this.now(),
 			lastActivityAt: this.now(),
 		};
+		// Keep the log's persisted watermark aligned with the runtime: after each
+		// flush, record how far the on-disk transcript now reaches so
+		// `eventsCursor` can hand a reconnecting client an exact resume point.
+		runtime.onPersisted?.(() => entry.events.markPersisted());
 		this.sessions.set(entry.key, entry);
 		return entry;
 	}

@@ -10,23 +10,47 @@ import type {
 import { type SessionStore, sessionToContextState } from "./store.js";
 
 export class SessionRuntime {
+	private readonly persistedListeners = new Set<() => void>();
+
 	constructor(
 		private readonly runner: AgentRunner,
 		private readonly context: ConversationContext,
 		private readonly store: SessionStore,
 		private session: PersistedSession,
 	) {
-		// Per-message persistence: the runner persists each message batch as
-		// soon as it lands (ADR 0026, D1 — no in-turn checkpoint), so the
-		// store is kept current incrementally instead of only at turn
-		// boundaries. The snapshot commit is incremental on the entry stream
+		// Messaging-level persistence (ADR 0026, D5): the runner flushes each
+		// message batch the moment it is complete — the user input at turn
+		// start and one checkpoint per agent-loop step — so the store is kept
+		// current incrementally instead of only at turn boundaries. The
+		// snapshot commit is incremental on the entry stream
 		// (`entries.slice(prevCount)`), so a mid-turn flush is cheap.
 		this.runner.setPersistContext(async () => {
 			this.session = await this.store.updateSnapshot({
 				sessionId: this.session.sessionId,
 				contextState: this.context.exportState(),
 			});
+			this.notifyPersisted();
 		});
+	}
+
+	/**
+	 * Register a listener invoked after each successful persistence flush. The
+	 * `SessionManager` uses it to advance a session's event-log watermark, so a
+	 * reconnecting client can resume its SSE stream exactly where the persisted
+	 * history ends (see `SessionEventLog.markPersisted`).
+	 */
+	onPersisted(listener: () => void): () => void {
+		this.persistedListeners.add(listener);
+		return () => {
+			this.persistedListeners.delete(listener);
+		};
+	}
+
+	private notifyPersisted(): void {
+		// Snapshot so a listener that unsubscribes mid-delivery can't perturb it.
+		for (const listener of [...this.persistedListeners]) {
+			listener();
+		}
 	}
 
 	getCurrentSession(): PersistedSession {
@@ -47,6 +71,7 @@ export class SessionRuntime {
 				sessionId: this.session.sessionId,
 				contextState: this.context.exportState(),
 			});
+			this.notifyPersisted();
 		}
 
 		return updated;

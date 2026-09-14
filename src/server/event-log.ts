@@ -54,6 +54,7 @@ export class SessionEventLog {
 	private readonly buffer: LoggedEvent[] = [];
 	private nextSeq = 1;
 	private openTurnStartSeq: number | null = null;
+	private persistedSeq = 0;
 	private readonly listeners = new Set<(entry: LoggedEvent) => void>();
 	private readonly unsubscribe: () => void;
 
@@ -72,6 +73,27 @@ export class SessionEventLog {
 	/** True while the most recent turn has started but not yet terminated. */
 	get isTurnOpen(): boolean {
 		return this.openTurnStartSeq !== null;
+	}
+
+	/**
+	 * The sequence through which the session's *persisted* history is complete:
+	 * every event up to and including this seq has been flushed to the session
+	 * store, so a client can load history and then resume the stream from here
+	 * without replaying frames it has already rendered or skipping frames it is
+	 * missing. Advanced by {@link markPersisted}, which the session runtime calls
+	 * after each persistence flush. Starts at `0` (nothing persisted yet).
+	 */
+	get persistedThroughSeq(): number {
+		return this.persistedSeq;
+	}
+
+	/**
+	 * Record that the session store has caught up with everything logged so far.
+	 * Called by the owner after a successful persistence flush, so the watermark
+	 * reflects exactly how far the on-disk transcript reaches.
+	 */
+	markPersisted(): void {
+		this.persistedSeq = this.latestSeq;
 	}
 
 	/**
@@ -94,6 +116,18 @@ export class SessionEventLog {
 		// The turn start may have been evicted by the bounded buffer; if so, hand
 		// back everything retained (a partial rebuild beats nothing).
 		return index === -1 ? [...this.buffer] : this.buffer.slice(index);
+	}
+
+	/**
+	 * Every retained event with a sequence strictly greater than `afterSeq`,
+	 * oldest first. This is the resume primitive: a client that has rendered
+	 * history up to `afterSeq` ({@link persistedThroughSeq}) receives only the
+	 * frames it has not seen. Events evicted by the bounded buffer before
+	 * `afterSeq` are simply absent — the persisted history is expected to cover
+	 * them.
+	 */
+	replayAfter(afterSeq: number): LoggedEvent[] {
+		return this.buffer.filter((entry) => entry.seq > afterSeq);
 	}
 
 	/** Subscribe to newly logged events. Returns an unsubscribe function. */

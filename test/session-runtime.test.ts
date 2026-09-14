@@ -55,6 +55,65 @@ test("session runtime persists successful turns", async () => {
 	assert.equal(persisted.lastTurn?.assistantOutput, "final response");
 });
 
+test("session runtime checkpoints each step's messages mid-turn", async () => {
+	const cwd = await createTempDir("sigpi-session-runtime-midturn-");
+	await writeWorkspaceFile(cwd, "src/demo.ts", "export const demo = 1;\n");
+	const store = createTestSessionStore({ cwd, homeDir: cwd });
+	const fingerprint = createSystemPromptFingerprint("system prompt");
+	const session = await store.createSession({
+		cwd,
+		systemPromptFingerprint: fingerprint,
+		loadedSkillNames: [],
+		skillsFingerprint: null,
+	});
+	// Captured from inside the *second* model request, i.e. while the turn is
+	// still running: the first step's messages must already be on disk.
+	let midTurnRoles: string[] = [];
+	const provider = new MockProvider(async (_request, index) => {
+		if (index === 0) {
+			return {
+				assistantText: "let me look",
+				toolCalls: [
+					{
+						id: "call_1",
+						name: "glob",
+						arguments: { pattern: "src/**/*.ts" },
+						rawArguments: '{"pattern":"src/**/*.ts"}',
+					},
+				],
+				finishReason: "tool_calls",
+			};
+		}
+		const midTurn = await store.getSession(session.sessionId);
+		midTurnRoles = deriveContextStateFromEntries(
+			midTurn.entries,
+		).recentMessages.map((message) => message.role);
+		return {
+			assistantText: "final response",
+			toolCalls: [],
+			finishReason: "stop",
+		};
+	});
+	const context = new ConversationContext();
+	const runner = new AgentRunner({
+		provider,
+		tools: createDefaultToolRegistry(),
+		context,
+		systemPrompt: "system prompt",
+		options: { workingDirectory: cwd },
+	});
+	const sessionRuntime = new SessionRuntime(runner, context, store, session);
+
+	const result = await sessionRuntime.runTurn("continue task");
+
+	assert.equal(result.outputText, "final response");
+	assert.deepEqual(
+		midTurnRoles,
+		["user", "assistant", "tool"],
+		"the user input and the first step's tool batch are persisted before the turn ends",
+	);
+});
+
 test("session runtime persists failed-turn recovery context and can continue in-process", async () => {
 	const cwd = await createTempDir("sigpi-session-runtime-failed-");
 	await writeWorkspaceFile(cwd, "src/demo.ts", "export const demo = 1;\n");

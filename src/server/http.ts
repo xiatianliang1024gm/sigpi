@@ -32,17 +32,20 @@ export interface SessionEventStream {
 /**
  * Stream one session's progress as SSE until the client disconnects.
  *
- * Every frame carries the log's sequence number as its SSE `id:`. On (re)connect
- * the still-open turn is replayed from its `turn_started` before the live stream
- * begins, so a client that switched away mid-turn — or whose connection dropped
- * — rebuilds the in-flight turn instead of losing the frames emitted while it
- * was away. A completed turn is not replayed: it is already persisted, so the
- * transcript's history supplies it without duplication.
+ * Every frame carries the log's sequence number as its SSE `id:`. When `after`
+ * is given, only events with a greater sequence are replayed before the live
+ * stream begins — the resume path: a client that loaded history and passes the
+ * history's cursor back receives exactly the frames it has not seen, with no
+ * duplication and no gap. When `after` is `null` (no cursor supplied) the
+ * still-open turn is instead replayed from its `turn_started`, so a raw client
+ * that never learned a cursor still rebuilds the in-flight turn; a completed
+ * turn is not replayed in that case, since it is already persisted.
  */
 export function handleSessionEvents(
 	req: IncomingMessage,
 	res: ServerResponse,
 	session: SessionEventStream,
+	after: number | null = null,
 ): void {
 	res.writeHead(200, {
 		"content-type": "text/event-stream",
@@ -68,7 +71,11 @@ export function handleSessionEvents(
 	// Catch the client up *before* subscribing: no event can be recorded between
 	// these two synchronous statements (recording happens from the runtime's own
 	// async context), so nothing slips between the replay and the live stream.
-	for (const entry of session.events.replayOpenTurn()) {
+	const replayed =
+		after === null
+			? session.events.replayOpenTurn()
+			: session.events.replayAfter(after);
+	for (const entry of replayed) {
 		write(entry);
 	}
 

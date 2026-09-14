@@ -227,10 +227,15 @@ async function route(
 		}
 		if (method === "GET" && sub === "events") {
 			manager.touch(session);
-			handleSessionEvents(req, res, {
-				events: session.events,
-				isTurnActive: () => session.controller.isTurnActive(),
-			});
+			handleSessionEvents(
+				req,
+				res,
+				{
+					events: session.events,
+					isTurnActive: () => session.controller.isTurnActive(),
+				},
+				resolveResumeCursor(req, url.searchParams),
+			);
 			return;
 		}
 		if (method === "POST" && sub === "message") {
@@ -506,7 +511,14 @@ async function handleSessionHistory(
 		limit: parseNumberParam(params.get("limit")),
 		describeToolCall,
 	});
-	writeJson(res, 200, { items: page.items, cursor: page.cursor });
+	writeJson(res, 200, {
+		items: page.items,
+		cursor: page.cursor,
+		// The seq through which these persisted entries are complete: the client
+		// subscribes to `/events?after=<eventsCursor>` so it resumes the in-flight
+		// turn right where history ends (see `handleSessionEvents`).
+		eventsCursor: manager.eventsCursor(projectKey, sessionId),
+	});
 }
 
 /**
@@ -569,6 +581,40 @@ function parseNumberParam(raw: string | null): number | undefined {
 	}
 	const value = Number(raw);
 	return Number.isFinite(value) ? value : undefined;
+}
+
+/** First value of a possibly-repeated header, or `null` when absent. */
+function firstHeader(value: string | string[] | undefined): string | null {
+	if (Array.isArray(value)) {
+		return value[0] ?? null;
+	}
+	return value ?? null;
+}
+
+/**
+ * The sequence an SSE client wants to resume strictly *after*: the larger of an
+ * explicit `?after=` query param and the browser's `Last-Event-ID` header
+ * (which `EventSource` re-sends on its own reconnect). Taking the max keeps both
+ * paths correct — a fresh client's explicit cursor is never rolled back by a
+ * stale echoed id, and an auto-reconnect's fresher header still wins. `null`
+ * only when neither is present, so the handler falls back to replaying the open
+ * turn from its start.
+ */
+function resolveResumeCursor(
+	req: IncomingMessage,
+	params: URLSearchParams,
+): number | null {
+	let max: number | null = null;
+	for (const raw of [
+		params.get("after"),
+		firstHeader(req.headers["last-event-id"]),
+	]) {
+		const value = parseNumberParam(raw);
+		if (value !== undefined && (max === null || value > max)) {
+			max = value;
+		}
+	}
+	return max;
 }
 
 async function handleCreateSession(
