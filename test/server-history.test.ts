@@ -105,7 +105,7 @@ test("projects each entry kind into a renderable item", () => {
 	assert.equal(cursor, null);
 	assert.deepEqual(items, [
 		{ kind: "user", text: "hi" },
-		{ kind: "assistant", text: "hello", reasoning: "thinking" },
+		{ kind: "assistant", text: "hello", reasoning: "thinking", final: true },
 		{ kind: "tool", name: "read", label: "read" },
 		{
 			kind: "compaction",
@@ -170,6 +170,44 @@ test("an assistant step with no text or reasoning is skipped", () => {
 	const entries: SessionEntry[] = [assistantEntry(""), userEntry("hi")];
 	const { items } = projectHistoryPage(entries, { limit: 10 });
 	assert.deepEqual(items, [{ kind: "user", text: "hi" }]);
+});
+
+test("only the turn's final assistant step is marked final", () => {
+	const callId = "call-1";
+	const intermediate: SessionEntry = {
+		kind: "message",
+		id: nextId(),
+		turnId: null,
+		timestamp: "2025-01-01T00:00:00.000Z",
+		message: {
+			role: "assistant",
+			content: "let me check",
+			id: nextId(),
+			toolCalls: [
+				{
+					id: callId,
+					name: "bash",
+					arguments: { command: "ls" },
+					rawArguments: '{"command":"ls"}',
+				},
+			],
+		},
+	};
+	const entries: SessionEntry[] = [
+		userEntry("hi"),
+		intermediate,
+		toolEntry("bash", callId),
+		assistantEntry("done"),
+	];
+
+	const { items } = projectHistoryPage(entries, { limit: 10 });
+
+	assert.deepEqual(items, [
+		{ kind: "user", text: "hi" },
+		{ kind: "assistant", text: "let me check", reasoning: null, final: false },
+		{ kind: "tool", name: "bash", label: "bash" },
+		{ kind: "assistant", text: "done", reasoning: null, final: true },
+	]);
 });
 
 test("the default page is the newest slice with a cursor to older entries", () => {

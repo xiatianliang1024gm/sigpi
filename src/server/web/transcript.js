@@ -55,6 +55,11 @@ function buildMessageActions(getText) {
  * come for free; it starts hidden and stays collapsed — a single summary line —
  * until the model emits reasoning. `getText` supplies the raw Markdown for the
  * toolbar's copy and save actions.
+ *
+ * The returned `actions` node is the copy/save toolbar. It is attached here (so
+ * a streamed answer can be copied the moment it renders) and detached by the
+ * callers that learn the message was only an intermediate step — see
+ * {@link view.beginAssistantMessage} and {@link historyItemToElement}.
  */
 export function createAssistantMessage(getText = () => "") {
 	const root = document.createElement("div");
@@ -78,8 +83,9 @@ export function createAssistantMessage(getText = () => "") {
 	const content = document.createElement("div");
 	content.className = "content";
 
-	root.append(reasoning, content, buildMessageActions(getText));
-	return { root, reasoning, preview, body, content };
+	const actions = buildMessageActions(getText);
+	root.append(reasoning, content, actions);
+	return { root, reasoning, preview, body, content, actions };
 }
 
 /** The one-line preview shown in a collapsed reasoning summary. */
@@ -108,16 +114,37 @@ export function appendTurnNode(node) {
 export function clearTurnNodes() {
 	for (const node of state.turnNodes) node.remove();
 	state.turnNodes = [];
+	toolbarCandidate = null;
+}
+
+/**
+ * The copy/save toolbar of the newest assistant output in the open turn. It is
+ * kept so it can be dropped the instant a newer output — or an ensuing tool
+ * call — proves that output was only an intermediate step. Only the turn's last
+ * LLM result keeps its toolbar.
+ */
+let toolbarCandidate = null;
+
+/** Detach the pending copy/save toolbar, if any, marking it intermediate. */
+function dropToolbarCandidate() {
+	if (toolbarCandidate) {
+		toolbarCandidate.remove();
+		toolbarCandidate = null;
+	}
 }
 
 /** The DOM-backed {@link TurnTranscriptView} the shared reducer writes to. */
 export const view = {
 	beginAssistantMessage() {
+		// A fresh LLM output supersedes the previous one, which was therefore an
+		// intermediate step: drop its copy/save toolbar.
+		dropToolbarCandidate();
 		let reasoningText = "";
 		let contentText = "";
 		let done = false;
-		const { root, reasoning, preview, body, content } =
+		const { root, reasoning, preview, body, content, actions } =
 			createAssistantMessage(() => contentText);
+		toolbarCandidate = actions;
 		appendTurnNode(root);
 		return {
 			appendReasoning(text) {
@@ -142,6 +169,9 @@ export const view = {
 		};
 	},
 	beginToolLine(id, label) {
+		// The assistant step that requested this tool call was intermediate, not
+		// the turn's final answer, so its copy/save toolbar is dropped.
+		dropToolbarCandidate();
 		const line = document.createElement("div");
 		line.className = "tool running";
 		const labelEl = document.createElement("span");
@@ -185,6 +215,7 @@ export function clearTranscript() {
 	state.currentAssistant = null;
 	state.toolLines.clear();
 	state.turnNodes = [];
+	toolbarCandidate = null;
 	state.seq = 0;
 	els.transcript.textContent = "";
 	resetHistory();
@@ -210,16 +241,18 @@ export function historyItemToElement(item) {
 	}
 	if (item.kind === "assistant") {
 		const text = item.text ?? "";
-		const { root, reasoning, preview, body, content } = createAssistantMessage(
-			() => text,
-		);
+		const message = createAssistantMessage(() => text);
+		// Only the turn's final LLM output offers copy/save; an intermediate step
+		// (one that went on to call a tool) renders as plain content. Absent (older
+		// payloads) defaults to showing the toolbar.
+		if (item.final === false) message.actions.remove();
 		if (item.reasoning) {
-			reasoning.hidden = false;
-			body.textContent = item.reasoning;
-			preview.textContent = reasoningPreviewText(item.reasoning);
+			message.reasoning.hidden = false;
+			message.body.textContent = item.reasoning;
+			message.preview.textContent = reasoningPreviewText(item.reasoning);
 		}
-		renderContent(content, text);
-		return root;
+		renderContent(message.content, text);
+		return message.root;
 	}
 	if (item.kind === "tool") {
 		const line = document.createElement("div");

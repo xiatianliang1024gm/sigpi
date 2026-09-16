@@ -749,6 +749,65 @@ test("copies and saves an assistant message as markdown", async () => {
 	}
 });
 
+test("offers copy/save only on the turn's final assistant message", async () => {
+	const harness = await openSession();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	source.message({ type: "ready", turnActive: false });
+
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	// First step: the model narrates, finalizes, then calls a tool. That is an
+	// intermediate step, so it must not carry the copy/save toolbar.
+	source.message({
+		type: "model_delta",
+		step: 1,
+		contentDelta: "Let me look.",
+	});
+	source.message({ type: "model_request_finished", step: 1 });
+	source.message({
+		type: "tool_execution_started",
+		step: 1,
+		toolName: "read",
+		toolCallId: "t1",
+		message: "Reading a.ts",
+	});
+	source.message({
+		type: "tool_execution_finished",
+		step: 1,
+		toolName: "read",
+		toolCallId: "t1",
+		ok: true,
+	});
+	// Second step: the final answer, which keeps the toolbar.
+	source.message({ type: "model_delta", step: 2, contentDelta: "Done." });
+	source.message({ type: "turn_finished", step: 2 });
+	await flush();
+
+	const messages = harness.document.querySelectorAll(
+		"#transcript .msg.assistant",
+	);
+	assert.equal(messages.length, 2, "both assistant steps render");
+	assert.equal(
+		messages[0]?.querySelector(".copy-message"),
+		null,
+		"the intermediate step offers no copy button",
+	);
+	assert.equal(
+		messages[0]?.querySelector(".save-message"),
+		null,
+		"the intermediate step offers no save button",
+	);
+	assert.ok(
+		messages[1]?.querySelector(".copy-message"),
+		"the final step offers the copy button",
+	);
+	assert.equal(
+		harness.document.querySelectorAll("#transcript .copy-message").length,
+		1,
+		"exactly one copy button is present for the turn",
+	);
+});
+
 test("folds a streamed turn into the DOM transcript", async () => {
 	const harness = await openSession();
 	const source = harness.sources.at(-1);
@@ -1354,6 +1413,40 @@ test("renders resumed history reasoning and markdown content", async () => {
 	);
 	assert.equal(content?.querySelector("h2")?.textContent, "Answer");
 	assert.equal(content?.querySelectorAll("ul li").length, 2);
+});
+
+test("resumed history offers copy/save only on the final assistant step", async () => {
+	const harness = await Harness.create();
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	harness.historyPages.set("", {
+		items: [
+			{ kind: "user", text: "hi" },
+			{ kind: "assistant", text: "On it.", reasoning: null, final: false },
+			{ kind: "tool", name: "read", label: "read" },
+			{ kind: "assistant", text: "Done.", reasoning: null, final: true },
+		],
+		cursor: null,
+	});
+	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
+	assert.ok(newSession, "the project menu offers a new session");
+	newSession.click();
+	await flush();
+
+	const messages = harness.document.querySelectorAll(
+		"#transcript .msg.assistant",
+	);
+	assert.equal(messages.length, 2, "both persisted assistant steps render");
+	assert.equal(
+		messages[0]?.querySelector(".copy-message"),
+		null,
+		"the intermediate step offers no copy button",
+	);
+	assert.ok(
+		messages[1]?.querySelector(".copy-message"),
+		"the final step offers the copy button",
+	);
 });
 
 test("adjusts the workspace width with the divider", async () => {
