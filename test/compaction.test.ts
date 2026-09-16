@@ -3,6 +3,7 @@ import test from "node:test";
 import {
 	decide,
 	execute,
+	MICRO_COMPACT_KEEP_TOOL_TOKENS,
 	microCompactMessages,
 } from "../src/agent/compaction.js";
 import {
@@ -181,7 +182,7 @@ test("decide never splits inside a tool-result group", () => {
 	);
 });
 
-test("microCompactMessages empties old tool results but keeps recent ones", () => {
+test("microCompactMessages replaces old tool results with an explicit notice but keeps recent ones", () => {
 	const messages: Message[] = [
 		{ role: "user", content: "u" },
 		createAssistantMessage(null, [
@@ -217,12 +218,169 @@ test("microCompactMessages empties old tool results but keeps recent ones", () =
 
 	const toolMessages = compacted.filter((message) => message.role === "tool");
 	assert.equal(toolMessages.length, 2);
-	assert.equal(toolMessages[0]?.content, "");
+	// An elided result must be self-describing. Blanking it would be
+	// indistinguishable from a tool that genuinely returned nothing, which is
+	// what made the model re-run the same call in a loop.
+	assert.notEqual(toolMessages[0]?.content, "");
+	assert.match(toolMessages[0]?.content ?? "", /^\[context-elided\]/);
+	assert.match(toolMessages[0]?.content ?? "", /not empty/);
+	assert.match(toolMessages[0]?.content ?? "", /the call succeeded/);
+	// The tool_use/tool_result pairing survives elision.
 	assert.equal(toolMessages[0]?.toolCallId, "call_old");
 	assert.equal(toolMessages[0]?.name, "bash");
 	assert.match(toolMessages[1]?.content ?? "", /recent output/);
 	// Non-tool messages are untouched.
 	assert.equal(compacted[0]?.content, "u");
+});
+
+test("microCompactMessages never elides the batch the model just received", () => {
+	// Each result alone blows the entire tool-result budget, so the tail budget
+	// cannot keep them — only pinning the newest batch can. Regression guard:
+	// before pinning, the first reads of a multi-file batch were blanked before
+	// the model could act on them, so it re-read the same files forever.
+	const huge = (id: string, marker: string) =>
+		createToolMessage(id, "read", {
+			ok: true,
+			data: { rendered: `${marker}${"x".repeat(60_000)}` },
+		});
+	const messages: Message[] = [
+		{ role: "user", content: "u" },
+		createAssistantMessage(null, [
+			{
+				id: "call_a",
+				name: "read",
+				arguments: { file_path: "a.ts" },
+				rawArguments: '{"file_path":"a.ts"}',
+			},
+			{
+				id: "call_b",
+				name: "read",
+				arguments: { file_path: "b.ts" },
+				rawArguments: '{"file_path":"b.ts"}',
+			},
+			{
+				id: "call_c",
+				name: "read",
+				arguments: { file_path: "c.ts" },
+				rawArguments: '{"file_path":"c.ts"}',
+			},
+		]),
+		huge("call_a", "AAA"),
+		huge("call_b", "BBB"),
+		huge("call_c", "CCC"),
+	];
+
+	const compacted = microCompactMessages(messages, {
+		keepToolTokens: 0,
+		floorToolResults: 0,
+	});
+
+	const toolMessages = compacted.filter((message) => message.role === "tool");
+	assert.equal(toolMessages.length, 3);
+	assert.match(toolMessages[0]?.content ?? "", /AAA/);
+	assert.match(toolMessages[1]?.content ?? "", /BBB/);
+	assert.match(toolMessages[2]?.content ?? "", /CCC/);
+});
+
+test("microCompactMessages leaves genuinely empty tool results untouched", () => {
+	const messages: Message[] = [
+		{ role: "user", content: "u" },
+		createAssistantMessage(null, [
+			{
+				id: "call_empty",
+				name: "glob",
+				arguments: { pattern: "nope" },
+				rawArguments: '{"pattern":"nope"}',
+			},
+		]),
+		createToolMessage("call_empty", "glob", { ok: true, data: "" }),
+	];
+
+	const compacted = microCompactMessages(messages, {
+		keepToolTokens: 0,
+		floorToolResults: 0,
+	});
+
+	// Nothing was reclaimed, so claiming content was "dropped" would be a lie.
+	assert.equal(compacted[2]?.role, "tool");
+	assert.equal(compacted[2]?.content, "");
+});
+
+test("microCompactMessages reports elision instead of blanking results (session regression)", () => {
+	// Mirrors the reported session: the model reads index.html plus two other
+	// files in one step, then reads three more files, then two more. The total
+	// output is about 1.5x the tool-result budget, so the tail budget must evict
+	// the earliest batch — and the model has to be told that explicitly rather
+	// than being handed an empty string it reads as "the file is empty".
+	//
+	// Sizes are expressed as fractions of the budget so the fixture keeps its
+	// shape if the budget is retuned.
+	const budgetChars = MICRO_COMPACT_KEEP_TOOL_TOKENS * 4;
+	const read = (id: string, budgetFraction: number) =>
+		createToolMessage(id, "read", {
+			ok: true,
+			data: { rendered: "x".repeat(Math.round(budgetChars * budgetFraction)) },
+		});
+	const call = (id: string, file: string) => ({
+		id,
+		name: "read",
+		arguments: { file_path: file },
+		rawArguments: `{"file_path":"${file}"}`,
+	});
+
+	// Fractions sum to 1.5x the budget; the batch shapes match the session.
+	const messages: Message[] = [
+		{ role: "user", content: "u" },
+		createAssistantMessage(null, [
+			call("c1", "index.html"),
+			call("c2", "sidebar.js"),
+			call("c3", "transcript.js"),
+		]),
+		read("c1", 0.09),
+		read("c2", 0.12),
+		read("c3", 0.31),
+		createAssistantMessage(null, [
+			call("c4", "tree.js"),
+			call("c5", "markdown.js"),
+			call("c6", "dom.js"),
+		]),
+		read("c4", 0.22),
+		read("c5", 0.35),
+		read("c6", 0.04),
+		createAssistantMessage(null, [
+			call("c7", "app.js"),
+			call("c8", "sessions.js"),
+		]),
+		read("c7", 0.13),
+		read("c8", 0.24),
+	];
+
+	const compacted = microCompactMessages(messages);
+	const toolMessages = compacted.filter(
+		(message) => message.role === "tool",
+	) as Array<{ content: string; toolCallId: string; name: string }>;
+
+	// No tool result is ever blanked.
+	for (const message of toolMessages) {
+		assert.notEqual(
+			message.content,
+			"",
+			`${message.toolCallId} was blanked instead of being reported as elided`,
+		);
+	}
+	// The newest batch is intact and usable.
+	const newest = toolMessages.slice(-2);
+	assert.match(newest[0]?.content ?? "", /^x+$/);
+	assert.match(newest[1]?.content ?? "", /^x+$/);
+	// The evicted older results announce themselves.
+	const evicted = toolMessages.filter((message) =>
+		message.content.startsWith("[context-elided]"),
+	);
+	assert.ok(
+		evicted.length > 0,
+		"expected the older batch to be elided at this size",
+	);
+	assert.ok(evicted.some((message) => message.toolCallId === "c1"));
 });
 
 test("execute summarizes the pre-split window and returns the summary and usage", async () => {

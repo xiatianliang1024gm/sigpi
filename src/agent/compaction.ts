@@ -12,8 +12,78 @@ import type {
 } from "../types.js";
 import { summarize } from "./summarizer.js";
 
-const MICRO_COMPACT_KEEP_TOOL_TOKENS = 8_000;
+/**
+ * How many tokens of the most recent tool output stay verbatim in a request
+ * before older results are elided.
+ *
+ * Chosen by comparison with the general practice of other agents rather than
+ * from this project's own history. Every comparable implementation keeps a
+ * working set in the **10k–50k token** band:
+ *
+ * - Anthropic's server-side context editing (the vendor implementation of this
+ *   exact feature, `clear_tool_uses_20250919`) defaults to triggering at
+ *   100k input tokens and keeping the last 3 tool use/result pairs.
+ * - Claude Code's equivalent tier clears old tool results and reports
+ *   reclaiming ~10k–50k tokens per activation; its session-memory tier keeps
+ *   10k–40k tokens of recent messages, and its post-compaction file restore
+ *   re-injects recently read files under a 50k token budget.
+ *
+ * 32k sits mid-band: ~16% of the default 200k window, so the remaining ~150k
+ * stays available for the system prompt, tool schemas, conversation and
+ * summaries — micro-compaction shapes the request but must not be what governs
+ * the window (full compaction does that). In bytes it is ~128 KB, i.e. 2.5
+ * max-size reads (the read tool caps at 50 KB) or roughly 10–15 typical source
+ * files, which covers a normal multi-file working set without eliding anything.
+ *
+ * The previous value (8k, ~32 KB) was smaller than a single `read` result, so
+ * ordinary multi-file exploration lost results one step after fetching them.
+ */
+export const MICRO_COMPACT_KEEP_TOOL_TOKENS = 32_000;
+
+/**
+ * Minimum number of tool results kept regardless of the token budget. Mirrors
+ * Anthropic's `keep: 3` default for `clear_tool_uses_20250919` — that counts
+ * tool use/result *pairs*, so flooring on 3 tool results is the more
+ * conservative reading of the same intent.
+ */
 const MICRO_COMPACT_FLOOR_TOOL_RESULTS = 3;
+
+/**
+ * Marker prefix of the placeholder that replaces an elided tool result. Kept
+ * short (it is re-sent on every subsequent request) but explicit: the
+ * placeholder must never be confusable with a tool that genuinely produced no
+ * output (see `formatOmittedToolResult`).
+ */
+export const OMITTED_TOOL_RESULT_MARKER = "[context-elided]";
+
+/**
+ * Build the placeholder that stands in for a tool result dropped from the
+ * request to save room.
+ *
+ * The content must be **non-empty and self-describing**. An empty string is
+ * indistinguishable from a tool that legitimately returned nothing, so a model
+ * that sees one concludes the call failed or the file is empty and re-issues
+ * it. That is a self-sustaining loop: the fresh result pushes more output into
+ * the window, which evicts the result the model just fetched, which it
+ * re-issues again.
+ *
+ * The wording states what happened (dropped, not empty, the call succeeded) and
+ * what a retry actually does. It deliberately does **not** forbid re-running
+ * the call: re-running is legitimate and works, because the newest batch is
+ * pinned by {@link microCompactMessages}. What it warns against is relying on
+ * the output to stay put, which is what the blind retry loop assumed.
+ */
+export function formatOmittedToolResult(
+	name: string,
+	originalChars: number,
+): string {
+	return (
+		`${OMITTED_TOOL_RESULT_MARKER} This "${name}" result (${originalChars} characters) ` +
+		"was dropped from the request to save room; the call succeeded and the output was " +
+		"not empty. Re-running the call returns the same text, but it is dropped again as " +
+		"soon as newer results arrive — so re-read only what you need, then use it promptly."
+	);
+}
 
 /**
  * The two pure compaction interfaces (ADR 0026, D2). `decide` is a pure
@@ -165,10 +235,23 @@ function findCompactSplitIndex(args: {
 /**
  * Derived, non-mutating view used to shrink working-context noise without a
  * model call and without touching the append-only entry stream. Old tool
- * results are replaced by a placeholder that preserves `name` + `toolCallId`
- * (so tool_use/tool_result pairing stays intact); the most-recent tool results
- * up to a token budget, with a small floor, are kept intact so the summary
- * prompt and the model can still see recent tool output.
+ * results are replaced by an explicit elision placeholder that preserves
+ * `name` + `toolCallId` (so tool_use/tool_result pairing stays intact); the
+ * most-recent tool results up to a token budget, with a small floor, are kept
+ * intact so the summary prompt and the model can still see recent tool output.
+ *
+ * Two rules protect the tool results the model is actively working with:
+ *
+ * 1. **The newest batch is pinned.** Every tool result belonging to the most
+ *    recent assistant tool-call message is kept in full, whatever the token
+ *    budget says. The tail token budget alone cannot guarantee this: a single
+ *    step that reads several files at once can exceed `keepToolTokens` on its
+ *    own, and without pinning the earlier results of that very batch would be
+ *    elided before the model ever got to act on them.
+ * 2. **Elision is never silent.** An elided result is replaced by
+ *    {@link formatOmittedToolResult}, never by an empty string — an empty tool
+ *    result reads as "the tool returned nothing" and provokes the model to
+ *    re-issue the identical call forever.
  */
 export function microCompactMessages(
 	messages: Message[],
@@ -183,9 +266,16 @@ export function microCompactMessages(
 	let keptTokens = 0;
 	let keptCount = 0;
 	const keep = new Array<boolean>(messages.length).fill(false);
+
+	for (const index of pinnedToolResultIndexes(messages)) {
+		keep[index] = true;
+		keptCount += 1;
+		keptTokens += estimateMessageTokens(messages[index] as Message);
+	}
+
 	for (let i = messages.length - 1; i >= 0; i -= 1) {
 		const message = messages[i];
-		if (message?.role !== "tool") {
+		if (message?.role !== "tool" || keep[i]) {
 			continue;
 		}
 		if (keptCount < floor || keptTokens < keepToolTokens) {
@@ -202,8 +292,54 @@ export function microCompactMessages(
 	});
 }
 
+/**
+ * Indexes of the tool results produced by the most recent assistant message
+ * that requested tools — i.e. the batch the model has just received and has
+ * not yet had a chance to use. Returns an empty list for shapes without such a
+ * message (e.g. a bare run of tool messages), leaving the token budget in sole
+ * charge.
+ */
+function pinnedToolResultIndexes(messages: Message[]): number[] {
+	let pinnedCallIds: Set<string> | null = null;
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const message = messages[i];
+		if (message?.role === "assistant" && message.toolCalls?.length) {
+			pinnedCallIds = new Set(message.toolCalls.map((toolCall) => toolCall.id));
+			break;
+		}
+	}
+	if (!pinnedCallIds) {
+		return [];
+	}
+
+	const indexes: number[] = [];
+	for (let i = 0; i < messages.length; i += 1) {
+		const message = messages[i];
+		if (
+			message?.role === "tool" &&
+			message.toolCallId &&
+			pinnedCallIds.has(message.toolCallId)
+		) {
+			indexes.push(i);
+		}
+	}
+	return indexes;
+}
+
 function makeOmittedToolMessage(message: ToolMessage): ToolMessage {
-	return { ...message, content: "" };
+	const original = message.content ?? "";
+	// Nothing to reclaim, and a notice here would falsely assert that content
+	// was dropped. A genuinely empty result stays empty.
+	if (
+		original.length === 0 ||
+		original.startsWith(OMITTED_TOOL_RESULT_MARKER)
+	) {
+		return message;
+	}
+	return {
+		...message,
+		content: formatOmittedToolResult(message.name, original.length),
+	};
 }
 
 /**

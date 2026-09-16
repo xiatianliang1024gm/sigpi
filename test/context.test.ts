@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+	MICRO_COMPACT_KEEP_TOOL_TOKENS,
+	OMITTED_TOOL_RESULT_MARKER,
+} from "../src/agent/compaction.js";
 import { CompactionFailedError } from "../src/agent/compaction-error.js";
 import {
 	ConversationContext,
@@ -1351,18 +1355,21 @@ test("summarize strips a leading <analysis> block as fallback when no <summary> 
 test("buildMessages micro-compacts older tool results into placeholders", () => {
 	// Build tool messages directly with large content so the per-tool token
 	// estimate (chars/4) clears the oldest results even though createToolMessage
-	// normally truncates rendered tool output.
+	// normally truncates rendered tool output. Each result is deliberately more
+	// than a third of the micro-compact budget, so the tail budget alone keeps
+	// exactly three of the six and the floor is not what decides it.
+	const toolChars = MICRO_COMPACT_KEEP_TOOL_TOKENS * 2;
 	const bigTool = (id: string, name: string) => ({
 		role: "tool" as const,
 		toolCallId: id,
 		name,
-		content: "x".repeat(20000),
+		content: "x".repeat(toolChars),
 	});
 	const failedTool = (id: string, name: string, error: string) => ({
 		role: "tool" as const,
 		toolCallId: id,
 		name,
-		content: `STATUS: error\nERROR: ${error}\n${"x".repeat(20000)}`,
+		content: `STATUS: error\nERROR: ${error}\n${"x".repeat(toolChars)}`,
 	});
 	const context = new ConversationContext({ summaryEnabled: false });
 	const recent: Message[] = [
@@ -1400,26 +1407,45 @@ test("buildMessages micro-compacts older tool results into placeholders", () => 
 	const byId = (id: string) =>
 		tools.find((m) => (m as { toolCallId?: string }).toolCallId === id);
 
-	const cleared = ["t1", "t2", "t3"].map(byId);
+	const elided = ["t1", "t2", "t3"].map(byId);
 	const kept = ["t4", "t5", "t6"].map(byId);
-	for (const t of cleared) {
+	for (const t of elided) {
 		assert.ok(t, "tool message must be present");
-		assert.equal((t as { content: string }).content, "");
+		const content = (t as { content: string }).content;
+		// Elided results must announce themselves. An empty string reads as
+		// "the tool returned nothing" and makes the model re-run the call
+		// forever, so blanking is a bug, not a placeholder.
+		assert.notEqual(content, "");
+		assert.ok(
+			content.startsWith(OMITTED_TOOL_RESULT_MARKER),
+			`expected an elision notice, got: ${content.slice(0, 60)}`,
+		);
+		assert.match(content, /not empty/);
 	}
 	for (const t of kept) {
 		assert.ok(t, "tool message must be present");
 		assert.notEqual((t as { content: string }).content, "");
 	}
-	// Exactly three most-recent tool results are cleared to empty.
+	// Exactly the three oldest tool results are elided.
+	assert.equal(
+		tools.filter((m) =>
+			(m as { content: string }).content.startsWith(OMITTED_TOOL_RESULT_MARKER),
+		).length,
+		3,
+	);
+	// No tool result is ever left blank.
 	assert.equal(
 		tools.filter((m) => (m as { content: string }).content === "").length,
-		3,
+		0,
 	);
 	// name + toolCallId are preserved on every tool message.
 	assert.equal((byId("t4") as { name?: string }).name, "read");
 	assert.equal((byId("t4") as { toolCallId?: string }).toolCallId, "t4");
-	// A cleared failed tool gets empty content (not error detail).
-	assert.equal((byId("t2") as { content: string }).content, "");
+	// An elided failed tool loses its error detail, replaced by the notice.
+	assert.doesNotMatch(
+		(byId("t2") as { content: string }).content,
+		/boom detail message/,
+	);
 	// A kept failed tool still shows its original error content.
 	assert.match(
 		(byId("t4") as { content: string }).content,

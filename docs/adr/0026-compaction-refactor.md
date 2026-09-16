@@ -98,7 +98,8 @@ execute(input: {
 ```
 
 - Internally applies `microCompactMessages` (old tool results reduced to
-  `name` + `toolCallId`, content emptied) before calling `summarize`.
+  `name` + `toolCallId` plus a short self-describing elision notice — see the
+  amendment at the end of this file) before calling `summarize`.
 - Returns the new summary **and** the provider-reported `usage` of the
   summarize call (the current code drops `response.usage`; this recovers it).
 - On any model failure it **throws** — it never trims, never degrades (see D4).
@@ -255,3 +256,71 @@ point at `docs/adr/` for decision records.
    `execute` (mock provider returns usage; failure throws), 400 retry loop,
    empty-response non-persistence, interrupt tool-call closure, post-compaction
    overflow error.
+
+## Amendment — micro-compaction must never blank a tool result
+
+**Status**: applied. Scope: `microCompactMessages` (`src/agent/compaction.ts`).
+The `decide` / `execute` / apply split above is unchanged.
+
+The original mechanism line said elided tool results had their "content
+emptied". On the wire that is a tool message with `content: ""`, which the
+model cannot distinguish from a tool that legitimately returned nothing. The
+observed failure (reproduced from a real session, `read` of three files in one
+step): the model concluded the reads had failed, re-issued the identical calls,
+which pushed fresh output into the window, which evicted the results it had
+just fetched — a self-sustaining re-read loop that burned the step budget
+(`index.html` read 4×, `tree.js` / `transcript.js` / `markdown.js` / `dom.js`
+read 3× each) while every persisted transcript looked complete, because the
+elision happens only in the request shape, never in the entry stream.
+
+Two rules now hold, both enforced by `microCompactMessages`:
+
+1. **Elision is loud.** An elided result is replaced by
+   `formatOmittedToolResult(name, originalChars)` — a short notice naming the
+   tool, the dropped size, stating that the call succeeded and the output was
+   not empty, and stating that a re-run returns the same text but that the text
+   is dropped again once newer results arrive. `name` + `toolCallId` are still
+   preserved. A genuinely empty result is left alone (nothing was reclaimed, and
+   a notice would be false). The notice deliberately does not forbid re-running:
+   a re-run is legitimate and does work, because of rule 2.
+2. **The newest batch is pinned.** Every tool result belonging to the most
+   recent assistant tool-call message is kept in full regardless of the token
+   budget. `MICRO_COMPACT_KEEP_TOOL_TOKENS` alone cannot guarantee this: one
+   step that reads several files can exceed it by itself, so without pinning the
+   earlier reads of a batch were elided before the model could act on them.
+   Pinning cannot mask a hard-limit overflow, because the compaction trigger
+   (`decide`) is computed from the uncompacted `recentMessages`.
+
+### Threshold: 8_000 → 32_000
+
+`MICRO_COMPACT_KEEP_TOOL_TOKENS` was raised from 8_000 (~32 KB) to 32_000
+(~128 KB). 8_000 was smaller than a single `read` result (the read tool caps at
+50 KB), so ordinary multi-file exploration lost tool output roughly one step
+after fetching it — the condition that produced the re-read loop above.
+
+The value is now anchored to the general practice of other agents, not to this
+project's history. Every comparable implementation keeps a working set of
+recent tool output in the **10k–50k token** band:
+
+| Implementation | Kept / reclaimed |
+| --- | --- |
+| Anthropic `clear_tool_uses_20250919` (server-side context editing) | triggers at 100k input tokens; `keep: 3` tool use/result pairs |
+| Claude Code MicroCompact | reclaims ~10k–50k tokens per activation |
+| Claude Code session-memory compact | keeps 10k (`minTokens`) – 40k (`maxTokens`) |
+| Claude Code post-compact file restore | 50k token budget for recently read files |
+
+32_000 is mid-band and ≈16% of the default 200k window, leaving ~150k for the
+system prompt, tool schemas, conversation and summary — micro-compaction shapes
+the request but must not be what governs the window; full compaction does.
+`MICRO_COMPACT_FLOOR_TOOL_RESULTS = 3` is unchanged: it mirrors Anthropic's
+`keep: 3` default (conservatively — that counts tool use/result pairs, this
+floors on tool results).
+
+A follow-up worth considering (not done here) is scaling the budget with
+`hardContextLimit` instead of holding it constant, the way Claude Code scales
+its auto-compact threshold to the model's window.
+
+Because `microCompactMessages` is a pure, non-mutating view, the notice is
+recomputed from the live `recentMessages` on every request and never
+double-applied; the append-only entry stream still holds the full output.
+
