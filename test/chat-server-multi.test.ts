@@ -697,6 +697,63 @@ test("GET .../model reports 501 when the runtime has no model control", async ()
 	});
 });
 
+test("GET .../context reports the live context-window usage", async () => {
+	const manager = new SessionManager({
+		createRuntime: async () => {
+			const bus = new FakeProgressBus();
+			return {
+				runner: bus,
+				turn: new FakeTurnRunner(bus),
+				logger: noopLogger,
+				sessionId: "sess",
+				dispose() {},
+				getContextUsage: () => ({
+					limit: 100000,
+					usedTokens: 2500,
+					modelName: "Model One",
+				}),
+			};
+		},
+		listStoredSessions: async () => [],
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess/context`,
+		);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), {
+			limit: 100000,
+			usedTokens: 2500,
+			modelName: "Model One",
+		});
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("GET .../context reports 501 when the runtime has no context usage", async () => {
+	await withServer(async (baseUrl) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess-1/context`,
+		);
+		assert.equal(response.status, 501);
+		assert.deepEqual(await response.json(), {
+			error: "context_usage_unavailable",
+		});
+	});
+});
+
 test("routes to unknown projects and sessions return 404", async () => {
 	await withServer(async (baseUrl) => {
 		let response = await fetch(`${baseUrl}/projects/missing/sessions`);

@@ -157,6 +157,12 @@ class Harness {
 			{ id: "m2", name: "Model Two" },
 		],
 	};
+	/** The context-window usage snapshot served by `GET .../context`. */
+	contextState: {
+		limit: number;
+		usedTokens: number | null;
+		modelName: string;
+	} = { limit: 100000, usedTokens: 2500, modelName: "Model One" };
 
 	private constructor(dom: JSDOM) {
 		this.dom = dom;
@@ -303,6 +309,12 @@ class Harness {
 				current: String(body?.modelId ?? this.modelState.current),
 			};
 			return jsonResponse(200, this.modelState);
+		}
+		if (
+			method === "GET" &&
+			/^\/projects\/[^/]+\/sessions\/[^/]+\/context$/.test(pathname)
+		) {
+			return jsonResponse(200, this.contextState);
 		}
 		if (
 			method === "POST" &&
@@ -1280,6 +1292,63 @@ test("shows the session's models and switches from the dropdown", async () => {
 		harness.callsTo("GET", "/projects/k1/sessions/s1/model").length,
 		1,
 	);
+});
+
+test("shows the context-window usage next to the model picker", async () => {
+	const harness = await openSession();
+	await flush();
+
+	const el = element<HTMLElement>(harness.document, "context-usage");
+	assert.equal(el.hidden, false);
+	assert.equal(el.textContent, "2.5K/100K (3%)");
+	assert.equal(
+		harness.callsTo("GET", "/projects/k1/sessions/s1/context").length,
+		1,
+	);
+});
+
+test("folds live context estimates and refreshes after the turn ends", async () => {
+	const harness = await openSession();
+	await flush();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	const el = element<HTMLElement>(harness.document, "context-usage");
+
+	// An in-flight frame's estimate updates the indicator immediately.
+	source.message({
+		type: "model_delta",
+		step: 1,
+		estimatedContextTokens: 4200,
+	});
+	await flush();
+	assert.equal(el.textContent, "4.2K/100K (4%)");
+
+	// The terminal frame refetches the measured usage from the server.
+	source.message({ type: "turn_finished", step: 1, usage: null });
+	await flush();
+	assert.equal(
+		harness.callsTo("GET", "/projects/k1/sessions/s1/context").length,
+		2,
+	);
+});
+
+test("hides the context indicator before any usage is known", async () => {
+	const harness = await Harness.create();
+	harness.contextState = {
+		limit: 100000,
+		usedTokens: null,
+		modelName: "Model One",
+	};
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
+	assert.ok(newSession, "the project menu offers a new session");
+	newSession.click();
+	await flush();
+
+	const el = element<HTMLElement>(harness.document, "context-usage");
+	assert.equal(el.hidden, false);
+	assert.equal(el.textContent, "?/100K");
 });
 
 test("renders streamed reasoning in a collapsed details panel", async () => {

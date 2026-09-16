@@ -704,6 +704,22 @@ button:disabled {
 	gap: 8px;
 }
 
+/* Left cluster: the model picker plus the context-window usage readout. */
+.composer-meta {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.context-usage {
+	flex: none;
+	font-variant-numeric: tabular-nums;
+	color: var(--muted);
+	font-size: 12px;
+	white-space: nowrap;
+}
+
 .model-select {
 	max-width: 60%;
 	background: var(--panel);

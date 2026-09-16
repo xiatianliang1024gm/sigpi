@@ -2,6 +2,7 @@
 
 import { postJson, requestJson, sessionBase } from "./api.js";
 import { restoreDraft, saveDraft } from "./composer.js";
+import { loadContextUsage, resetContextUsage } from "./context.js";
 import { els, showError } from "./dom.js";
 import { connect, disconnect, updateSubmitButton } from "./events.js";
 import { loadProjects } from "./projects.js";
@@ -110,6 +111,7 @@ export async function selectSession(projectKey, sessionId, { resume }) {
 	els.input.disabled = false;
 	els.input.focus();
 	void loadModelState();
+	void loadContextUsage();
 }
 
 /** Delete one session and its stored messages; stop it first if it is live. */
@@ -162,6 +164,7 @@ export function resetModelState() {
 	state.modelId = null;
 	renderModelSelect();
 	updateSubmitButton();
+	resetContextUsage();
 }
 
 /** Rebuild the model dropdown's options from the current model list. */
@@ -196,4 +199,6 @@ export async function switchModel(modelId) {
 		showError(error.message);
 	}
 	renderModelSelect();
+	// The usable context window is per-model, so refresh the indicator too.
+	void loadContextUsage();
 }

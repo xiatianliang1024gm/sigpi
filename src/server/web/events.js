@@ -1,6 +1,7 @@
 // SSE event handling and the live transport.
 
 import { sessionBase } from "./api.js";
+import { loadContextUsage, setContextUsedTokens } from "./context.js";
 import { els, setConnection } from "./dom.js";
 import { loadSessions, resetModelState } from "./sessions.js";
 import { state } from "./state.js";
@@ -8,6 +9,9 @@ import { clearTurnNodes, view } from "./transcript.js";
 import { applyTurnProgress, isTurnTerminalEvent } from "./reducer.js";
 
 export function handleEvent(event) {
+	// Every in-flight frame carries the runner's live request-token estimate;
+	// fold it into the composer's context indicator so the count tracks the turn.
+	setContextUsedTokens(event.estimatedContextTokens);
 	if (event.type === "ready") {
 		setTurnActive(Boolean(event.turnActive));
 		return;
@@ -33,6 +37,9 @@ export function handleEvent(event) {
 		state.turnNodes = [];
 		setTurnActive(false);
 		void loadSessions();
+		// The turn's measured usage is on the runtime now; refetch so the
+		// indicator shows ground truth rather than the in-flight estimate.
+		void loadContextUsage();
 	}
 }
 

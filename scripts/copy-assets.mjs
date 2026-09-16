@@ -22,6 +22,7 @@ const assets = [
 	"src/server/web/clipboard.js",
 	"src/server/web/transcript.js",
 	"src/server/web/events.js",
+	"src/server/web/context.js",
 	"src/server/web/tree.js",
 	"src/server/web/menus.js",
 	"src/server/web/projects.js",

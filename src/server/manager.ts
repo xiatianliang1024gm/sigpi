@@ -1,8 +1,13 @@
 import { rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { getDefaultSessionsRoot } from "../config.js";
+import { estimateContextTokens } from "../context-window.js";
 import { createModelProvider } from "../model/provider.js";
-import { createAgentRuntime, createRuntimeSessionStore } from "../runtime.js";
+import {
+	type AgentRuntime,
+	createAgentRuntime,
+	createRuntimeSessionStore,
+} from "../runtime.js";
 import {
 	SessionController,
 	type SessionControllerRuntime,
@@ -38,6 +43,12 @@ export interface ManagedRuntime extends SessionControllerRuntime {
 	/** Switch the active model; returns `false` for an unknown model id. */
 	setModel?(modelId: string): boolean;
 	/**
+	 * Live context-window usage (usable budget + used tokens) plus the active
+	 * model name. Optional so lightweight test runtimes need not implement it;
+	 * the HTTP layer degrades gracefully when it is absent.
+	 */
+	getContextUsage?(): RuntimeContextUsage;
+	/**
 	 * Register a listener invoked after each successful flush of the runtime's
 	 * session store, i.e. whenever a message batch or turn boundary advances what
 	 * is on disk. The manager uses it to keep a session's event-log watermark in
@@ -61,6 +72,19 @@ export interface RuntimeModelState {
 	current: string;
 	/** Every model the runtime can switch to. */
 	models: ModelOption[];
+}
+
+/**
+ * A runtime's live context-window usage, mirroring the TUI status bar's
+ * `{used}/{limit} ({pct}%)` segment.
+ */
+export interface RuntimeContextUsage {
+	/** Usable context budget: hard context limit minus reserved tokens. */
+	limit: number;
+	/** Used tokens (last provider usage, else an idle estimate), or `null` when empty. */
+	usedTokens: number | null;
+	/** Display name of the active model. */
+	modelName: string;
 }
 
 /** A directory the server has been told to host sessions for. */
@@ -228,7 +252,43 @@ async function defaultCreateRuntime(args: {
 			currentModelId = modelId;
 			return true;
 		},
+		getContextUsage: () => {
+			const context = runtime.context;
+			// Prefer the provider-reported ground-truth count from the last
+			// response; fall back to the same idle estimate the TUI uses when the
+			// provider never reported usage (or compaction dropped the measured
+			// message). A fresh conversation stays `null` → an honest `?`.
+			const usage = context.getLastUsage()?.usage ?? null;
+			const budget = context.getContextBudget();
+			return {
+				limit: Math.max(1, budget.hardContextLimit - budget.reserveTokens),
+				usedTokens: usage
+					? usage.totalTokens
+					: estimateRuntimeContextTokens(runtime),
+				modelName:
+					runtime.config.models[currentModelId]?.name ?? currentModelId,
+			};
+		},
 	};
+}
+
+/**
+ * Estimate the runtime's current context size from its live state, mirroring the
+ * TUI's idle estimate (`estimateIdleContextTokens` in `src/chat-repl.ts`).
+ * Returns `null` for a conversation with no content yet, so the UI keeps an
+ * honest `?` instead of reporting a system-prompt-only figure as measured usage.
+ */
+function estimateRuntimeContextTokens(runtime: AgentRuntime): number | null {
+	const context = runtime.context;
+	if (!context.getSummary() && context.getRecentMessages().length === 0) {
+		return null;
+	}
+	return estimateContextTokens({
+		systemPrompt: runtime.systemPrompt,
+		summary: context.getSummary(),
+		recentMessages: context.getRecentMessages(),
+		toolSchemas: runtime.toolSchemas,
+	}).totalTokens;
 }
 
 async function defaultListStoredSessions(

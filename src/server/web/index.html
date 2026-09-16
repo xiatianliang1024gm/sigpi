@@ -70,13 +70,21 @@
 						disabled
 					></textarea>
 					<div class="composer-actions">
-						<select
-							id="model-select"
-							class="model-select"
-							title="选择模型"
-							aria-label="选择模型"
-							disabled
-						></select>
+						<div class="composer-meta">
+							<select
+								id="model-select"
+								class="model-select"
+								title="选择模型"
+								aria-label="选择模型"
+								disabled
+							></select>
+							<span
+								id="context-usage"
+								class="context-usage"
+								title="上下文窗口使用情况"
+								hidden
+							></span>
+						</div>
 						<button
 							id="submit"
 							class="composer-submit"

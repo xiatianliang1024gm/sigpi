@@ -23,6 +23,10 @@ function createState() {
 		models: [],
 		/** The active session's current model id, or null when unknown. */
 		modelId: null,
+		/** Usable context window for the active session (hard limit − reserve), or null. */
+		contextLimit: null,
+		/** Used context tokens (last usage / live estimate), or null when unknown. */
+		contextUsedTokens: null,
 		currentAssistant: null,
 		toolLines: new Map(),
 		/**
