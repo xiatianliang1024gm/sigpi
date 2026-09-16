@@ -1,8 +1,21 @@
 // Project/session tree rendering.
 
 import { els, showError } from "./dom.js";
-import { baseName, formatRelativeTime, sessionLabel, setRelativeTime, toEpochMillis } from "./format.js";
-import { beginRenameProject, beginRenameSession, buildMenuButton, closeMenu, menuDeleteItem, menuItem } from "./menus.js";
+import {
+	baseName,
+	formatRelativeTime,
+	sessionLabel,
+	setRelativeTime,
+	toEpochMillis,
+} from "./format.js";
+import {
+	beginRenameProject,
+	beginRenameSession,
+	buildMenuButton,
+	closeMenu,
+	menuDeleteItem,
+	menuItem,
+} from "./menus.js";
 import { deleteProject, selectProject, toggleProject } from "./projects.js";
 import { archiveSession, createSession, selectSession } from "./sessions.js";
 import { state } from "./state.js";
@@ -64,7 +77,9 @@ export function buildProjectNode(project) {
 			closeMenu();
 			beginRenameProject(project, name);
 		}),
-		menuDeleteItem("删除工作区", "确认删除？", () => deleteProject(project.key)),
+		menuDeleteItem("删除工作区", "确认删除？", () =>
+			deleteProject(project.key),
+		),
 	]);
 
 	header.append(toggle, name, menu);
@@ -128,7 +143,13 @@ export function buildProjectNode(project) {
  * A selectable session row: the session button, its "⋯" menu, and the
  * last-update time pinned to the row's right edge.
  */
-export function buildSessionRow({ projectKey, sessionId, label, updatedAt, resume }) {
+export function buildSessionRow({
+	projectKey,
+	sessionId,
+	label,
+	updatedAt,
+	resume,
+}) {
 	const active =
 		projectKey === state.projectKey && sessionId === state.sessionId;
 	const row = document.createElement("div");
@@ -139,8 +160,9 @@ export function buildSessionRow({ projectKey, sessionId, label, updatedAt, resum
 	item.className = "list-item session";
 	item.textContent = label;
 	item.title = sessionId;
-	item.addEventListener("click", () =>
-		void selectSession(projectKey, sessionId, { resume }),
+	item.addEventListener(
+		"click",
+		() => void selectSession(projectKey, sessionId, { resume }),
 	);
 
 	const menu = buildMenuButton(row, () => [

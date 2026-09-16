@@ -94,4 +94,3 @@ const timeTicker = setInterval(refreshRelativeTimes, MINUTE_MS);
 if (timeTicker && typeof timeTicker.unref === "function") timeTicker.unref();
 
 loadProjects().catch((error) => showError(error.message));
-

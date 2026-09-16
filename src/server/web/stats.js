@@ -9,10 +9,7 @@
 
 import { requestJson, sessionBase } from "./api.js";
 import { els } from "./dom.js";
-import {
-	formatSessionInfo,
-	normalizeSessionStats,
-} from "./session-format.js";
+import { formatSessionInfo, normalizeSessionStats } from "./session-format.js";
 import { state } from "./state.js";
 
 /** A refresh is in flight; further requests coalesce into one trailing fetch. */
@@ -67,7 +64,8 @@ async function fetchSessionStats(sessionId, projectKey) {
 	try {
 		const body = await requestJson(`${sessionBase()}/stats`);
 		// Drop the result if the user switched sessions mid-flight.
-		if (state.sessionId !== sessionId || state.projectKey !== projectKey) return;
+		if (state.sessionId !== sessionId || state.projectKey !== projectKey)
+			return;
 		state.sessionStats = normalizeSessionStats(body);
 	} catch {
 		return;

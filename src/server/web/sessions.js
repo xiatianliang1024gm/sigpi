@@ -149,7 +149,8 @@ export async function loadModelState() {
 	try {
 		const body = await requestJson(`${sessionBase()}/model`);
 		// Drop the result if the user switched sessions mid-flight.
-		if (state.sessionId !== sessionId || state.projectKey !== projectKey) return;
+		if (state.sessionId !== sessionId || state.projectKey !== projectKey)
+			return;
 		state.models = Array.isArray(body?.models) ? body.models : [];
 		state.modelId = typeof body?.current === "string" ? body.current : null;
 	} catch {

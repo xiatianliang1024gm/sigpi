@@ -26,13 +26,15 @@ const SAFE_LINK = /^(?:https?:|mailto:|#|\/|\.{1,2}\/)/i;
  * parsing below cannot clobber a shared `lastIndex`.
  */
 function renderInline(text) {
-	const pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(\[[^\]]+\]\([^)]+\))/g;
+	const pattern =
+		/(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(\[[^\]]+\]\([^)]+\))/g;
 	const fragment = document.createDocumentFragment();
 	let lastIndex = 0;
-	let match;
-	while ((match = pattern.exec(text)) !== null) {
+	for (const match of text.matchAll(pattern)) {
 		if (match.index > lastIndex) {
-			fragment.append(document.createTextNode(text.slice(lastIndex, match.index)));
+			fragment.append(
+				document.createTextNode(text.slice(lastIndex, match.index)),
+			);
 		}
 		const token = match[0];
 		if (token.startsWith("`")) {
@@ -50,7 +52,7 @@ function renderInline(text) {
 		} else {
 			fragment.append(buildLink(token));
 		}
-		lastIndex = pattern.lastIndex;
+		lastIndex = match.index + match[0].length;
 	}
 	if (lastIndex < text.length) {
 		fragment.append(document.createTextNode(text.slice(lastIndex)));

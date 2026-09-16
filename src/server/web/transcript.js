@@ -3,8 +3,8 @@
 import { requestJson, sessionBase } from "./api.js";
 import { buildCopyButton, downloadText } from "./clipboard.js";
 import { els, showError } from "./dom.js";
-import { state } from "./state.js";
 import { renderMarkdown } from "./markdown.js";
+import { state } from "./state.js";
 
 /** Entries fetched per history page when resuming a session. */
 export const HISTORY_PAGE_SIZE = 30;
@@ -168,7 +168,7 @@ export const view = {
 			},
 		};
 	},
-	beginToolLine(id, label) {
+	beginToolLine(_id, label) {
 		// The assistant step that requested this tool call was intermediate, not
 		// the turn's final answer, so its copy/save toolbar is dropped.
 		dropToolbarCandidate();
@@ -320,7 +320,8 @@ export async function loadHistory({ older = false } = {}) {
 		}
 		const page = await requestJson(`${sessionBase()}/messages?${params}`);
 		// Drop the result if the user switched sessions mid-flight.
-		if (state.sessionId !== sessionId || state.projectKey !== projectKey) return;
+		if (state.sessionId !== sessionId || state.projectKey !== projectKey)
+			return;
 		state.historyCursor = page?.cursor ?? null;
 		// The newest page reports how far the persisted transcript reaches; the
 		// event stream then resumes from there (older pages must not move it).

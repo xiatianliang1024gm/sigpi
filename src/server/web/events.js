@@ -3,11 +3,11 @@
 import { sessionBase } from "./api.js";
 import { loadContextUsage, setContextUsedTokens } from "./context.js";
 import { els, setConnection } from "./dom.js";
+import { applyTurnProgress, isTurnTerminalEvent } from "./reducer.js";
 import { loadSessions, resetModelState } from "./sessions.js";
 import { state } from "./state.js";
 import { loadSessionStats, refreshSessionStats } from "./stats.js";
 import { clearTurnNodes, view } from "./transcript.js";
-import { applyTurnProgress, isTurnTerminalEvent } from "./reducer.js";
 
 export function handleEvent(event) {
 	// Every in-flight frame carries the runner's live request-token estimate;
@@ -73,7 +73,8 @@ export function updateSubmitButton() {
 	els.submit.title = label;
 	els.submit.setAttribute("aria-label", label);
 	// The model can only be switched while no turn is in flight.
-	els.modelSelect.disabled = !ready || state.turnActive || state.models.length === 0;
+	els.modelSelect.disabled =
+		!ready || state.turnActive || state.models.length === 0;
 }
 
 // --- transport -------------------------------------------------------------
@@ -81,7 +82,7 @@ export function updateSubmitButton() {
 export function connect() {
 	disconnect();
 	if (!state.projectKey || !state.sessionId) return;
-		// Resume strictly after the last applied frame. `seq` starts at the history
+	// Resume strictly after the last applied frame. `seq` starts at the history
 	// cursor, so the initial connect skips the frames history already rendered
 	// and receives the in-flight turn from exactly where it left off.
 	const source = new EventSource(`${sessionBase()}/events?after=${state.seq}`);

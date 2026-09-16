@@ -26,7 +26,8 @@ export async function loadContextUsage() {
 	try {
 		const body = await requestJson(`${sessionBase()}/context`);
 		// Drop the result if the user switched sessions mid-flight.
-		if (state.sessionId !== sessionId || state.projectKey !== projectKey) return;
+		if (state.sessionId !== sessionId || state.projectKey !== projectKey)
+			return;
 		state.contextLimit = Number.isFinite(body?.limit) ? body.limit : null;
 		state.contextUsedTokens = Number.isFinite(body?.usedTokens)
 			? body.usedTokens
@@ -133,7 +134,10 @@ function ensureRing(el) {
 	value.setAttribute("cy", "18");
 	value.setAttribute("r", String(RING_RADIUS));
 	value.setAttribute("fill", "none");
-	value.setAttribute("stroke-dasharray", `${RING_CIRCUMFERENCE} ${RING_CIRCUMFERENCE}`);
+	value.setAttribute(
+		"stroke-dasharray",
+		`${RING_CIRCUMFERENCE} ${RING_CIRCUMFERENCE}`,
+	);
 	setRingFraction(value, 0);
 
 	svg.append(track, value);
