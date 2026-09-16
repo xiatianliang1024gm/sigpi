@@ -11,8 +11,9 @@
 	--ok: #5fd08a;
 	/* Workspace column width; driven by the draggable divider in `app.js`. */
 	--sidebar-width: 280px;
-	/* Max width of the centered message/input column inside the chat pane. */
-	--chat-max: 820px;
+	/* Max width of the centered message/input column inside the chat pane.
+	   Wide enough that the long session-info summary rarely truncates. */
+	--chat-max: 1000px;
 }
 
 * {
@@ -427,8 +428,11 @@ button:disabled {
 	gap: 10px;
 }
 
+/* Fill the message column so the transcript (assistant markdown, reasoning,
+   user bubbles) lines up with the composer input below it. The column is
+   already capped at `--chat-max`, so `100%` is the same width as the input. */
 .msg {
-	max-width: 80ch;
+	max-width: 100%;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }

@@ -79,16 +79,24 @@ export function resetSessionStats() {
 	renderSessionInfo();
 }
 
-/** Render the formatted line from {@link state}, hiding it when there is none. */
+/**
+ * Render the formatted line from {@link state}, hiding it when there is none.
+ * The full line is also set as the `title` so hovering the (ellipsized) box
+ * reveals any part that did not fit on the single line.
+ */
 export function renderSessionInfo() {
 	const el = els.sessionInfo;
 	if (!el) return;
 	const text = formatSessionInfo(state.sessionStats);
 	if (!text) {
 		el.textContent = "";
+		el.title = "";
 		el.hidden = true;
 		return;
 	}
 	el.textContent = text;
+	// Hovering shows the complete summary, not a generic hint, since the line
+	// is truncated with an ellipsis once the composer runs out of width.
+	el.title = text;
 	el.hidden = false;
 }
