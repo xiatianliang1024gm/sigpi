@@ -13,8 +13,9 @@ import type {
 import { summarize } from "./summarizer.js";
 
 /**
- * How many tokens of the most recent tool output stay verbatim in a request
- * before older results are elided.
+ * Micro-compaction budget used when the caller has no model window to scale
+ * against: the default of the pure function, and the historical value this
+ * project shipped before the budget became window-relative.
  *
  * Chosen by comparison with the general practice of other agents rather than
  * from this project's own history. Every comparable implementation keeps a
@@ -28,17 +29,34 @@ import { summarize } from "./summarizer.js";
  *   10k–40k tokens of recent messages, and its post-compaction file restore
  *   re-injects recently read files under a 50k token budget.
  *
- * 32k sits mid-band: ~16% of the default 200k window, so the remaining ~150k
- * stays available for the system prompt, tool schemas, conversation and
- * summaries — micro-compaction shapes the request but must not be what governs
- * the window (full compaction does that). In bytes it is ~128 KB, i.e. 2.5
- * max-size reads (the read tool caps at 50 KB) or roughly 10–15 typical source
- * files, which covers a normal multi-file working set without eliding anything.
- *
- * The previous value (8k, ~32 KB) was smaller than a single `read` result, so
- * ordinary multi-file exploration lost results one step after fetching them.
+ * In production the budget is *not* this constant — it is
+ * {@link microCompactToolTokenBudget} applied to the active model's window, so
+ * a 200k window gets ~60k rather than a flat 32k. See that function for why.
  */
 export const MICRO_COMPACT_KEEP_TOOL_TOKENS = 32_000;
+
+/**
+ * Share of the model's context window that may be held by verbatim tool
+ * results.
+ *
+ * The earlier flat 32k was ~16% of the default 200k window, and a real session
+ * showed why that is too small: a single implementation turn read ~100k tokens
+ * of files, so a 32k budget evicted two thirds of the tool output the model had
+ * just fetched — 55,879 tokens of the *current* turn's own results, which it
+ * then re-read file by file (`transcript.js` four times, `manager.ts` five
+ * times). 30% leaves the system prompt, tool schemas, conversation text and
+ * summary the other ~70%, and still lands inside the band the survey above
+ * describes (60k of a 200k window, and Claude Code's `maxTokens: 40_000`
+ * session-memory tier is the same order of magnitude).
+ */
+export const MICRO_COMPACT_KEEP_TOOL_FRACTION = 0.3;
+
+/**
+ * Lower bound of the scaled budget. A small window (32k, 64k) must not be
+ * budgeted a flat 32k of tool output, but nor should the budget collapse to
+ * nothing: a couple of file reads have to fit for the agent to work at all.
+ */
+const MICRO_COMPACT_KEEP_TOOL_MIN_TOKENS = 8_000;
 
 /**
  * Minimum number of tool results kept regardless of the token budget. Mirrors
@@ -55,6 +73,30 @@ const MICRO_COMPACT_FLOOR_TOOL_RESULTS = 3;
  * output (see `formatOmittedToolResult`).
  */
 export const OMITTED_TOOL_RESULT_MARKER = "[context-elided]";
+
+/**
+ * Scale the tool-result budget to the active model's window.
+ *
+ * Called by the context manager on every request (never cached — `/model
+ * switch` must retarget it immediately, the same way `getContextBudget` does
+ * for the full-compaction threshold).
+ */
+export function microCompactToolTokenBudget(
+	hardContextLimit?: number | null,
+): number {
+	if (
+		typeof hardContextLimit !== "number" ||
+		!Number.isFinite(hardContextLimit) ||
+		hardContextLimit <= 0
+	) {
+		return MICRO_COMPACT_KEEP_TOOL_TOKENS;
+	}
+
+	return Math.max(
+		MICRO_COMPACT_KEEP_TOOL_MIN_TOKENS,
+		Math.round(hardContextLimit * MICRO_COMPACT_KEEP_TOOL_FRACTION),
+	);
+}
 
 /**
  * Build the placeholder that stands in for a tool result dropped from the
@@ -233,63 +275,243 @@ function findCompactSplitIndex(args: {
 // ---------------------------------------------------------------------------
 
 /**
+ * What the planner decided about one request's tool results. Exposed so the
+ * context manager can report the decision without recomputing it, and so tests
+ * can assert on the decision instead of on rendered placeholder strings.
+ */
+export interface MicroCompactionPlan {
+	/** Indexes (into `messages`) whose tool result is replaced by a notice. */
+	elidedIndexes: ReadonlySet<number>;
+	/** Tool results kept verbatim. */
+	keptToolResults: number;
+	/** Estimated tokens of the kept tool results. */
+	keptTokens: number;
+	/** Estimated tokens reclaimed (original content minus the notice). */
+	elidedTokens: number;
+	/** Effective budget for this request (already scaled by the caller). */
+	budget: number;
+}
+
+export interface MicroCompactOptions {
+	/** Token budget for tool results. Defaults to the flat legacy value. */
+	keepToolTokens?: number;
+	/** Minimum tool results kept regardless of the budget. */
+	floorToolResults?: number;
+	/**
+	 * Tool-call ids that must never be elided ahead of older results — the
+	 * results of the turn that is still running. Omitted when the caller cannot
+	 * identify the current turn (tests, resume paths).
+	 */
+	protectedToolCallIds?: ReadonlySet<string>;
+	/** Observes the plan; used for logging. Never mutates the decision. */
+	onPlan?: (plan: MicroCompactionPlan) => void;
+}
+
+/**
  * Derived, non-mutating view used to shrink working-context noise without a
- * model call and without touching the append-only entry stream. Old tool
- * results are replaced by an explicit elision placeholder that preserves
- * `name` + `toolCallId` (so tool_use/tool_result pairing stays intact); the
- * most-recent tool results up to a token budget, with a small floor, are kept
- * intact so the summary prompt and the model can still see recent tool output.
+ * model call and without touching the append-only entry stream. An elided tool
+ * result is replaced by an explicit placeholder that preserves `name` +
+ * `toolCallId`, so the tool_use/tool_result pairing stays valid and an elided
+ * result is never mistaken for a tool that returned nothing.
  *
- * Two rules protect the tool results the model is actively working with:
+ * Rules are listed in the order they are protected; rules 2–3 share one
+ * token budget:
  *
  * 1. **The newest batch is pinned.** Every tool result belonging to the most
- *    recent assistant tool-call message is kept in full, whatever the token
- *    budget says. The tail token budget alone cannot guarantee this: a single
- *    step that reads several files at once can exceed `keepToolTokens` on its
- *    own, and without pinning the earlier results of that very batch would be
- *    elided before the model ever got to act on them.
- * 2. **Elision is never silent.** An elided result is replaced by
- *    {@link formatOmittedToolResult}, never by an empty string — an empty tool
- *    result reads as "the tool returned nothing" and provokes the model to
- *    re-issue the identical call forever.
+ *    recent assistant tool-call message is kept in full, whatever the budget
+ *    says: one step that reads several files can exceed the entire budget by
+ *    itself, and without pinning the earlier results of that very batch are
+ *    elided before the model can act on them.
+ * 2. **The running turn is frozen.** Every tool result of the turn that is
+ *    still in flight is kept ahead of anything older, and the class is pruned
+ *    only from its oldest end, as a last resort. What this buys is a guarantee
+ *    about *priority*: no earlier turn's content can take room that the running
+ *    turn's own results need. It does not buy unbounded room — a turn that
+ *    reads more than the budget still loses its own oldest results, because the
+ *    alternative is a request that cannot be sent.
+ * 3. **The rest is a recency window**: the oldest results are dropped until the
+ *    budget is met, lowest priority first.
+ *
+ * Two further rules were prototyped and deliberately **not** kept (see the
+ * amendment in `docs/adr/0026-compaction-refactor.md`): pinning a working set
+ * of file/range targets across turns, and dropping copies that a newer copy of
+ * the same target supersedes. Both made the planner model *file identity* —
+ * which read of which range is the current one, and how many tokens of it stay
+ * pinned — to decide what the model still needs. That judgment belongs to the
+ * model: the planner's only job is to pick what to drop when there is no room,
+ * and it should stay simple enough to predict. The measured cost of not having
+ * them is documented in the ADR rather than coded here.
+ *
+ * Determinism is a feature, not a side effect: the request prefix is the
+ * prompt-cache key. Rules 1–2 are pure functions of the message list — a
+ * finished turn stays finished — so their decisions never flip back and forth.
+ * Only rule 3's boundary moves.
  */
 export function microCompactMessages(
 	messages: Message[],
-	options: {
-		keepToolTokens?: number;
-		floorToolResults?: number;
-	} = {},
+	options: MicroCompactOptions = {},
 ): Message[] {
-	const keepToolTokens =
-		options.keepToolTokens ?? MICRO_COMPACT_KEEP_TOOL_TOKENS;
-	const floor = options.floorToolResults ?? MICRO_COMPACT_FLOOR_TOOL_RESULTS;
-	let keptTokens = 0;
-	let keptCount = 0;
-	const keep = new Array<boolean>(messages.length).fill(false);
-
-	for (const index of pinnedToolResultIndexes(messages)) {
-		keep[index] = true;
-		keptCount += 1;
-		keptTokens += estimateMessageTokens(messages[index] as Message);
+	const plan = planMicroCompaction(messages, options);
+	options.onPlan?.(plan);
+	if (plan.elidedIndexes.size === 0) {
+		return [...messages];
 	}
 
-	for (let i = messages.length - 1; i >= 0; i -= 1) {
-		const message = messages[i];
-		if (message?.role !== "tool" || keep[i]) {
+	return messages.map((message, index) =>
+		plan.elidedIndexes.has(index) && message.role === "tool"
+			? makeOmittedToolMessage(message as ToolMessage)
+			: message,
+	);
+}
+
+/**
+ * Compute the elision decision for one request. Pure: no I/O, no state, no
+ * mutation of `messages`.
+ */
+export function planMicroCompaction(
+	messages: Message[],
+	options: MicroCompactOptions = {},
+): MicroCompactionPlan {
+	const budget = options.keepToolTokens ?? MICRO_COMPACT_KEEP_TOOL_TOKENS;
+	const floor = options.floorToolResults ?? MICRO_COMPACT_FLOOR_TOOL_RESULTS;
+	const protectedIds = options.protectedToolCallIds;
+
+	const toolIndexes: number[] = [];
+	for (let index = 0; index < messages.length; index += 1) {
+		if (messages[index]?.role === "tool") {
+			toolIndexes.push(index);
+		}
+	}
+	if (toolIndexes.length === 0) {
+		return {
+			elidedIndexes: new Set<number>(),
+			keptToolResults: 0,
+			keptTokens: 0,
+			elidedTokens: 0,
+			budget,
+		};
+	}
+
+	const tokens = new Map<number, number>();
+	for (const index of toolIndexes) {
+		tokens.set(index, estimateMessageTokens(messages[index] as ToolMessage));
+	}
+
+	// Rule 1 — the newest batch, plus results with nothing left to reclaim
+	// (empty, or already a placeholder). Neither is ever pruned.
+	const keep = new Set<number>(pinnedToolResultIndexes(messages));
+	for (const index of toolIndexes) {
+		if (!isReclaimable(messages[index] as ToolMessage)) {
+			keep.add(index);
+		}
+	}
+	let keptTokens = 0;
+	for (const index of keep) {
+		keptTokens += tokens.get(index) ?? 0;
+	}
+
+	// Rule 2 + 3 — the budgeted classes, highest priority first. Both lists are
+	// built in ascending index order (message order is time order), so
+	// reversing them yields "newest first" without a sort.
+	const protectedIndexes: number[] = [];
+	const recencyWindow: number[] = [];
+	for (const index of toolIndexes) {
+		if (keep.has(index)) {
 			continue;
 		}
-		if (keptCount < floor || keptTokens < keepToolTokens) {
-			keep[i] = true;
-			keptCount += 1;
-			keptTokens += estimateMessageTokens(message);
+		if (isProtected(messages[index] as ToolMessage, protectedIds)) {
+			protectedIndexes.push(index);
+			continue;
 		}
+		recencyWindow.push(index);
 	}
-	return messages.map((message, i) => {
-		if (message.role === "tool" && !keep[i]) {
-			return makeOmittedToolMessage(message as ToolMessage);
+
+	const priorityOrder = [
+		// Both lists are newest-first: they were collected in message order
+		// (oldest first), so reversing yields newest-first.
+		...protectedIndexes.reverse(),
+		...recencyWindow.reverse(),
+	];
+	for (const index of priorityOrder) {
+		keep.add(index);
+		keptTokens += tokens.get(index) ?? 0;
+	}
+
+	// Rule 3 — the budget is enforced by dropping from the lowest-priority end
+	// of `priorityOrder`, so the frozen turn is only reached once everything
+	// else is gone and a result that does not fit is the one dropped. The walk
+	// stops as soon as the budget is met: pruning further (to a low-water mark)
+	// was tried and rejected — the trigger is evaluated against the full
+	// candidate mass, which includes everything already elided, so it stays true
+	// on every later request and the boundary advances by one result per request
+	// either way. Pruning past the budget would only lose more context.
+	//
+	// What this rule does guarantee is monotonicity: a result that has been
+	// elided is never restored as the conversation grows, so a decision never
+	// flips back and the request prefix changes only forward.
+	// The frozen turn is *not* exempt here: when the running turn's own results
+	// exceed the whole budget, its oldest ones have to go like any others. That
+	// is the safety valve — the alternative is a request that cannot be sent.
+	let keptCount = keep.size;
+	for (
+		let cursor = priorityOrder.length - 1;
+		cursor >= 0 && keptTokens > budget && keptCount > floor;
+		cursor -= 1
+	) {
+		const index = priorityOrder[cursor] as number;
+		if (!keep.delete(index)) {
+			continue;
 		}
-		return message;
-	});
+		keptTokens -= tokens.get(index) ?? 0;
+		keptCount -= 1;
+	}
+
+	const elided = new Set<number>();
+	let elidedTokens = 0;
+	for (const index of toolIndexes) {
+		if (keep.has(index)) {
+			continue;
+		}
+		elided.add(index);
+		const message = messages[index] as ToolMessage;
+		elidedTokens += Math.max(
+			0,
+			(tokens.get(index) ?? 0) -
+				estimateMessageTokens({
+					...message,
+					content: formatOmittedToolResult(
+						message.name,
+						message.content.length,
+					),
+				}),
+		);
+	}
+
+	return {
+		elidedIndexes: elided,
+		keptToolResults: toolIndexes.length - elided.size,
+		keptTokens,
+		elidedTokens,
+		budget,
+	};
+}
+
+function isProtected(
+	message: ToolMessage,
+	protectedIds?: ReadonlySet<string>,
+): boolean {
+	return protectedIds?.has(message.toolCallId) ?? false;
+}
+
+/**
+ * Whether eliding this result reclaims anything. An empty result, and a result
+ * that is already a placeholder, are left exactly as they are: a notice there
+ * would either be false ("content was dropped" when there was none) or a
+ * second rewrite of the same message, which is pure prefix churn.
+ */
+function isReclaimable(message: ToolMessage): boolean {
+	const content = message.content ?? "";
+	return content.length > 0 && !content.startsWith(OMITTED_TOOL_RESULT_MARKER);
 }
 
 /**
