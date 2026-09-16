@@ -201,6 +201,25 @@ export interface TurnProgressEventMap {
 		/** Which trigger fired for the compaction (see {@link ContextUpdateResult.trigger}). */
 		trigger: Exclude<ContextUpdateResult["trigger"], null>;
 	};
+	/**
+	 * Tool results that micro-compaction left out of this request (a view-only
+	 * operation: the entry stream keeps every result in full, so the transcript
+	 * and the session record are unaffected). Reported because the elision is
+	 * otherwise invisible — the user sees a complete transcript while the model
+	 * sees placeholders — which is exactly how the re-read loop that motivated
+	 * the micro-compaction rewrite went unnoticed.
+	 */
+	context_elided: {
+		step: number;
+		/** Tool results replaced by a placeholder in this request. */
+		elidedToolResults: number;
+		/** Estimated tokens those placeholders reclaimed. */
+		elidedTokens: number;
+		/** Tool results still sent verbatim. */
+		keptToolResults: number;
+		/** The tool-result token budget that governed the decision. */
+		budget: number;
+	};
 	tool_calls_received: { step: number; count: number };
 	tool_execution_started: {
 		step: number;
@@ -266,6 +285,7 @@ export const TURN_PROGRESS_EVENTS = [
 	"assistant_message",
 	"context_checkpoint",
 	"context_compacted",
+	"context_elided",
 	"tool_calls_received",
 	"tool_execution_started",
 	"tool_execution_finished",

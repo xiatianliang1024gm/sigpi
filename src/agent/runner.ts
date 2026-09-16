@@ -25,6 +25,7 @@ import type {
 	TurnProgressPayload,
 } from "../types.js";
 import { TURN_PROGRESS_EVENTS } from "../types.js";
+import type { MicroCompactionPlan } from "./compaction.js";
 import type { ConversationContext } from "./context.js";
 import {
 	createAssistantMessage,
@@ -134,6 +135,13 @@ class TurnState {
 	 */
 	lastResponseUsage: ModelUsage | undefined;
 	lastStep = 0;
+	/**
+	 * Signature of the last micro-compaction decision reported to the progress
+	 * stream. The decision is recomputed in full on every request (it is a pure
+	 * view over the live window), so without this the transcript would gain a
+	 * line per step; what the user needs to see is a decision that *changed*.
+	 */
+	private lastElisionSignature: string | null = null;
 
 	private readonly context: ConversationContext;
 	private readonly getProvider: () => ModelProvider;
@@ -199,6 +207,31 @@ class TurnState {
 		this.runner.emitProgress(type, {
 			...payload,
 			estimatedContextTokens: this.estimateRequestTokens(),
+		});
+	}
+
+	/**
+	 * Report one request's micro-compaction decision as a progress event, once
+	 * per distinct decision within the turn. Elision is a view: the entry stream
+	 * and the transcript keep every tool result in full, so without this event
+	 * the user has no way to see that the model received less than the
+	 * transcript shows.
+	 */
+	reportElision(plan: MicroCompactionPlan): void {
+		const signature = [...plan.elidedIndexes].sort((a, b) => a - b).join(",");
+		if (signature === this.lastElisionSignature) {
+			return;
+		}
+		this.lastElisionSignature = signature;
+		if (plan.elidedIndexes.size === 0) {
+			return;
+		}
+		this.emitProgress("context_elided", {
+			step: this.lastStep,
+			elidedToolResults: plan.elidedIndexes.size,
+			elidedTokens: plan.elidedTokens,
+			keptToolResults: plan.keptToolResults,
+			budget: plan.budget,
 		});
 	}
 
@@ -543,7 +576,7 @@ export class AgentRunner extends EventEmitter {
 			// before every generate, so a mid-turn compaction (pre-request
 			// estimate or a provider `context_length_exceeded` retry) is
 			// automatically reflected in the next attempt (ADR 0026, D1).
-			const messages = this.buildRequestMessages(turn.pending);
+			const messages = this.buildRequestMessages(turn);
 			let response: ModelResponse;
 			try {
 				response = await this.provider
@@ -789,9 +822,17 @@ export class AgentRunner extends EventEmitter {
 		};
 	}
 
-	private buildRequestMessages(pending: Message[]): Message[] {
-		const messages = this.context.buildMessages(this.systemPrompt);
-		messages.push(...pending);
+	private buildRequestMessages(turn: TurnState): Message[] {
+		const messages = this.context.buildMessages(this.systemPrompt, {
+			// The running turn's tool results are frozen into this request: a
+			// step must never lose what the previous steps of the same turn
+			// fetched (see `planMicroCompaction`).
+			currentTurnId: turn.turnId,
+			// Elision happens only in the request shape, so the transcript alone
+			// cannot show it; surface the decision on the progress stream.
+			onMicroCompaction: (plan) => turn.reportElision(plan),
+		});
+		messages.push(...turn.pending);
 		return messages;
 	}
 

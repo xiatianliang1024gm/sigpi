@@ -71,6 +71,32 @@ export function formatCompactionMessage(
 }
 
 /**
+ * Render a micro-compaction notice: how much tool output the *request* lost,
+ * and why the transcript still shows it. The distinction matters — the user is
+ * looking at a complete transcript while the model saw placeholders, so a line
+ * that only said "elided N results" would read like data loss.
+ */
+export function formatElisionMessage(
+	event: Extract<TurnProgressEvent, { type: "context_elided" }>,
+): string {
+	const count = event.elidedToolResults;
+	const results = `${count} tool result${count === 1 ? "" : "s"}`;
+	const pronoun = count === 1 ? "Its" : "Their";
+	const reclaimed =
+		event.elidedTokens > 0
+			? ` (${formatCompactNumber(event.elidedTokens)} tokens)`
+			: "";
+	const budget =
+		event.budget > 0
+			? ` to fit the ${formatCompactNumber(event.budget)}-token tool-result budget`
+			: "";
+	return (
+		`Context elided: ${results}${reclaimed} left out of this request${budget}. ` +
+		`${pronoun} full output stays in the session record.`
+	);
+}
+
+/**
  * Apply one turn-progress event to a persistent transcript view. Returns the
  * current in-flight assistant-message view so the caller can thread it across
  * events within a turn, and a map of in-flight tool-line handles keyed by
@@ -115,6 +141,11 @@ export function applyTurnProgress(
 
 	if (event.type === "context_compacted") {
 		view.appendSystem(formatCompactionMessage(event), "info");
+		return currentAssistant;
+	}
+
+	if (event.type === "context_elided") {
+		view.appendSystem(formatElisionMessage(event), "info");
 		return currentAssistant;
 	}
 
