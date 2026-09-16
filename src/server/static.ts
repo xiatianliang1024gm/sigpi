@@ -9,31 +9,46 @@ import type { ServerResponse } from "node:http";
  *
  * Only a fixed allow-list of paths is served — there is no directory traversal
  * surface, and every request is same-origin with the API it drives (no CORS).
+ * The client is split into small ES modules (`app.js` imports the rest), so the
+ * allow-list names each file rather than listing URL records by hand.
  */
-const ASSETS: Record<string, { file: string; contentType: string }> = {
-	"/": { file: "index.html", contentType: "text/html; charset=utf-8" },
-	"/index.html": {
-		file: "index.html",
-		contentType: "text/html; charset=utf-8",
-	},
-	"/app.js": {
-		file: "app.js",
-		contentType: "text/javascript; charset=utf-8",
-	},
-	"/reducer.js": {
-		file: "reducer.js",
-		contentType: "text/javascript; charset=utf-8",
-	},
-	"/markdown.js": {
-		file: "markdown.js",
-		contentType: "text/javascript; charset=utf-8",
-	},
-	"/styles.css": { file: "styles.css", contentType: "text/css; charset=utf-8" },
+const JS = "text/javascript; charset=utf-8";
+
+const ASSET_CONTENT_TYPES: Record<string, string> = {
+	"index.html": "text/html; charset=utf-8",
+	"styles.css": "text/css; charset=utf-8",
+	"app.js": JS,
+	"dom.js": JS,
+	"state.js": JS,
+	"format.js": JS,
+	"api.js": JS,
+	"sidebar.js": JS,
+	"transcript.js": JS,
+	"events.js": JS,
+	"tree.js": JS,
+	"menus.js": JS,
+	"projects.js": JS,
+	"sessions.js": JS,
+	"composer.js": JS,
+	"reducer.js": JS,
+	"markdown.js": JS,
 };
+
+/** Resolve a request path to an allow-listed asset, or `undefined`. */
+function assetFor(
+	pathname: string,
+): { file: string; contentType: string } | undefined {
+	const file =
+		pathname === "/" || pathname === "/index.html"
+			? "index.html"
+			: pathname.replace(/^\//, "");
+	const contentType = ASSET_CONTENT_TYPES[file];
+	return contentType ? { file, contentType } : undefined;
+}
 
 /** True when `pathname` names a bundled client asset. */
 export function isStaticAssetPath(pathname: string): boolean {
-	return Object.hasOwn(ASSETS, pathname);
+	return assetFor(pathname) !== undefined;
 }
 
 /**
@@ -45,7 +60,7 @@ export async function serveStaticAsset(
 	pathname: string,
 	res: ServerResponse,
 ): Promise<boolean> {
-	const asset = ASSETS[pathname];
+	const asset = assetFor(pathname);
 	if (!asset) {
 		return false;
 	}

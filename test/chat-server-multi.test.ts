@@ -237,7 +237,7 @@ test("client assets are served and unknown paths still 404", async () => {
 		const app = await fetch(`${baseUrl}/app.js`);
 		assert.equal(app.status, 200);
 		assert.match(app.headers.get("content-type") ?? "", /javascript/);
-		assert.match(await app.text(), /applyTurnProgress/);
+		assert.match(await app.text(), /loadProjects/);
 
 		const reducer = await fetch(`${baseUrl}/reducer.js`);
 		assert.equal(reducer.status, 200);
