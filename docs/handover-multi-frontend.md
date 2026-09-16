@@ -239,11 +239,11 @@ SessionManager
   其余 `dom` / `state` / `format` / `api` / `sidebar` / `transcript` / `events` / `tree` /
   `menus` / `projects` / `sessions` / `composer` 各管一块；模块间用 ES import 组合，共享
   状态由 `state.js` 持有（`resetState()` 每次加载重建，保证 jsdom 多 harness 隔离）。
-- 会话信息与上下文环：顶栏 `#session-info` 显示会话统计（`N 轮 · M 步| LLM … · 工具调用
-  …| 首 token 平均 … · … tok/s| 缓存命中 …%| 输入 … tok · 输出 … tok`），数据来自新路由
+- 会话信息与上下文环：输入框操作行左侧 `#session-info` 显示会话统计（`N 轮 · M 步| LLM … · 工具调用
+  …| 首 token 平均 … · … tok/s| 缓存命中 …%| 输入 … tok · 输出 … tok`，左对齐、超长省略），数据来自新路由
   `GET .../stats`（`src/server/session-stats.ts`：`derivePersistedStats` 从持久化 entry 流
   汇总轮/步/token，`SessionStatsTracker` 订阅 controller 事件测 LLM/工具/首 token 时长；
-  时长不落盘，故只覆盖本进程观察到的轮次）。右下模型选择器旁的上下文用量改为**圆环**
+  时长不落盘，故只覆盖本进程观察到的轮次）。同一操作行右对齐的模型选择器与上下文用量**圆环**
   （`context.js` 内联 SVG，弧长=已用比例，中心显示百分比，hover `title` 给出精确 token）。
   客户端 `stats.js` 只拉取并渲染，`session-format.js` 为无依赖的纯格式化（供 Node 测试）。
 - `src/server/static.ts`：只服务**固定白名单**的客户端资源（`index.html`、`styles.css`、

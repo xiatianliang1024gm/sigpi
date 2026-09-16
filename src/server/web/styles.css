@@ -54,9 +54,11 @@ body.busy .status::before {
 	color: var(--accent);
 }
 
-/* Session summary (turns/steps/timings/tokens), pushed to the right of topbar. */
+/* Session summary (turns/steps/timings/tokens), leading the composer action row:
+   the text is left-aligned and ellipsizes, while the model picker / context ring
+   and the send button stay pinned to the right on the same row. */
 .session-info {
-	margin-left: auto;
+	flex: 1 1 auto;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -712,12 +714,14 @@ button:disabled {
 .composer-actions {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
+	/* Info text leads on the left; the controls cluster right. */
+	justify-content: flex-end;
 	gap: 8px;
 }
 
-/* Left cluster: the model picker plus the context-window usage readout. */
+/* Right cluster: the model picker plus the context-window usage readout. */
 .composer-meta {
+	flex: none;
 	display: flex;
 	align-items: center;
 	gap: 8px;

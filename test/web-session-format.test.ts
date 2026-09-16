@@ -43,6 +43,27 @@ test("formats the full session info line", async () => {
 	);
 });
 
+test("formats a resumed session with no live timings", async () => {
+	const { formatSessionInfo } = await loadFormat();
+	// No LLM/tool timings were measured this process, so those groups drop and
+	// the line leads with the durable totals — the composer's left-aligned text.
+	assert.equal(
+		formatSessionInfo({
+			turns: 1,
+			steps: 46,
+			inputTokens: 2_700_000,
+			outputTokens: 19_800,
+			cacheReadTokens: 2_594_000,
+			cacheWriteTokens: 0,
+			llmMs: 0,
+			toolMs: 0,
+			firstTokenAvgMs: null,
+			tokensPerSecond: null,
+		}),
+		"1 轮 · 46 步| 缓存命中 49%| 输入 2.7M tok · 输出 19.8K tok",
+	);
+});
+
 test("omits groups whose data is unknown", async () => {
 	const { formatSessionInfo } = await loadFormat();
 	assert.equal(formatSessionInfo(null), "");

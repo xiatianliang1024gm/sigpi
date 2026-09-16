@@ -1,4 +1,4 @@
-// Session info line for the topbar: cumulative turn/step/token totals plus the
+// Session info line for the composer: cumulative turn/step/token totals plus the
 // wall-clock timings the server measured while driving the session.
 //
 // The durable totals (turns, steps, tokens) are folded server-side from the

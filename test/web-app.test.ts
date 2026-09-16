@@ -1379,7 +1379,7 @@ test("hides the context indicator before any usage is known", async () => {
 	assert.equal(el.querySelector(".context-ring-label")?.textContent, "?");
 });
 
-test("renders the session info line in the topbar", async () => {
+test("renders the session info line in the composer", async () => {
 	const harness = await openSession();
 	await flush();
 
@@ -1388,6 +1388,21 @@ test("renders the session info line in the topbar", async () => {
 	assert.equal(
 		el.textContent,
 		"2 轮 · 108 步| LLM 5分54秒 · 工具调用 5分14秒| 首 token 平均 1秒 · 255 tok/s| 缓存命中 8%| 输入 11.2M tok · 输出 62.4K tok",
+	);
+	// The line leads the composer action row: text first (left), then the model
+	// picker / context ring and the send button (right), all on the same row.
+	const actions = harness.document.querySelector(".composer .composer-actions");
+	assert.ok(actions, "the composer action row renders");
+	const tokens = Array.from(actions.children).map((node) => {
+		if (node.id === "session-info") return "info";
+		if (node.classList.contains("composer-meta")) return "meta";
+		if (node.id === "submit") return "submit";
+		return "other";
+	});
+	assert.deepEqual(
+		tokens,
+		["info", "meta", "submit"],
+		"info text leads, model picker/context ring and send button follow",
 	);
 	assert.equal(
 		harness.callsTo("GET", "/projects/k1/sessions/s1/stats").length,
