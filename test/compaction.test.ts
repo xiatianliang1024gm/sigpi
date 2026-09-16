@@ -541,14 +541,15 @@ test("microCompactMessages prunes a repeated read by recency once the budget bin
 
 test("microCompactToolTokenBudget scales with the window and never collapses", () => {
 	// The flat 32k was ~16% of a 200k window and could not hold one turn's
-	// reads; the budget now follows the active model.
-	assert.equal(microCompactToolTokenBudget(200_000), 60_000);
+	// reads; the budget now follows the active model at 60% of the window.
+	assert.equal(microCompactToolTokenBudget(200_000), 120_000);
 	assert.equal(
 		microCompactToolTokenBudget(1_000_000),
 		1_000_000 * MICRO_COMPACT_KEEP_TOOL_FRACTION,
 	);
-	// A small window is budgeted in proportion, but never below the floor.
-	assert.equal(microCompactToolTokenBudget(16_384), 8_000);
+	// A small window is budgeted in proportion, but never below the floor
+	// (0.6 x 12_000 = 7_200, which the 8_000 floor lifts).
+	assert.equal(microCompactToolTokenBudget(12_000), 8_000);
 	// No window to scale against (tests, legacy callers): the historical value.
 	assert.equal(
 		microCompactToolTokenBudget(undefined),
@@ -559,6 +560,42 @@ test("microCompactToolTokenBudget scales with the window and never collapses", (
 		microCompactToolTokenBudget(null),
 		MICRO_COMPACT_KEEP_TOOL_TOKENS,
 	);
+});
+
+test("execute micro-compacts the summarized slice with the budget it is given", async () => {
+	const transcripts: string[] = [];
+	const provider = new MockProvider((request) => {
+		transcripts.push(request.messages.at(-1)?.content ?? "");
+		return {
+			assistantText: "<summary>ok</summary>",
+			toolCalls: [],
+			finishReason: "stop",
+		};
+	});
+
+	const messages: Message[] = [{ role: "user", content: "investigate" }];
+	for (let i = 0; i < 4; i += 1) {
+		messages.push(
+			createAssistantMessage(null, [
+				toolCall(`r${i}`, "read", { file_path: `f${i}.ts` }),
+			]),
+			sizedToolResult(`r${i}`, "read", 3_000),
+		);
+	}
+
+	await execute({
+		provider,
+		systemPrompt: SYSTEM_PROMPT,
+		messages,
+		previousSummary: null,
+		reserveTokens: 100,
+		// Holds about two of the four ~3k results, so the floor of 3 forces one
+		// elision — proving the passed budget reaches `microCompactMessages`
+		// (the flat 32k default would keep all four).
+		keepToolTokens: 8_000,
+	});
+
+	assert.match(transcripts[0] ?? "", /\[context-elided\]/);
 });
 
 test("microCompactMessages never restores an elided result as the conversation grows", () => {

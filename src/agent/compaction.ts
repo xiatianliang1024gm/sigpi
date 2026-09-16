@@ -37,19 +37,28 @@ export const MICRO_COMPACT_KEEP_TOOL_TOKENS = 32_000;
 
 /**
  * Share of the model's context window that may be held by verbatim tool
- * results.
+ * results. One fraction governs **both** micro-compaction paths — the request
+ * view (`buildMessages`) and the slice the summarizer re-reads (`execute`) —
+ * so the two can never disagree about how much raw tool output the window
+ * affords.
  *
  * The earlier flat 32k was ~16% of the default 200k window, and a real session
  * showed why that is too small: a single implementation turn read ~100k tokens
  * of files, so a 32k budget evicted two thirds of the tool output the model had
  * just fetched — 55,879 tokens of the *current* turn's own results, which it
  * then re-read file by file (`transcript.js` four times, `manager.ts` five
- * times). 30% leaves the system prompt, tool schemas, conversation text and
- * summary the other ~70%, and still lands inside the band the survey above
- * describes (60k of a 200k window, and Claude Code's `maxTokens: 40_000`
- * session-memory tier is the same order of magnitude).
+ * times). 30% was the first correction; 60% is the settled value, chosen to hold
+ * even a heavy implementation turn's working set so the model stops re-reading
+ * what it just fetched.
+ *
+ * Not the whole window: the remaining ~40% still has to hold the system prompt,
+ * tool schemas, conversation text, summary, and the summary model's own output
+ * (the last sized by `reserveTokens` and the provider's `max_tokens` in
+ * `summarizer.ts`). The fraction sits **above** the 10k–50k band the survey
+ * above describes for comparable agents — deliberately: those agents elide older
+ * turns, whereas this one keeps the running turn whole.
  */
-export const MICRO_COMPACT_KEEP_TOOL_FRACTION = 0.3;
+export const MICRO_COMPACT_KEEP_TOOL_FRACTION = 0.6;
 
 /**
  * Lower bound of the scaled budget. A small window (32k, 64k) must not be
@@ -79,7 +88,8 @@ export const OMITTED_TOOL_RESULT_MARKER = "[context-elided]";
  *
  * Called by the context manager on every request (never cached — `/model
  * switch` must retarget it immediately, the same way `getContextBudget` does
- * for the full-compaction threshold).
+ * for the full-compaction threshold) and again by `compact()` for the
+ * summarized slice, so both paths share one window-relative number.
  */
 export function microCompactToolTokenBudget(
 	hardContextLimit?: number | null,
@@ -191,9 +201,18 @@ export function decide(input: {
 
 /**
  * Summarize the given slice of messages (the pre-split window). Internally
- * applies `microCompactMessages` (old tool results reduced to `name` +
- * `toolCallId`, content emptied) before calling `summarize`. Returns the new
- * summary and the provider-reported usage of the summarize call.
+ * applies `microCompactMessages` (old tool results replaced by a
+ * `[context-elided]` notice that preserves `name` + `toolCallId`) before
+ * calling `summarize`. Returns the new summary and the provider-reported usage
+ * of the summarize call.
+ *
+ * `keepToolTokens` is the budget for the verbatim tool results the summarizer
+ * reads. The caller scales it to the active model's window with
+ * {@link microCompactToolTokenBudget} — the same budget the request view uses,
+ * so the slice and the window it came from agree. This function stays
+ * window-agnostic, and when the budget is omitted it falls back to the flat
+ * historical value (tests, legacy callers), the same default as the request
+ * path.
  *
  * On any model failure it throws (`CompactionFailedError`) — it never trims,
  * never degrades (D4).
@@ -206,11 +225,15 @@ export async function execute(input: {
 	instructions?: string;
 	requestContext?: { turnId?: string };
 	reserveTokens: number;
+	/** Budget for verbatim tool results in the summarized slice. */
+	keepToolTokens?: number;
 	abortSignal?: AbortSignal;
 }): Promise<{ summary: string; usage?: ModelUsage }> {
 	return summarize(input.provider, {
 		systemPrompt: input.systemPrompt,
-		messages: microCompactMessages(input.messages),
+		messages: microCompactMessages(input.messages, {
+			keepToolTokens: input.keepToolTokens,
+		}),
 		previousSummary: input.previousSummary,
 		instructions: input.instructions,
 		requestContext: input.requestContext,

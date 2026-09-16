@@ -809,9 +809,10 @@ test("reports micro-compaction to the progress stream when tool results are elid
 	// which is precisely how the re-read loop that motivated the rewrite went
 	// unnoticed.
 	//
-	// The window is 20_000 tokens, so the scaled tool-result budget is at its
-	// 8_000-token floor; four ~3k-token results exceed it and the oldest one
-	// goes (the newest batch is pinned, and the 3-result floor stops the walk).
+	// The window is 13_000 tokens, so the scaled tool-result budget (0.6 ×
+	// 13_000 = 7_800) is at its 8_000-token floor; four ~3k-token results
+	// exceed it and the oldest one goes (the newest batch is pinned, and the
+	// 3-result floor stops the walk).
 	const tools = new ToolRegistry([
 		{
 			name: "big_tool",
@@ -849,7 +850,7 @@ test("reports micro-compaction to the progress stream when tool results are elid
 	const context = new ConversationContext({
 		summaryEnabled: true,
 		getContextBudget: () => ({
-			hardContextLimit: 20_000,
+			hardContextLimit: 13_000,
 			reserveTokens: 100,
 			keepRecentTokens: 1_000,
 		}),

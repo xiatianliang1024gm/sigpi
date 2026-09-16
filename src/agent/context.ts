@@ -598,6 +598,11 @@ export class ConversationContext {
 					instructions: options?.instructions,
 					requestContext,
 					reserveTokens: budget.reserveTokens,
+					// Same window-scaled budget the request view uses, so the
+					// summarized slice is never micro-compacted more or less
+					// aggressively than the window it came from. `/model switch`
+					// retargets both together.
+					keepToolTokens: microCompactToolTokenBudget(budget.hardContextLimit),
 					abortSignal: compactAbortController.signal,
 				});
 			} catch (error) {

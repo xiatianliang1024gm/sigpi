@@ -329,8 +329,9 @@ double-applied; the append-only entry stream still holds the full output.
 **Status**: applied. **Amends**: D1/D6 (when the auto trigger runs), the
 "Threshold: 8_000 → 32_000" section above (the budget is now window-relative),
 and the rule list of "micro-compaction must never blank a tool result".
-**Scope**: `src/agent/compaction.ts` (`planMicroCompaction` — the whole
-policy), `src/agent/context.ts` (`buildMessages`), `src/agent/runner.ts`
+**Scope**: `src/agent/compaction.ts` (`planMicroCompaction` — the whole policy,
+plus the window-scaling `microCompactToolTokenBudget` both paths share),
+`src/agent/context.ts` (`buildMessages`, `compact`), `src/agent/runner.ts`
 (turn-head trigger, `context_elided` reporting), `src/session/events.ts` +
 `src/server/web/reducer.js` + `src/tui/status-bar.ts` (presentation).
 The `decide` / `execute` / apply split, and every other decision in this ADR,
@@ -390,27 +391,35 @@ retargets it immediately the way `getContextBudget` does for the full-compaction
 threshold:
 
 ```
-max(8_000, round(hardContextLimit * 0.3))    // MICRO_COMPACT_KEEP_TOOL_FRACTION = 0.3
+max(8_000, round(hardContextLimit * 0.6))    // MICRO_COMPACT_KEEP_TOOL_FRACTION = 0.6
 ```
 
-- **200k window → 60k** (the old value was a flat 32k).
+- **200k window → 120k** (the old value was a flat 32k).
 - **No window to scale against** (unit tests, legacy callers) → the historical
   `MICRO_COMPACT_KEEP_TOOL_TOKENS = 32_000`.
 - **`MICRO_COMPACT_KEEP_TOOL_MIN_TOKENS = 8_000`** is a floor, not a target: a
-  32k or 64k window must not be budgeted a flat 32k of tool output, but nor
-  should the budget collapse to nothing — a couple of file reads have to fit for
-  the agent to work at all.
+  small window must not be budgeted a flat 32k of tool output, but nor should the
+  budget collapse to nothing — a couple of file reads have to fit for the agent
+  to work at all.
 
-**Why 30%.** The flat 32k was ≈16% of the default 200k window, and the reported
+**Why 60%.** The flat 32k was ≈16% of the default 200k window, and the reported
 session is what that looks like in practice: one implementation turn read ~100k
 tokens of files, so a 32k budget evicted two thirds of what the model had just
 fetched and it re-fetched the files (`transcript.js` 4×, `manager.ts` 5×). 30%
-leaves the system prompt, tool schemas, conversation text and summary the other
-~70%, and still lands inside the 10k–50k band the survey table above describes
-for comparable agents (60k of a 200k window, the same order as Claude Code's
-`maxTokens: 40_000` session-memory tier). The fraction is a *share of the
-window*, so a bigger model gets a proportionally bigger working set instead of
-the same flat number.
+was the first correction (60k of a 200k window) and cut repeat reads 24 → 16 in
+the replay (A7) — but the in-flight turn still lost its own oldest results
+whenever it alone out-produced the budget (41,737 tokens of in-turn loss at the
+last request). 60% is the settled value: it holds even a heavy implementation
+turn's working set, so the model stops re-reading what it just fetched. The
+replay makes it concrete — at 120k the running turn fits whole (in-turn loss
+**0**, repeat reads 24 → **1**). The remaining ~40% still holds the system
+prompt, tool schemas, conversation text, summary, and the summary model's own
+output (the last sized by `reserveTokens` and the provider's `max_tokens` in
+`summarizer.ts`). This sits **above** the 10k–50k band the survey table above
+describes for comparable agents — deliberately: those agents elide older turns,
+whereas this one makes keeping the *running* turn whole the priority. The
+fraction is a *share of the window*, so a bigger model gets a proportionally
+bigger working set instead of the same flat number.
 
 **Not settled by the value itself**: the floor interacts with
 `MICRO_COMPACT_FLOOR_TOOL_RESULTS` when the in-flight turn alone exceeds the
@@ -512,38 +521,60 @@ planner, over the same history. On the motivating session (50 requests; 117,152
 tool-result tokens in the history, **39.3%** of them older copies of a range
 already present):
 
-| metric | before (legacy) | after (32k flat) | **after (60k scaled, shipped)** |
+| metric | before (legacy) | after (32k flat) | **after (120k scaled, shipped)** |
 | --- | --- | --- | --- |
-| last request: real in-turn loss | 57,504 | 70,311 | **41,737** |
-| last request: real cross-turn loss | 35,538 | 35,538 | 35,538 |
-| last request: results elided | 57 | 58 | 48 |
-| cumulative in-turn loss | 818,488 | 971,204 | **398,600** |
-| cumulative cross-turn loss | 923,049 | 938,275 | **705,348** |
-| repeat reads | 24 | 24 | **16** |
-| stable prefix tokens (same-turn mean) | 51,811 | 53,058 | 46,462 |
-| prefix-changed requests / comparisons | 19 / 48 | 19 / 48 | **15 / 48** |
+| last request: real in-turn loss | 57,504 | 70,311 | **0** |
+| last request: real cross-turn loss | 35,538 | 35,538 | **15,773** |
+| last request: results elided | 57 | 58 | **13** |
+| cumulative in-turn loss | 818,488 | 971,204 | **0** |
+| cumulative cross-turn loss | 923,049 | 938,275 | **73,697** |
+| repeat reads | 24 | 24 | **1** |
+| stable prefix tokens (same-turn mean) | 51,811 | 53,058 | **50,063** |
+| prefix-changed requests / comparisons | 19 / 48 | 19 / 48 | **6 / 48** |
 
 How to read it:
 
-1. **The scaled budget is what fixes the reported problem** (in-turn loss at the
-   last request −27%, repeat reads 24 → 16, cumulative in-turn loss −51%),
-   together with turn freeze. At the same 32k the new planner is *worse* on
-   in-turn loss than the old one (70,311 vs 57,504): freezing the running turn
-   means the budget now has to bite inside it once the earlier turns are
-   exhausted, and when the in-flight turn alone exceeds the budget the walk runs
-   down to the 3-result floor (A3). That is the price of the priority guarantee,
-   and it is why the budget had to grow rather than the rules multiply.
+1. **The scaled budget is what fixes the reported problem.** At 120k the running
+   turn fits whole, so at the last request the planner drops *none* of the turn's
+   own results (in-turn loss 0, cumulative 0) and repeat reads fall 24 → 1 — the
+   model no longer re-fetches what it just read. At the same 32k the new planner
+   is *worse* on in-turn loss than the old one (70,311 vs 57,504): freezing the
+   running turn means the budget now has to bite inside it once the earlier turns
+   are exhausted, and when the in-flight turn alone exceeds the budget the walk
+   runs down to the 3-result floor (A3). That is the price of the priority
+   guarantee, and it is why the budget had to grow rather than the rules
+   multiply.
 2. **"Stable prefix" is a proxy, not a cache measurement.** No real-API cache
    benefit has been verified for this refactor (`cacheRead` was only used to
-   diagnose the old behavior, A1). The proxy got *worse* (51,811 → 46,462),
-   which is expected: a larger budget plus a moving boundary means more prefix
-   rewrites, not fewer. The open question is whether that is cheaper than
-   re-reading files; it depends on the provider's cache price versus its miss
+   diagnose the old behavior, A1). A larger budget elides fewer results, so the
+   prefix moves less: stable tokens are ~50k (vs ~46k at 60k, ~52k legacy) and
+   changed requests fall to 6 of 48. The open question is whether that is cheaper
+   than re-reading files; it depends on the provider's cache price versus its miss
    price, and it has not been measured.
-3. **The remaining gap is cross-turn**: the last request still drops 35,538
+3. **The remaining gap is cross-turn**: the last request still drops 15,773
    tokens of earlier turns, because one turn can out-produce the whole budget.
    Closing it is the deferred work in A4 or a source-side limit on per-turn
    reads — not more eviction cleverness in the planner.
+
+### A8 — The summary path uses the same budget as the request path (T6)
+
+`execute` — the summarizer's half of the pipeline — also micro-compacts the slice
+it is about to summarize, but it was left on the flat
+`MICRO_COMPACT_KEEP_TOOL_TOKENS = 32_000` default while `buildMessages` moved to
+the window-scaled budget. That is inconsistent in both directions: under a large
+window the summarized slice kept *fewer* tool tokens than a normal request (32k
+vs 120k at 200k), and under a small one it kept far more than the window could
+afford. One fraction now governs both paths, so they can never disagree about how
+much raw tool output the window affords.
+
+`execute` sees only the message slice, not the active model, so it stays
+window-agnostic: `ConversationContext.compact()` evaluates
+`microCompactToolTokenBudget(budget.hardContextLimit)` against the live window —
+the same number the request view gets — and passes it down as
+`execute({ keepToolTokens })`. `execute` defaults to the flat value only when the
+budget is omitted (tests, legacy callers), matching the request path's fallback.
+`/model switch` retargets both together, since both read the same per-request
+budget getter.
 
 ### Rejected: pruning to a low-water mark
 

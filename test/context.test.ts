@@ -1054,6 +1054,53 @@ test("summary request budget is bounded by reserve tokens when provider exposes 
 	assert.equal(summaryRequest?.maxTokens, 3200);
 });
 
+test("compact micro-compacts the summarized slice with the window-scaled budget", async () => {
+	// The summarized slice must share the request path's window-scaled budget
+	// rather than fall back to the flat 32k default, or the summarizer would be
+	// fed a view the window could not afford. Here `max(8_000, 0.6 × 10_000) =
+	// 8_000` bites the ~12k of tool output, while the flat default would keep
+	// every result verbatim.
+	const provider = new MockProvider(() => ({
+		assistantText: "summary",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	const context = new ConversationContext({
+		summaryEnabled: true,
+		getContextBudget: () => ({
+			hardContextLimit: 10_000,
+			reserveTokens: 1_000,
+			keepRecentTokens: 1_000,
+		}),
+		keepRecentMessagesFloor: 1,
+	});
+
+	const messages: Message[] = [{ role: "user", content: "investigate" }];
+	for (let i = 0; i < 4; i += 1) {
+		const callId = `r${i}`;
+		messages.push(
+			createAssistantMessage(null, [
+				{
+					id: callId,
+					name: "read",
+					arguments: { file_path: `f${i}.ts` },
+					rawArguments: JSON.stringify({ file_path: `f${i}.ts` }),
+				},
+			]),
+			createToolMessage(callId, "read", {
+				ok: true,
+				data: { rendered: "x".repeat(3_000 * 4 - 16) },
+			}),
+		);
+	}
+	context.hydrateState({ summary: null, recentMessages: messages });
+
+	await context.compactNow(provider, "You are a test agent.", []);
+
+	const prompt = provider.requests[0]?.messages.at(-1)?.content ?? "";
+	assert.match(prompt, /\[context-elided\]/);
+});
+
 test("compactNow with instructions injects a custom-instructions block into the summary prompt", async () => {
 	const provider = new MockProvider(() => ({
 		assistantText: "summary",
@@ -1370,7 +1417,18 @@ test("buildMessages micro-compacts older tool results into placeholders", () => 
 		name,
 		content: `STATUS: error\nERROR: ${error}\n${"x".repeat(toolChars)}`,
 	});
-	const context = new ConversationContext({ summaryEnabled: false });
+	const context = new ConversationContext({
+		summaryEnabled: false,
+		// A 100k window budgets 0.6 × 100_000 = 60_000 tokens for tool results,
+		// so the six ~16k-token results below (~96k total) have to shed exactly
+		// three — the oldest — to fit under the budget while the 3-result floor
+		// stops the walk.
+		getContextBudget: () => ({
+			hardContextLimit: 100_000,
+			reserveTokens: 1_000,
+			keepRecentTokens: 1_000,
+		}),
+	});
 	const recent: Message[] = [
 		{ role: "user", content: "start" },
 		createAssistantMessage(null, [
@@ -1576,10 +1634,10 @@ test("buildMessages freezes the running turn ahead of an earlier turn's results"
 	const logger = new MemoryLogger();
 	const context = new ConversationContext({
 		summaryEnabled: false,
-		// 0.3 x 28_334 rounds to an 8,500 token tool budget, and the fixture
+		// 0.6 x 14_167 rounds to an 8,500 token tool budget, and the fixture
 		// below is about 10,024 tokens, so exactly one drop is needed.
 		getContextBudget: () => ({
-			hardContextLimit: 28_334,
+			hardContextLimit: 14_167,
 			reserveTokens: 1_000,
 			keepRecentTokens: 1_000,
 		}),
