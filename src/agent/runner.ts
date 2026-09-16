@@ -463,11 +463,19 @@ export class AgentRunner extends EventEmitter {
 	}
 
 	/**
-	 * Auto trigger (ADR 0026, D1): once per step, before the first request,
-	 * the full request-shape estimate (persisted context + buffered turn
-	 * messages + system + tools) over the soft limit compacts. The actual
-	 * split decision stays in `decide`; if the overshoot lives only in the
-	 * buffered turn messages (which compaction never touches), `compact`
+	 * Auto trigger (ADR 0026, D1; amendment in T2): **only at the head of a
+	 * turn** — the estimate over the soft limit on the turn's first step
+	 * compacts before the first request of that turn. Inside a turn the window
+	 * is whatever this turn has accumulated, and a full compaction there would
+	 * replace the content the turn is actively working from with a summary of
+	 * it: strictly worse than the micro-compaction view (`context.buildMessages`),
+	 * which never touches the entry stream and only drops what does not fit.
+	 * A genuinely over-budget mid-turn request is still handled, by the
+	 * provider's `context_length_exceeded` → force-compact → retry once path in
+	 * `generateResponse`.
+	 *
+	 * The actual split decision stays in `decide`; if the overshoot lives only
+	 * in the buffered turn messages (which compaction never touches), `compact`
 	 * reports `summarized: false` and the request proceeds.
 	 */
 	private async maybeAutoCompactBeforeRequest(
@@ -475,6 +483,9 @@ export class AgentRunner extends EventEmitter {
 		step: number,
 		interruptController?: TurnInterruptController,
 	): Promise<void> {
+		if (step > 1) {
+			return;
+		}
 		const budget = this.context.getContextBudget();
 		const softLimit = Math.max(
 			0,
@@ -505,10 +516,10 @@ export class AgentRunner extends EventEmitter {
 
 	/**
 	 * One model request per step, with the retry policy folded in:
-	 * auto-compaction before the first attempt (ADR 0026, D1) and a single
-	 * shared retry for both failure modes — `context_length_exceeded`
-	 * (force-compact + retry, D3) and an empty response (retry, D5). Records
-	 * usage + progress once a response lands.
+	 * auto-compaction before the turn's first request only (ADR 0026, D1 as
+	 * amended by T2) and a single shared retry for both failure modes —
+	 * `context_length_exceeded` (force-compact + retry, D3) and an empty
+	 * response (retry, D5). Records usage + progress once a response lands.
 	 */
 	private async generateResponse(
 		turn: TurnState,
@@ -518,8 +529,8 @@ export class AgentRunner extends EventEmitter {
 		turn.emitProgress("model_request_started", { step });
 		interruptController?.enterModel();
 
-		// Auto trigger (ADR 0026, D1): once per step, before the first
-		// request (see `maybeAutoCompactBeforeRequest`).
+		// Auto trigger (ADR 0026, D1): a turn-head decision, before the first
+		// request of the turn (see `maybeAutoCompactBeforeRequest`).
 		interruptController?.throwIfInterrupted();
 		await this.maybeAutoCompactBeforeRequest(turn, step, interruptController);
 
