@@ -27,6 +27,8 @@ function createState() {
 		contextLimit: null,
 		/** Used context tokens (last usage / live estimate), or null when unknown. */
 		contextUsedTokens: null,
+		/** Cumulative session statistics for the info line, or null when unknown. */
+		sessionStats: null,
 		currentAssistant: null,
 		toolLines: new Map(),
 		/**

@@ -107,6 +107,7 @@ function reportError(
  * GET    /projects/:key/sessions/:id/model          list models + the active id
  * POST   /projects/:key/sessions/:id/model          switch the active model
  * GET    /projects/:key/sessions/:id/context        context-window usage (budget + used)
+ * GET    /projects/:key/sessions/:id/stats          session totals (turns/steps/tokens/timings)
  * POST   /projects/:key/sessions/:id/message        submit one turn
  * POST   /projects/:key/sessions/:id/interrupt      interrupt the in-flight turn
  * DELETE /projects/:key/sessions/:id                delete the session + its stored messages
@@ -314,6 +315,11 @@ async function route(
 		if (method === "GET" && sub === "context") {
 			manager.touch(session);
 			handleSessionContext(res, session);
+			return;
+		}
+		if (method === "GET" && sub === "stats") {
+			manager.touch(session);
+			handleSessionStats(res, session);
 			return;
 		}
 		methodNotAllowed(res);
@@ -607,6 +613,21 @@ function handleSessionContext(
 		return;
 	}
 	writeJson(res, 200, getContextUsage());
+}
+
+/**
+ * Report the live session's cumulative statistics for the composer's info
+ * line: durable turn/step/token totals from the entry stream, plus the
+ * wall-clock timings this process measured. Responds `501` when the runtime
+ * cannot report them (a lightweight/legacy runtime).
+ */
+function handleSessionStats(res: ServerResponse, session: SessionEntry): void {
+	const { getSessionStats } = session.runtime;
+	if (!getSessionStats) {
+		writeJson(res, 501, { error: "session_stats_unavailable" });
+		return;
+	}
+	writeJson(res, 200, getSessionStats());
 }
 
 /**

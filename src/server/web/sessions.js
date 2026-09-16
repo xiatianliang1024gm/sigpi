@@ -7,6 +7,7 @@ import { els, showError } from "./dom.js";
 import { connect, disconnect, updateSubmitButton } from "./events.js";
 import { loadProjects } from "./projects.js";
 import { state } from "./state.js";
+import { loadSessionStats, resetSessionStats } from "./stats.js";
 import { clearTranscript, loadHistory } from "./transcript.js";
 import { renderProjects } from "./tree.js";
 
@@ -112,6 +113,7 @@ export async function selectSession(projectKey, sessionId, { resume }) {
 	els.input.focus();
 	void loadModelState();
 	void loadContextUsage();
+	void loadSessionStats();
 }
 
 /** Delete one session and its stored messages; stop it first if it is live. */
@@ -165,6 +167,7 @@ export function resetModelState() {
 	renderModelSelect();
 	updateSubmitButton();
 	resetContextUsage();
+	resetSessionStats();
 }
 
 /** Rebuild the model dropdown's options from the current model list. */

@@ -54,6 +54,18 @@ body.busy .status::before {
 	color: var(--accent);
 }
 
+/* Session summary (turns/steps/timings/tokens), pushed to the right of topbar. */
+.session-info {
+	margin-left: auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
 .layout {
 	display: grid;
 	grid-template-columns: var(--sidebar-width) 7px minmax(0, 1fr);
@@ -714,10 +726,34 @@ button:disabled {
 
 .context-usage {
 	flex: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
 	font-variant-numeric: tabular-nums;
 	color: var(--muted);
 	font-size: 12px;
 	white-space: nowrap;
+	cursor: default;
+}
+
+.context-ring {
+	display: block;
+	flex: none;
+}
+
+.context-ring-track {
+	stroke: var(--border);
+	stroke-width: 3;
+}
+
+.context-ring-value {
+	stroke: var(--accent);
+	stroke-width: 3;
+	stroke-linecap: round;
+	/* Start the arc at 12 o'clock instead of 3 o'clock. */
+	transform: rotate(-90deg);
+	transform-origin: 50% 50%;
+	transition: stroke-dashoffset 0.2s ease;
 }
 
 .model-select {

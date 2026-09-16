@@ -163,6 +163,19 @@ class Harness {
 		usedTokens: number | null;
 		modelName: string;
 	} = { limit: 100000, usedTokens: 2500, modelName: "Model One" };
+	/** The session statistics snapshot served by `GET .../stats`. */
+	statsState: Record<string, unknown> = {
+		turns: 2,
+		steps: 108,
+		inputTokens: 11200000,
+		outputTokens: 62400,
+		cacheReadTokens: 990000,
+		cacheWriteTokens: 0,
+		llmMs: 354000,
+		toolMs: 314000,
+		firstTokenAvgMs: 1000,
+		tokensPerSecond: 255,
+	};
 
 	private constructor(dom: JSDOM) {
 		this.dom = dom;
@@ -315,6 +328,12 @@ class Harness {
 			/^\/projects\/[^/]+\/sessions\/[^/]+\/context$/.test(pathname)
 		) {
 			return jsonResponse(200, this.contextState);
+		}
+		if (
+			method === "GET" &&
+			/^\/projects\/[^/]+\/sessions\/[^/]+\/stats$/.test(pathname)
+		) {
+			return jsonResponse(200, this.statsState);
 		}
 		if (
 			method === "POST" &&
@@ -1294,13 +1313,22 @@ test("shows the session's models and switches from the dropdown", async () => {
 	);
 });
 
-test("shows the context-window usage next to the model picker", async () => {
+test("shows the context-window usage as a ring next to the model picker", async () => {
 	const harness = await openSession();
 	await flush();
 
 	const el = element<HTMLElement>(harness.document, "context-usage");
 	assert.equal(el.hidden, false);
-	assert.equal(el.textContent, "2.5K/100K (3%)");
+	// The ring conveys the ratio; the exact token figures live in the tooltip.
+	assert.ok(el.querySelector("svg.context-ring"), "renders the ring svg");
+	assert.equal(
+		el.querySelector(".context-ring-label")?.textContent,
+		"3%",
+		"the label shows the rounded percentage",
+	);
+	assert.match(el.title, /3%/);
+	assert.match(el.title, /2500/);
+	assert.match(el.title, /100000/);
 	assert.equal(
 		harness.callsTo("GET", "/projects/k1/sessions/s1/context").length,
 		1,
@@ -1321,7 +1349,7 @@ test("folds live context estimates and refreshes after the turn ends", async () 
 		estimatedContextTokens: 4200,
 	});
 	await flush();
-	assert.equal(el.textContent, "4.2K/100K (4%)");
+	assert.equal(el.querySelector(".context-ring-label")?.textContent, "4%");
 
 	// The terminal frame refetches the measured usage from the server.
 	source.message({ type: "turn_finished", step: 1, usage: null });
@@ -1348,7 +1376,37 @@ test("hides the context indicator before any usage is known", async () => {
 
 	const el = element<HTMLElement>(harness.document, "context-usage");
 	assert.equal(el.hidden, false);
-	assert.equal(el.textContent, "?/100K");
+	assert.equal(el.querySelector(".context-ring-label")?.textContent, "?");
+});
+
+test("renders the session info line in the topbar", async () => {
+	const harness = await openSession();
+	await flush();
+
+	const el = element<HTMLElement>(harness.document, "session-info");
+	assert.equal(el.hidden, false);
+	assert.equal(
+		el.textContent,
+		"2 轮 · 108 步| LLM 5分54秒 · 工具调用 5分14秒| 首 token 平均 1秒 · 255 tok/s| 缓存命中 8%| 输入 11.2M tok · 输出 62.4K tok",
+	);
+	assert.equal(
+		harness.callsTo("GET", "/projects/k1/sessions/s1/stats").length,
+		1,
+	);
+});
+
+test("refreshes the session info line after the turn ends", async () => {
+	const harness = await openSession();
+	await flush();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+
+	source.message({ type: "turn_finished", step: 1, usage: null });
+	await flush();
+	assert.equal(
+		harness.callsTo("GET", "/projects/k1/sessions/s1/stats").length,
+		2,
+	);
 });
 
 test("renders streamed reasoning in a collapsed details panel", async () => {

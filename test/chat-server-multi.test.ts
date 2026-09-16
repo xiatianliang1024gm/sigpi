@@ -754,6 +754,79 @@ test("GET .../context reports 501 when the runtime has no context usage", async 
 	});
 });
 
+test("GET .../stats reports the live session's statistics", async () => {
+	const manager = new SessionManager({
+		createRuntime: async () => {
+			const bus = new FakeProgressBus();
+			return {
+				runner: bus,
+				turn: new FakeTurnRunner(bus),
+				logger: noopLogger,
+				sessionId: "sess",
+				dispose() {},
+				getSessionStats: () => ({
+					turns: 2,
+					steps: 108,
+					inputTokens: 11_200_000,
+					outputTokens: 62_400,
+					cacheReadTokens: 990_000,
+					cacheWriteTokens: 0,
+					totalTokens: 12_252_400,
+					llmMs: 354_000,
+					toolMs: 314_000,
+					firstTokenAvgMs: 1000,
+					tokensPerSecond: 255,
+				}),
+			};
+		},
+		listStoredSessions: async () => [],
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess/stats`,
+		);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), {
+			turns: 2,
+			steps: 108,
+			inputTokens: 11_200_000,
+			outputTokens: 62_400,
+			cacheReadTokens: 990_000,
+			cacheWriteTokens: 0,
+			totalTokens: 12_252_400,
+			llmMs: 354_000,
+			toolMs: 314_000,
+			firstTokenAvgMs: 1000,
+			tokensPerSecond: 255,
+		});
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("GET .../stats reports 501 when the runtime has no statistics", async () => {
+	await withServer(async (baseUrl) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess-1/stats`,
+		);
+		assert.equal(response.status, 501);
+		assert.deepEqual(await response.json(), {
+			error: "session_stats_unavailable",
+		});
+	});
+});
+
 test("routes to unknown projects and sessions return 404", async () => {
 	await withServer(async (baseUrl) => {
 		let response = await fetch(`${baseUrl}/projects/missing/sessions`);

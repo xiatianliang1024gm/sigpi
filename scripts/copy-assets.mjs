@@ -23,6 +23,8 @@ const assets = [
 	"src/server/web/transcript.js",
 	"src/server/web/events.js",
 	"src/server/web/context.js",
+	"src/server/web/stats.js",
+	"src/server/web/session-format.js",
 	"src/server/web/tree.js",
 	"src/server/web/menus.js",
 	"src/server/web/projects.js",

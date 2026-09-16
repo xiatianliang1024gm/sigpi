@@ -16,6 +16,7 @@ function collectEls() {
 		submit: document.getElementById("submit"),
 		modelSelect: document.getElementById("model-select"),
 		contextUsage: document.getElementById("context-usage"),
+		sessionInfo: document.getElementById("session-info"),
 		error: document.getElementById("error"),
 	};
 }

@@ -5,6 +5,7 @@ import { loadContextUsage, setContextUsedTokens } from "./context.js";
 import { els, setConnection } from "./dom.js";
 import { loadSessions, resetModelState } from "./sessions.js";
 import { state } from "./state.js";
+import { loadSessionStats } from "./stats.js";
 import { clearTurnNodes, view } from "./transcript.js";
 import { applyTurnProgress, isTurnTerminalEvent } from "./reducer.js";
 
@@ -40,6 +41,8 @@ export function handleEvent(event) {
 		// The turn's measured usage is on the runtime now; refetch so the
 		// indicator shows ground truth rather than the in-flight estimate.
 		void loadContextUsage();
+		// The turn's stats are final now too; refresh the session info line.
+		void loadSessionStats();
 	}
 }
 

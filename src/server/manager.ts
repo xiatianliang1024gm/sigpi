@@ -22,6 +22,11 @@ import type {
 	SessionSummary,
 } from "../types.js";
 import { SessionEventLog } from "./event-log.js";
+import {
+	derivePersistedStats,
+	type SessionStats,
+	SessionStatsTracker,
+} from "./session-stats.js";
 
 /**
  * The slice of a runtime a {@link SessionManager} owns: the headless
@@ -48,6 +53,13 @@ export interface ManagedRuntime extends SessionControllerRuntime {
 	 * the HTTP layer degrades gracefully when it is absent.
 	 */
 	getContextUsage?(): RuntimeContextUsage;
+	/**
+	 * Session-level statistics (durable turn/step/token totals from the entry
+	 * stream, plus the live timings this process measured). Optional so
+	 * lightweight test runtimes need not implement it; the HTTP layer degrades
+	 * gracefully when it is absent.
+	 */
+	getSessionStats?(): SessionStats;
 	/**
 	 * Register a listener invoked after each successful flush of the runtime's
 	 * session store, i.e. whenever a message batch or turn boundary advances what
@@ -228,12 +240,18 @@ async function defaultCreateRuntime(args: {
 	// Track the active model locally: the runtime's `config.modelId` is only the
 	// startup default, and `/model`-style switches must be reflected here.
 	let currentModelId = runtime.config.modelId;
+	// Measure the wall-clock timings the entry stream does not retain. Subscribing
+	// to the runner keeps them accruing even while no browser is connected.
+	const statsTracker = new SessionStatsTracker(runtime.runner);
 	return {
 		runner: runtime.runner,
 		turn: runtime.turn,
 		logger: runtime.logger,
 		sessionId: runtime.session?.sessionId ?? "",
-		dispose: () => runtime.dispose(),
+		dispose: () => {
+			statsTracker.dispose();
+			runtime.dispose();
+		},
 		onPersisted: (listener) => runtime.turn.onPersisted(listener),
 		getModelState: () => ({
 			current: currentModelId,
@@ -269,6 +287,10 @@ async function defaultCreateRuntime(args: {
 					runtime.config.models[currentModelId]?.name ?? currentModelId,
 			};
 		},
+		getSessionStats: (): SessionStats => ({
+			...derivePersistedStats(runtime.context.exportState().entries ?? []),
+			...statsTracker.snapshot(),
+		}),
 	};
 }
 
