@@ -5,11 +5,26 @@
 </p>
 
 > **一个真正能读懂的、开源的编程智能体（coding agent）。**  
-> 用 TypeScript 编写，在终端里运行，兼容任何 OpenAI 兼容接口的 LLM。
+> 用 TypeScript 编写，运行在终端或浏览器里，兼容任何 OpenAI 兼容接口的 LLM。
 
 SigPi 类似于 Claude Code 或 Codex CLI——它能读取你的代码库、编辑文件、运行 shell 命令，并管理多轮会话。区别在于：**每一行代码都是为了让人读懂而写的**。没有框架魔法，没有庞大的抽象层。如果你曾经好奇编程智能体内部到底是怎么工作的，你可以直接打开源码，从 `cli.ts` 一路跟到 agent 主循环。
 
+同一套 agent 核心驱动**两个可互换的前端**：终端 UI 与本地 Web UI。它们共享同一个会话控制器和同一套 turn 进度事件流，因此无论你打开哪一个，对话行为都完全一致。详见下方的[多端能力](#两个前端一套-agent-核心)。
+
 SigPi 的设计灵感来自 [Pi](https://github.com/earendil-works/pi)，它的终端 UI 基于同一个项目的 `pi-tui` TUI 包。
+
+---
+
+## 两个前端，一套 agent 核心
+
+agent 主循环、工具调用与会话控制都与 UI 无关。两个前端建立在其之上：
+
+| 前端 | 命令 | 你得到什么 |
+|---|---|---|
+| 🖥️ **终端（TUI）** | `pnpm dev chat` | 基于 `pi-tui` 的交互式 REPL——带 git 分支的实时状态栏、可滚动转录、支持 IME 的输入 |
+| 🌐 **Web** | `pnpm dev serve` | 本地浏览器 UI（默认 `http://127.0.0.1:7878`）——可添加多个项目目录、并行运行多个会话、通过 SSE 流式输出 |
+
+因为两者消费的是**同一套 `TurnProgressEvent` 事件流**，Web 端直接复用了 TUI 的进度归约器（reducer）——同一轮对话在任一前端的呈现完全一致。Web 服务默认仅绑定本机回环地址，并使用原生文件夹选择框来添加项目。
 
 ---
 
@@ -23,6 +38,7 @@ SigPi 的设计灵感来自 [Pi](https://github.com/earendil-works/pi)，它的�
 | ⚡ **运行 shell 命令** | 带超时、后台任务和输出流式传输的 Bash |
 | 🧠 **多轮记忆** | 会话在重启后依然保留；长对话会自动摘要以适配上下文窗口 |
 | 🎯 **计划跟踪** | agent 跟踪多步骤任务，让你一眼看到进度 |
+| 🖥️🌐 **多端能力** | 同一套 agent 既可跑在终端（TUI），也可跑在浏览器（Web），行为完全一致 |
 
 ---
 
@@ -38,15 +54,21 @@ pnpm install
 pnpm dev init
 # 编辑 ~/.sigpi/config.toml，填入你的 API key 和模型
 
-# 3. 开始聊天
+# 3a. 在终端里聊天（TUI）
 pnpm dev chat
+
+# 3b. ……或者改用 Web UI
+pnpm dev serve        # 然后打开 http://127.0.0.1:7878
 ```
 
 就这样，你已经在和一个能看懂你代码的 agent 对话了。
 
 ```bash
-# 恢复之前的会话
+# 在终端里恢复之前的会话
 pnpm dev chat --session <id>
+
+# Web 选项：绑定地址、端口、空闲回收时间、并发上限
+pnpm dev serve --host 127.0.0.1 --port 7878 --idle-ttl 600000 --max-sessions 8
 ```
 
 ---
@@ -55,7 +77,7 @@ pnpm dev chat --session <id>
 
 **它是参考实现，不是黑盒。** 大多数编程智能体一层套一层框架，直到核心循环被彻底埋没。SigPi 把 agent 主循环、工具调用和上下文管理都摆在明面上。如果你自己在构建 agent，或者只是想弄明白它们是怎么运作的，这个项目就是为你准备的。
 
-- **依赖极少** —— 只有 OpenAI SDK、一个 TOML 解析器和一个终端 UI 库
+- **依赖极少** —— 只有 OpenAI SDK、一个 TOML 解析器和一个终端 UI 库；Web 前端是零构建、无额外工具的浏览器客户端
 - **约 60 个源文件** —— 小到一个下午就能读完
 - **阅读路径** —— 从 [AGENTS.md](./AGENTS.md) 开始了解关键入口，再看 [CONTEXT-MAP.md](./CONTEXT-MAP.md) 了解统一语言（ubiquitous language）
 
@@ -88,6 +110,7 @@ name     = "deepseek-v4-flash"
 
 - **会话**：`pnpm dev session new --title "fix login bug"` / `pnpm dev session list`
 - **聊天内命令**：`/compact`、`/resume`、`/model`
+- **Web 前端**：`pnpm dev serve [--host <host>] [--port <port>] [--idle-ttl <ms>] [--max-sessions <n>]` —— 多目录、多会话的浏览器 UI，通过 SSE 流式输出，并在重启后记住你的项目目录
 - **技能（Skills）**：把一个 `SKILL.md` 放进 `.sigpi/skills/`，agent 会自动加载。遵循 [Agent Skills 规范](https://agentskills.io/specification)。
 - **日志**：`~/.sigpi/logs/agent.log`，按天轮转
 
