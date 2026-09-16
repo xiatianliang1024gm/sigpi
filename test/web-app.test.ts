@@ -1319,7 +1319,8 @@ test("shows the context-window usage as a ring next to the model picker", async 
 
 	const el = element<HTMLElement>(harness.document, "context-usage");
 	assert.equal(el.hidden, false);
-	// The ring conveys the ratio; the exact token figures live in the tooltip.
+	// The ring conveys the ratio; the token figures live in the tooltip, in
+	// compact units so a large window stays legible.
 	assert.ok(el.querySelector("svg.context-ring"), "renders the ring svg");
 	assert.equal(
 		el.querySelector(".context-ring-label")?.textContent,
@@ -1327,8 +1328,8 @@ test("shows the context-window usage as a ring next to the model picker", async 
 		"the label shows the rounded percentage",
 	);
 	assert.match(el.title, /3%/);
-	assert.match(el.title, /2500/);
-	assert.match(el.title, /100000/);
+	assert.match(el.title, /2\.5K/);
+	assert.match(el.title, /100K/);
 	assert.equal(
 		harness.callsTo("GET", "/projects/k1/sessions/s1/context").length,
 		1,
@@ -1421,6 +1422,32 @@ test("refreshes the session info line after the turn ends", async () => {
 	assert.equal(
 		harness.callsTo("GET", "/projects/k1/sessions/s1/stats").length,
 		2,
+	);
+});
+
+test("refreshes the session info line at each step, before the turn ends", async () => {
+	const harness = await openSession();
+	await flush();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	const statsCalls = () =>
+		harness.callsTo("GET", "/projects/k1/sessions/s1/stats").length;
+	assert.equal(statsCalls(), 1, "opening the session fetches the stats once");
+
+	// The turn is still running — only a step boundary has passed — yet the line
+	// must already pick up the new totals rather than waiting for turn end.
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	source.message({ type: "step_started", step: 1 });
+	await flush();
+	assert.equal(statsCalls(), 2, "a step boundary refreshes mid-turn");
+
+	harness.statsState = { turns: 1, steps: 1 };
+	source.message({ type: "step_started", step: 2 });
+	await flush();
+	assert.equal(
+		element<HTMLElement>(harness.document, "session-info").textContent,
+		"1 轮 · 1 步",
+		"the refreshed totals render while the turn is still open",
 	);
 });
 

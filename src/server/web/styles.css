@@ -719,9 +719,13 @@ button:disabled {
 	gap: 8px;
 }
 
-/* Right cluster: the model picker plus the context-window usage readout. */
+/* Right cluster: the model picker plus the context-window usage readout. The cap
+   lives on the cluster (not the select) so it sizes to its content and sits
+   flush against the send button; capping the select instead let the cluster
+   reserve the select's unbounded width and leave a dead gap before the button. */
 .composer-meta {
-	flex: none;
+	flex: 0 1 auto;
+	max-width: 60%;
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -761,7 +765,9 @@ button:disabled {
 }
 
 .model-select {
-	max-width: 60%;
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 100%;
 	background: var(--panel);
 	border: 1px solid var(--border);
 	color: var(--text);

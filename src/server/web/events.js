@@ -5,7 +5,7 @@ import { loadContextUsage, setContextUsedTokens } from "./context.js";
 import { els, setConnection } from "./dom.js";
 import { loadSessions, resetModelState } from "./sessions.js";
 import { state } from "./state.js";
-import { loadSessionStats } from "./stats.js";
+import { loadSessionStats, refreshSessionStats } from "./stats.js";
 import { clearTurnNodes, view } from "./transcript.js";
 import { applyTurnProgress, isTurnTerminalEvent } from "./reducer.js";
 
@@ -25,6 +25,12 @@ export function handleEvent(event) {
 		state.toolLines.clear();
 		setTurnActive(true);
 		return;
+	}
+	if (event.type === "step_started") {
+		// A step boundary means the previous step's messages are now persisted, so
+		// the durable step count has advanced. Refresh the info line now instead
+		// of waiting for the whole turn to finish.
+		void refreshSessionStats();
 	}
 	state.currentAssistant = applyTurnProgress(
 		view,

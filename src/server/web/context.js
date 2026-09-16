@@ -93,7 +93,7 @@ export function renderContextUsage() {
 	const percent = Math.round(fraction * 100);
 	setRingFraction(value, fraction);
 	label.textContent = `${percent}%`;
-	const title = `上下文窗口 ${limit} tokens，已用 ${state.contextUsedTokens} (${percent}%)`;
+	const title = `上下文窗口 ${limitStr} tokens，已用 ${usedStr} (${percent}%)`;
 	el.title = title;
 	el.setAttribute("aria-label", title);
 	el.hidden = false;
