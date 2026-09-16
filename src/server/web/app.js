@@ -16,7 +16,12 @@ import { interrupt, saveDraft, submitComposer } from "./composer.js";
 import { els, initDom, showError } from "./dom.js";
 import { MINUTE_MS, projectErrorMessage } from "./format.js";
 import { closeMenu } from "./menus.js";
-import { loadProjects, pickAndAddProject } from "./projects.js";
+import {
+	collapseAllProjects,
+	expandAllProjects,
+	loadProjects,
+	pickAndAddProject,
+} from "./projects.js";
 import { switchModel } from "./sessions.js";
 import { initSidebarResizer, restoreSidebarWidth } from "./sidebar.js";
 import { resetState, state } from "./state.js";
@@ -35,6 +40,9 @@ document.addEventListener("click", () => closeMenu());
 els.addProject.addEventListener("click", () => {
 	pickAndAddProject().catch((error) => showError(projectErrorMessage(error)));
 });
+
+els.collapseProjects.addEventListener("click", () => collapseAllProjects());
+els.expandProjects.addEventListener("click", () => expandAllProjects());
 
 els.loadEarlier.addEventListener("click", () => {
 	void loadHistory({ older: true });

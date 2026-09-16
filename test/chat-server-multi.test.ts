@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -255,6 +255,33 @@ test("client assets are served and unknown paths still 404", async () => {
 		const missing = await fetch(`${baseUrl}/nope.js`);
 		assert.equal(missing.status, 404);
 		assert.deepEqual(await missing.json(), { error: "not_found" });
+	});
+});
+
+test("every bundled client module is allow-listed for serving", async () => {
+	// Regression guard: the browser client loads as ES modules, so a new file
+	// imported by `app.js` (or a transitive import) that is left out of the
+	// `static.ts` allow-list 404s and silently breaks the whole page. Enumerate
+	// the staged assets and require each one to be served.
+	const webDir = new URL("../src/server/web/", import.meta.url);
+	const files = (await readdir(webDir)).filter((name) =>
+		/\.(?:js|css|html)$/.test(name),
+	);
+	assert.ok(files.length > 0, "the web client ships at least one asset");
+
+	await withServer(async (baseUrl) => {
+		for (const file of files) {
+			const response = await fetch(`${baseUrl}/${file}`);
+			assert.equal(response.status, 200, `${file} should be served`);
+			const contentType = response.headers.get("content-type") ?? "";
+			if (file.endsWith(".js")) {
+				assert.match(contentType, /javascript/, `${file} content type`);
+			} else if (file.endsWith(".css")) {
+				assert.match(contentType, /text\/css/, `${file} content type`);
+			} else {
+				assert.match(contentType, /text\/html/, `${file} content type`);
+			}
+		}
 	});
 });
 

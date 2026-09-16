@@ -57,6 +57,18 @@ export function toggleProject(key) {
 	renderProjects();
 }
 
+/** Collapse every workspace's session list at once. */
+export function collapseAllProjects() {
+	for (const project of state.projects) state.collapsed.add(project.key);
+	renderProjects();
+}
+
+/** Expand every workspace's session list at once. */
+export function expandAllProjects() {
+	state.collapsed.clear();
+	renderProjects();
+}
+
 export async function selectProject(key) {
 	saveDraft();
 	state.projectKey = key;

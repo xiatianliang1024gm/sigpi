@@ -15,6 +15,8 @@
  * which keeps a partially streamed message readable.
  */
 
+import { buildCopyButton } from "./clipboard.js";
+
 /** Link targets we are willing to turn into a real `href` (never `javascript:`). */
 const SAFE_LINK = /^(?:https?:|mailto:|#|\/|\.{1,2}\/)/i;
 
@@ -198,14 +200,28 @@ export function renderMarkdown(text) {
 				index += 1;
 			}
 			index += 1; // consume the closing fence (or run off the end)
+			const codeText = codeLines.join("\n");
 			const pre = document.createElement("pre");
 			const code = document.createElement("code");
 			if (language) {
 				code.className = `language-${language.replace(/[^\w-]/g, "")}`;
 			}
-			code.textContent = codeLines.join("\n");
+			code.textContent = codeText;
 			pre.append(code);
-			fragment.append(pre);
+			// Wrap the block so a hover "copy" affordance can sit in its corner;
+			// the raw code text is copied verbatim, fences excluded.
+			const block = document.createElement("div");
+			block.className = "code-block";
+			block.append(
+				pre,
+				buildCopyButton({
+					className: "code-copy",
+					label: "复制",
+					title: "复制代码",
+					getText: () => codeText,
+				}),
+			);
+			fragment.append(block);
 			continue;
 		}
 

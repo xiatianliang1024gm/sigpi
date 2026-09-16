@@ -5,6 +5,8 @@ function collectEls() {
 		status: document.getElementById("status"),
 		projects: document.getElementById("projects"),
 		addProject: document.getElementById("add-project"),
+		collapseProjects: document.getElementById("collapse-projects"),
+		expandProjects: document.getElementById("expand-projects"),
 		layout: document.querySelector(".layout"),
 		resizer: document.getElementById("resizer"),
 		transcript: document.getElementById("transcript"),

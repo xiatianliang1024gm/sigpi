@@ -237,8 +237,13 @@ class Harness {
 			return jsonResponse(200, { path: this.pickPath });
 		}
 		if (method === "POST" && pathname === "/projects") {
-			const project = { key: "k1", cwd: String(body?.path ?? "") };
-			this.projects = [project];
+			const project = {
+				key: `k${this.projects.length + 1}`,
+				cwd: String(body?.path ?? ""),
+			};
+			// Append (rather than replace) so a test can stand up several
+			// workspaces; each still gets a distinct key.
+			this.projects = [...this.projects, project];
 			return jsonResponse(201, { key: project.key });
 		}
 		if (method === "PATCH" && /^\/projects\/[^/]+$/.test(pathname)) {
@@ -631,6 +636,117 @@ test("add-project ignores a cancelled picker", async () => {
 		harness.document.querySelectorAll("#projects .project").length,
 		0,
 	);
+});
+
+test("collapses and expands every workspace at once", async () => {
+	const harness = await Harness.create();
+	harness.pickPath = "/tmp/one";
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+	harness.pickPath = "/tmp/two";
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	assert.equal(
+		harness.document.querySelectorAll("#projects .project").length,
+		2,
+		"both workspaces render",
+	);
+	assert.equal(
+		harness.document.querySelectorAll("#projects .sessions").length,
+		2,
+		"both start expanded",
+	);
+
+	element<HTMLButtonElement>(harness.document, "collapse-projects").click();
+	await flush();
+	assert.equal(
+		harness.document.querySelectorAll("#projects .sessions").length,
+		0,
+		"collapse-all hides every session list",
+	);
+	const collapsed = Array.from(
+		harness.document.querySelectorAll("#projects .project-toggle"),
+	);
+	assert.ok(
+		collapsed.every((el) => el.getAttribute("aria-expanded") === "false"),
+		"every workspace reports itself collapsed",
+	);
+
+	element<HTMLButtonElement>(harness.document, "expand-projects").click();
+	await flush();
+	assert.equal(
+		harness.document.querySelectorAll("#projects .sessions").length,
+		2,
+		"expand-all restores every session list",
+	);
+});
+
+test("copies and saves an assistant message as markdown", async () => {
+	const harness = await openSession();
+	const originalNavigator = Object.getOwnPropertyDescriptor(
+		globalThis,
+		"navigator",
+	);
+	const copied: string[] = [];
+	Object.defineProperty(globalThis, "navigator", {
+		value: {
+			clipboard: {
+				writeText: async (text: string) => {
+					copied.push(text);
+				},
+			},
+		},
+		configurable: true,
+	});
+	const downloadNames: string[] = [];
+	const originalCreateObjectUrl = URL.createObjectURL;
+	URL.createObjectURL = () => "blob:test";
+	URL.revokeObjectURL = () => {};
+	const win = harness.document.defaultView as unknown as {
+		HTMLAnchorElement: { prototype: HTMLAnchorElement };
+	};
+	const anchorProto = win.HTMLAnchorElement.prototype;
+	const originalAnchorClick = anchorProto.click;
+	anchorProto.click = function (this: HTMLElement): void {
+		downloadNames.push((this as HTMLAnchorElement).download);
+	};
+
+	try {
+		const source = harness.sources.at(-1);
+		assert.ok(source, "an EventSource was opened");
+		source.message({ type: "ready", turnActive: false });
+		source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+		source.message({
+			type: "model_delta",
+			step: 1,
+			contentDelta: "# Title\n\n```js\nrun()\n```",
+		});
+		await flush();
+
+		const copy = harness.document.querySelector<HTMLButtonElement>(
+			".msg.assistant .copy-message",
+		);
+		assert.ok(copy, "the assistant message offers a copy button");
+		copy.click();
+		await flush();
+		assert.deepEqual(copied, ["# Title\n\n```js\nrun()\n```"]);
+
+		const save = harness.document.querySelector<HTMLButtonElement>(
+			".msg.assistant .save-message",
+		);
+		assert.ok(save, "the assistant message offers a save button");
+		save.click();
+		await flush();
+		assert.equal(downloadNames.length, 1, "saving triggers one download");
+		assert.match(downloadNames[0] ?? "", /^sigpi-\d{8}-\d{6}\.md$/);
+	} finally {
+		URL.createObjectURL = originalCreateObjectUrl;
+		anchorProto.click = originalAnchorClick;
+		if (originalNavigator) {
+			Object.defineProperty(globalThis, "navigator", originalNavigator);
+		}
+	}
 });
 
 test("folds a streamed turn into the DOM transcript", async () => {

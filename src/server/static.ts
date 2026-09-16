@@ -23,6 +23,7 @@ const ASSET_CONTENT_TYPES: Record<string, string> = {
 	"format.js": JS,
 	"api.js": JS,
 	"sidebar.js": JS,
+	"clipboard.js": JS,
 	"transcript.js": JS,
 	"events.js": JS,
 	"tree.js": JS,

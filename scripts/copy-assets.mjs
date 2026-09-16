@@ -19,6 +19,7 @@ const assets = [
 	"src/server/web/format.js",
 	"src/server/web/api.js",
 	"src/server/web/sidebar.js",
+	"src/server/web/clipboard.js",
 	"src/server/web/transcript.js",
 	"src/server/web/events.js",
 	"src/server/web/tree.js",

@@ -1,6 +1,7 @@
 // Transcript view and history paging.
 
 import { requestJson, sessionBase } from "./api.js";
+import { buildCopyButton, downloadText } from "./clipboard.js";
 import { els, showError } from "./dom.js";
 import { state } from "./state.js";
 import { renderMarkdown } from "./markdown.js";
@@ -8,16 +9,54 @@ import { renderMarkdown } from "./markdown.js";
 /** Entries fetched per history page when resuming a session. */
 export const HISTORY_PAGE_SIZE = 30;
 
+/** The filename offered when saving an assistant message as Markdown. */
+export function outputFilename(now = new Date()) {
+	const pad = (value) => String(value).padStart(2, "0");
+	const stamp =
+		`${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+		`-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+	return `sigpi-${stamp}.md`;
+}
+
+/**
+ * The copy / save toolbar under an assistant message. `getText` returns the raw
+ * Markdown to persist (fence markers and all), so the saved file is the source
+ * the model emitted rather than its rendered form.
+ */
+function buildMessageActions(getText) {
+	const actions = document.createElement("div");
+	actions.className = "msg-actions";
+	const copy = buildCopyButton({
+		className: "msg-action copy-message",
+		label: "复制",
+		title: "复制到剪贴板",
+		getText,
+	});
+	const save = document.createElement("button");
+	save.type = "button";
+	save.className = "msg-action save-message";
+	save.textContent = "保存为 md";
+	save.title = "保存为 Markdown 文件";
+	save.addEventListener("click", (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		downloadText(getText(), outputFilename());
+	});
+	actions.append(copy, save);
+	return actions;
+}
+
 // --- transcript view -------------------------------------------------------
 
 /**
  * Build the shared skeleton for an assistant message: a collapsible reasoning
- * panel above the rendered markdown content. The reasoning panel is a native
- * `<details>` so expand/collapse and keyboard access come for free; it starts
- * hidden and stays collapsed — a single summary line — until the model emits
- * reasoning.
+ * panel above the rendered markdown content, plus a copy/save toolbar. The
+ * reasoning panel is a native `<details>` so expand/collapse and keyboard access
+ * come for free; it starts hidden and stays collapsed — a single summary line —
+ * until the model emits reasoning. `getText` supplies the raw Markdown for the
+ * toolbar's copy and save actions.
  */
-export function createAssistantMessage() {
+export function createAssistantMessage(getText = () => "") {
 	const root = document.createElement("div");
 	root.className = "msg assistant";
 
@@ -39,7 +78,7 @@ export function createAssistantMessage() {
 	const content = document.createElement("div");
 	content.className = "content";
 
-	root.append(reasoning, content);
+	root.append(reasoning, content, buildMessageActions(getText));
 	return { root, reasoning, preview, body, content };
 }
 
@@ -74,12 +113,12 @@ export function clearTurnNodes() {
 /** The DOM-backed {@link TurnTranscriptView} the shared reducer writes to. */
 export const view = {
 	beginAssistantMessage() {
-		const { root, reasoning, preview, body, content } =
-			createAssistantMessage();
-		appendTurnNode(root);
 		let reasoningText = "";
 		let contentText = "";
 		let done = false;
+		const { root, reasoning, preview, body, content } =
+			createAssistantMessage(() => contentText);
+		appendTurnNode(root);
 		return {
 			appendReasoning(text) {
 				if (done) return;
@@ -170,13 +209,16 @@ export function historyItemToElement(item) {
 		return el;
 	}
 	if (item.kind === "assistant") {
-		const { root, reasoning, preview, body, content } = createAssistantMessage();
+		const text = item.text ?? "";
+		const { root, reasoning, preview, body, content } = createAssistantMessage(
+			() => text,
+		);
 		if (item.reasoning) {
 			reasoning.hidden = false;
 			body.textContent = item.reasoning;
 			preview.textContent = reasoningPreviewText(item.reasoning);
 		}
-		renderContent(content, item.text ?? "");
+		renderContent(content, text);
 		return root;
 	}
 	if (item.kind === "tool") {

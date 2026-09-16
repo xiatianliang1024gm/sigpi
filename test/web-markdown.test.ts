@@ -61,6 +61,35 @@ test("preserves fenced code blocks verbatim with their language", async () => {
 	assert.equal(pre.querySelector("code")?.className, "language-ts");
 });
 
+test("wraps fenced code in a block with a copy button", async () => {
+	const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+	const copied: string[] = [];
+	Object.defineProperty(globalThis, "navigator", {
+		value: {
+			clipboard: {
+				writeText: async (text: string) => {
+					copied.push(text);
+				},
+			},
+		},
+		configurable: true,
+	});
+	try {
+		const el = await render("```ts\nconst x = 1 < 2;\n```");
+		const block = el.querySelector(".code-block");
+		assert.ok(block, "a fenced block is wrapped in a .code-block");
+		const button = block.querySelector<HTMLButtonElement>(".code-copy");
+		assert.ok(button, "the code block carries a copy button");
+		button.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		assert.deepEqual(copied, ["const x = 1 < 2;"]);
+	} finally {
+		if (original) {
+			Object.defineProperty(globalThis, "navigator", original);
+		}
+	}
+});
+
 test("renders inline code without interpreting embedded HTML", async () => {
 	const el = await render("Use `<b>raw</b>` here");
 	assert.equal(el.querySelector("code")?.textContent, "<b>raw</b>");
