@@ -3,15 +3,24 @@ import test from "node:test";
 import {
 	decide,
 	execute,
+	MICRO_COMPACT_KEEP_TOOL_FRACTION,
 	MICRO_COMPACT_KEEP_TOOL_TOKENS,
 	microCompactMessages,
+	microCompactToolTokenBudget,
+	planMicroCompaction,
 } from "../src/agent/compaction.js";
 import {
 	createAssistantMessage,
 	createToolMessage,
 } from "../src/agent/messages.js";
+import { estimateMessageTokens } from "../src/context-window.js";
 import { ModelRequestError } from "../src/model/transport.js";
-import type { Message, ModelUsage, ToolSchema } from "../src/types.js";
+import type {
+	Message,
+	ModelUsage,
+	ToolMessage,
+	ToolSchema,
+} from "../src/types.js";
 import { MockProvider } from "./helpers.js";
 
 const SYSTEM_PROMPT = "You are a test agent.";
@@ -381,6 +390,221 @@ test("microCompactMessages reports elision instead of blanking results (session 
 		"expected the older batch to be elided at this size",
 	);
 	assert.ok(evicted.some((message) => message.toolCallId === "c1"));
+});
+
+// ---------------------------------------------------------------------------
+// Micro-compaction policy: turn freeze, working set, budget scaling, hysteresis
+// ---------------------------------------------------------------------------
+
+function toolCall(id: string, name: string, args: Record<string, unknown>) {
+	return { id, name, arguments: args, rawArguments: JSON.stringify(args) };
+}
+
+/** A tool result whose estimated size is approximately `tokens`. */
+function sizedToolResult(id: string, name: string, tokens: number): Message {
+	// createToolMessage truncates rendered output above 65,536 chars, so the
+	// fixtures stay inside that window (~16k tokens per result).
+	const chars = Math.max(1, tokens * 4 - 16);
+	return createToolMessage(id, name, {
+		ok: true,
+		data: { rendered: "x".repeat(chars) },
+	});
+}
+
+function toolIdsWhere(
+	messages: Message[],
+	indexes: ReadonlySet<number>,
+	want: boolean,
+): string[] {
+	const ids: string[] = [];
+	messages.forEach((message, index) => {
+		if (message.role === "tool" && indexes.has(index) === want) {
+			ids.push((message as ToolMessage).toolCallId);
+		}
+	});
+	return ids;
+}
+
+test("microCompactMessages freezes the running turn and elides older turns first", () => {
+	// Two turns, four results, a budget that holds two. The running turn's
+	// results are the protected ones, so the *earlier* turn gives way. Before
+	// this rule the budget was applied by recency alone, so a long turn evicted
+	// its own earlier reads and the model fetched the same files again
+	// (transcript.js 4x, manager.ts 5x in the session that motivated this).
+	const messages: Message[] = [
+		{ role: "user", content: "first question" },
+		createAssistantMessage(null, [
+			toolCall("old1", "read", { file_path: "old-a.ts" }),
+		]),
+		sizedToolResult("old1", "read", 400),
+		createAssistantMessage(null, [
+			toolCall("old2", "grep", { pattern: "old-b" }),
+		]),
+		sizedToolResult("old2", "grep", 400),
+		{ role: "user", content: "second question" },
+		createAssistantMessage(null, [
+			toolCall("new1", "read", { file_path: "new-a.ts" }),
+		]),
+		sizedToolResult("new1", "read", 400),
+		createAssistantMessage(null, [
+			toolCall("new2", "read", { file_path: "new-b.ts" }),
+		]),
+		sizedToolResult("new2", "read", 400),
+	];
+	const perResult = estimateMessageTokens(messages[2] as Message);
+	const options = {
+		keepToolTokens: perResult * 2 + 20,
+		floorToolResults: 1,
+		protectedToolCallIds: new Set(["new1", "new2"]),
+	};
+
+	const plan = planMicroCompaction(messages, options);
+	assert.deepEqual(toolIdsWhere(messages, plan.elidedIndexes, true), [
+		"old1",
+		"old2",
+	]);
+
+	// The rendered view keeps the frozen turn verbatim and never blanks a result.
+	const tools = microCompactMessages(messages, options).filter(
+		(message) => message.role === "tool",
+	) as ToolMessage[];
+	assert.match(tools[0]?.content ?? "", /^\[context-elided\]/);
+	assert.match(tools[1]?.content ?? "", /^\[context-elided\]/);
+	assert.match(tools[2]?.content ?? "", /^x+$/);
+	assert.match(tools[3]?.content ?? "", /^x+$/);
+});
+
+test("microCompactMessages treats a repeated read as ordinary content, not free redundancy", () => {
+	// The planner deliberately does NOT model file identity: two reads of the
+	// same (path, offset, limit) are two pieces of content under one token
+	// budget, and while the budget has room both stay. An earlier revision
+	// dropped the older copy as provably redundant ("its newer twin is in this
+	// request") and pinned a per-target working set; both were removed because
+	// deciding which copy the model still needs is the model's call — the
+	// planner only picks what to drop when there is no room.
+	const messages: Message[] = [
+		{ role: "user", content: "u" },
+		createAssistantMessage(null, [
+			toolCall("r1", "read", { file_path: "same.ts" }),
+		]),
+		sizedToolResult("r1", "read", 400),
+		createAssistantMessage(null, [
+			toolCall("r2", "read", { file_path: "same.ts" }),
+		]),
+		sizedToolResult("r2", "read", 400),
+	];
+
+	const plan = planMicroCompaction(messages, { keepToolTokens: 100_000 });
+	assert.deepEqual(toolIdsWhere(messages, plan.elidedIndexes, true), []);
+
+	const tools = microCompactMessages(messages, {
+		keepToolTokens: 100_000,
+	}).filter((message) => message.role === "tool") as ToolMessage[];
+	assert.match(tools[0]?.content ?? "", /^x+$/);
+	assert.match(tools[1]?.content ?? "", /^x+$/);
+});
+
+test("microCompactMessages prunes a repeated read by recency once the budget binds", () => {
+	// The only thing that drops the older copy is the budget itself, applied
+	// oldest-first — so the surviving copy is always the newest one, and the
+	// elision is monotone.
+	const messages: Message[] = [
+		{ role: "user", content: "u" },
+		createAssistantMessage(null, [
+			toolCall("r1", "read", { file_path: "same.ts" }),
+		]),
+		sizedToolResult("r1", "read", 400),
+		createAssistantMessage(null, [
+			toolCall("r2", "read", { file_path: "same.ts" }),
+		]),
+		sizedToolResult("r2", "read", 400),
+	];
+	const perResult = estimateMessageTokens(sizedToolResult("r0", "read", 400));
+	// One token short of holding both copies, so the budget has to choose.
+	const budget = perResult * 2 - 1;
+
+	const plan = planMicroCompaction(messages, {
+		keepToolTokens: budget,
+		floorToolResults: 1,
+	});
+	assert.deepEqual(toolIdsWhere(messages, plan.elidedIndexes, true), ["r1"]);
+	assert.match(
+		(
+			microCompactMessages(messages, {
+				keepToolTokens: budget,
+				floorToolResults: 1,
+			})[2] as ToolMessage
+		).content,
+		/^\[context-elided\]/,
+	);
+});
+
+test("microCompactToolTokenBudget scales with the window and never collapses", () => {
+	// The flat 32k was ~16% of a 200k window and could not hold one turn's
+	// reads; the budget now follows the active model.
+	assert.equal(microCompactToolTokenBudget(200_000), 60_000);
+	assert.equal(
+		microCompactToolTokenBudget(1_000_000),
+		1_000_000 * MICRO_COMPACT_KEEP_TOOL_FRACTION,
+	);
+	// A small window is budgeted in proportion, but never below the floor.
+	assert.equal(microCompactToolTokenBudget(16_384), 8_000);
+	// No window to scale against (tests, legacy callers): the historical value.
+	assert.equal(
+		microCompactToolTokenBudget(undefined),
+		MICRO_COMPACT_KEEP_TOOL_TOKENS,
+	);
+	assert.equal(microCompactToolTokenBudget(0), MICRO_COMPACT_KEEP_TOOL_TOKENS);
+	assert.equal(
+		microCompactToolTokenBudget(null),
+		MICRO_COMPACT_KEEP_TOOL_TOKENS,
+	);
+});
+
+test("microCompactMessages never restores an elided result as the conversation grows", () => {
+	// The cache-relevant invariant. The request prefix is the prompt-cache key,
+	// so a decision that flips back would change the prefix twice: once when the
+	// result is elided, once when it comes back. Elision is therefore
+	// monotone — the boundary may advance as new results arrive, but a result
+	// that was elided stays elided.
+	//
+	// (A low-water "prune in bursts" target was tried here and removed: the
+	// trigger is evaluated against the full candidate mass, which includes
+	// everything already elided, so it stays true on every later request and the
+	// boundary advances by one result per request no matter the target — the
+	// mark would only have dropped more context.)
+	const perResult = estimateMessageTokens(sizedToolResult("r0", "read", 400));
+	const budget = perResult * 10;
+	const build = (count: number): Message[] => {
+		const messages: Message[] = [{ role: "user", content: "u" }];
+		for (let index = 0; index < count; index += 1) {
+			messages.push(
+				createAssistantMessage(null, [
+					toolCall(`r${index}`, "read", { file_path: `file-${index}.ts` }),
+				]),
+				sizedToolResult(`r${index}`, "read", 400),
+			);
+		}
+		return messages;
+	};
+	const elidedIds = (count: number) => {
+		const messages = build(count);
+		const plan = planMicroCompaction(messages, { keepToolTokens: budget });
+		return new Set(toolIdsWhere(messages, plan.elidedIndexes, true));
+	};
+
+	assert.equal(elidedIds(10).size, 0, "inside the budget nothing is elided");
+
+	const elided: string[] = [];
+	for (const count of [11, 12, 13, 14, 15, 20, 30]) {
+		const now = elidedIds(count);
+		for (const id of elided) {
+			assert.ok(now.has(id), `${id} must stay elided at ${count} results`);
+		}
+		elided.length = 0;
+		elided.push(...now);
+		assert.ok(elided.length > 0, "the budget must bite once it is exceeded");
+	}
 });
 
 test("execute summarizes the pre-split window and returns the summary and usage", async () => {

@@ -539,7 +539,7 @@ test("closes a dangling tool call when a tool aborts mid-execution on interrupt"
 	}
 });
 
-test("compacts before a request when the estimate exceeds the soft limit", async () => {
+test("compacts at the turn head when the estimate exceeds the soft limit", async () => {
 	const provider = new MockProvider((request) => {
 		if (request.context?.purpose === "summary") {
 			return {
@@ -618,6 +618,299 @@ test("compacts before a request when the estimate exceeds the soft limit", async
 	// Requests: first turn, summary request, second turn.
 	assert.equal(provider.requests.length, 3);
 	assert.equal(provider.requests[1]?.context?.purpose, "summary");
+});
+
+test("does not auto-compact mid-turn when the in-turn estimate exceeds the soft limit", async () => {
+	// T2 — the token trigger is a *turn-head* decision. Mid-turn, the window is
+	// whatever this turn has accumulated, and summarizing it would replace the
+	// material the turn is working from with a summary of it — worse than the
+	// micro-compaction view, which never touches the entry stream and only drops
+	// what no longer fits. The estimate is far past the soft limit from step 2
+	// on, and the turn must run to completion without a single summary request.
+	const tools = new ToolRegistry([
+		{
+			name: "big_tool",
+			description: "returns a lot of text",
+			inputSchema: z.object({}).strict(),
+			parameters: {
+				type: "object",
+				properties: {},
+				additionalProperties: false,
+			},
+			execute: async () => ({ ok: "z".repeat(4_000) }),
+		},
+	]);
+	const provider = new MockProvider((_request, index) => {
+		if (index < 4) {
+			return {
+				assistantText: null,
+				toolCalls: [
+					{
+						id: `call_${index}`,
+						name: "big_tool",
+						arguments: {},
+						rawArguments: "{}",
+					},
+				],
+				finishReason: "tool_calls",
+			};
+		}
+		return {
+			assistantText: "finished",
+			toolCalls: [],
+			finishReason: "stop",
+		};
+	});
+	const context = new ConversationContext({
+		summaryEnabled: true,
+		// Soft limit 1_900 tokens; each 4_000-char tool result is ~1_004, so the
+		// window is over the limit from step 2 onwards. The micro-compaction
+		// budget floors at 8_000 tokens for a window this small, so nothing is
+		// elided either — the estimate really is over the limit.
+		getContextBudget: () => ({
+			hardContextLimit: 2_000,
+			reserveTokens: 100,
+			keepRecentTokens: 100,
+		}),
+		keepRecentMessagesFloor: 2,
+	});
+	const progressEvents: TurnProgressEvent[] = [];
+	const runner = new AgentRunner({
+		provider,
+		tools,
+		context,
+		systemPrompt: "You are a test agent.",
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
+	});
+
+	const result = await runner.runTurn("keep calling the tool");
+
+	assert.equal(result.outputText, "finished");
+	assert.equal(result.steps, 5);
+	// Every request is a turn request: no summary call, no summary in the
+	// context, and no compaction notice on the event stream.
+	assert.equal(provider.requests.length, 5);
+	assert.equal(
+		provider.requests.filter(
+			(request) => request.context?.purpose === "summary",
+		).length,
+		0,
+	);
+	assert.equal(context.getSummary(), null);
+	assert.equal(progressEventOf(progressEvents, "context_compacted"), undefined);
+
+	// …and the premise holds: the guard is what suppressed the compaction, not a
+	// window that happened to stay small. The live estimate reported on the last
+	// step is far past the 1_900-token soft limit.
+	const stepStarted = progressEvents.filter(
+		(event) => event.type === "step_started",
+	);
+	assert.equal(stepStarted.length, 5);
+	assert.ok(
+		(stepStarted.at(-1)?.estimatedContextTokens ?? 0) > 3_000,
+		`the last step's request estimate must be over the soft limit, got ${stepStarted.at(-1)?.estimatedContextTokens}`,
+	);
+});
+
+test("a mid-turn context_length_exceeded still force-compacts and retries once", async () => {
+	// The mid-turn safety valve. A turn that cannot be sent is not an option, so
+	// the provider's over-limit error still forces a full compaction and one
+	// retry, even though the estimate trigger no longer fires inside a turn.
+	const tools = new ToolRegistry([
+		{
+			name: "big_tool",
+			description: "returns a lot of text",
+			inputSchema: z.object({}).strict(),
+			parameters: {
+				type: "object",
+				properties: {},
+				additionalProperties: false,
+			},
+			execute: async () => ({ ok: "z".repeat(4_000) }),
+		},
+	]);
+	const provider = new MockProvider((request, index) => {
+		if (request.context?.purpose === "summary") {
+			return {
+				assistantText: "Condensed history.",
+				toolCalls: [],
+				finishReason: "stop",
+			};
+		}
+		if (index === 0) {
+			return {
+				assistantText: null,
+				toolCalls: [
+					{
+						id: "call_1",
+						name: "big_tool",
+						arguments: {},
+						rawArguments: "{}",
+					},
+				],
+				finishReason: "tool_calls",
+			};
+		}
+		if (index === 1) {
+			throw new ModelRequestError(
+				"Model request exceeded the context window",
+				"context_length_exceeded",
+			);
+		}
+		return {
+			assistantText: "recovered mid-turn",
+			toolCalls: [],
+			finishReason: "stop",
+		};
+	});
+	const context = new ConversationContext({
+		summaryEnabled: true,
+		getContextBudget: () => ({
+			hardContextLimit: 2_000,
+			reserveTokens: 100,
+			keepRecentTokens: 100,
+		}),
+		keepRecentMessagesFloor: 2,
+	});
+	const progressEvents: TurnProgressEvent[] = [];
+	const runner = new AgentRunner({
+		provider,
+		tools,
+		context,
+		systemPrompt: "You are a test agent.",
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
+	});
+
+	const result = await runner.runTurn("keep calling the tool");
+
+	assert.equal(result.outputText, "recovered mid-turn");
+	assert.equal(result.steps, 2);
+	assert.equal(context.getSummary(), "Condensed history.");
+	// Requests: step 1, the step-2 attempt that overflowed, the summary, the
+	// retried step-2 request.
+	assert.equal(provider.requests.length, 4);
+	assert.equal(provider.requests[2]?.context?.purpose, "summary");
+	const compactedEvent = progressEventOf(progressEvents, "context_compacted");
+	assert.ok(
+		compactedEvent,
+		"the forced compaction must emit context_compacted",
+	);
+	assert.equal(compactedEvent?.trigger, "force");
+});
+
+test("reports micro-compaction to the progress stream when tool results are elided", async () => {
+	// Micro-compaction only rewrites the *request*; the entry stream — and so
+	// the transcript — keeps every result. Without this event a user watching a
+	// complete transcript cannot tell that the model was served placeholders,
+	// which is precisely how the re-read loop that motivated the rewrite went
+	// unnoticed.
+	//
+	// The window is 20_000 tokens, so the scaled tool-result budget is at its
+	// 8_000-token floor; four ~3k-token results exceed it and the oldest one
+	// goes (the newest batch is pinned, and the 3-result floor stops the walk).
+	const tools = new ToolRegistry([
+		{
+			name: "big_tool",
+			description: "returns a lot of text",
+			inputSchema: z.object({}).strict(),
+			parameters: {
+				type: "object",
+				properties: {},
+				additionalProperties: false,
+			},
+			execute: async () => ({ ok: "z".repeat(12_000) }),
+		},
+	]);
+	const provider = new MockProvider((_request, index) => {
+		if (index < 4) {
+			return {
+				assistantText: null,
+				toolCalls: [
+					{
+						id: `call_${index}`,
+						name: "big_tool",
+						arguments: {},
+						rawArguments: "{}",
+					},
+				],
+				finishReason: "tool_calls",
+			};
+		}
+		return {
+			assistantText: "finished",
+			toolCalls: [],
+			finishReason: "stop",
+		};
+	});
+	const context = new ConversationContext({
+		summaryEnabled: true,
+		getContextBudget: () => ({
+			hardContextLimit: 20_000,
+			reserveTokens: 100,
+			keepRecentTokens: 1_000,
+		}),
+	});
+	const progressEvents: TurnProgressEvent[] = [];
+	const runner = new AgentRunner({
+		provider,
+		tools,
+		context,
+		systemPrompt: "You are a test agent.",
+	});
+	runner.onProgress((event) => {
+		progressEvents.push(event);
+	});
+
+	const result = await runner.runTurn("read everything twice");
+
+	assert.equal(result.outputText, "finished");
+	assert.equal(result.steps, 5);
+
+	const elided = progressEventOf(progressEvents, "context_elided");
+	assert.ok(elided, "eliding tool results must emit context_elided");
+	// First reported on the request that follows the fourth result — the first
+	// request whose window both exceeds the budget and holds more results than
+	// the floor protects.
+	assert.equal(elided?.step, 5);
+	assert.equal(elided?.elidedToolResults, 1);
+	assert.equal(elided?.keptToolResults, 3);
+	assert.equal(elided?.budget, 8_000);
+	assert.ok((elided?.elidedTokens ?? 0) > 0);
+	// One distinct decision, reported once.
+	assert.equal(
+		progressEvents.filter((event) => event.type === "context_elided").length,
+		1,
+	);
+
+	// The notice replaces the oldest result in the request the model receives,
+	// and never claims the output is gone.
+	const lastRequest = provider.requests.at(-1);
+	const toolMessages = (lastRequest?.messages ?? []).filter(
+		(message) => message.role === "tool",
+	);
+	assert.equal(toolMessages.length, 4);
+	assert.match(toolMessages[0]?.content ?? "", /^\[context-elided\]/);
+	assert.match(
+		toolMessages[0]?.content ?? "",
+		/dropped from the request to save room/,
+	);
+	for (const message of toolMessages.slice(1)) {
+		assert.match(message.content ?? "", /zzzz/);
+	}
+
+	// Elision is a view: the persisted context still holds every result in full.
+	const persisted = context
+		.getRecentMessages()
+		.filter((message) => message.role === "tool");
+	assert.equal(persisted.length, 4);
+	for (const message of persisted) {
+		assert.match(message.content, /zzzz/);
+		assert.doesNotMatch(message.content, /\[context-elided\]/);
+	}
 });
 
 test("retries a provider context_length_exceeded after a forced compaction", async () => {

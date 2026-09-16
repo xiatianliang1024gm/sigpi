@@ -31,6 +31,14 @@ const inTurnEvents: TurnProgressEvent[] = [
 		tokensAfter: 50,
 		trigger: "token",
 	},
+	{
+		type: "context_elided",
+		step: 1,
+		elidedToolResults: 2,
+		elidedTokens: 1_000,
+		keptToolResults: 3,
+		budget: 8_000,
+	},
 	{ type: "tool_calls_received", step: 1, count: 1 },
 	{
 		type: "tool_execution_started",
@@ -148,6 +156,17 @@ test("terminal states keep their explicit labels", () => {
 			trigger: "token",
 		}),
 		"compacted",
+	);
+	assert.equal(
+		getStatusEventLabel({
+			type: "context_elided",
+			step: 1,
+			elidedToolResults: 2,
+			elidedTokens: 1_000,
+			keptToolResults: 3,
+			budget: 8_000,
+		}),
+		"elided",
 	);
 	assert.equal(
 		getStatusEventLabel({

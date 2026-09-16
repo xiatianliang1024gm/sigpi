@@ -14,7 +14,7 @@ import {
 	createToolMessage,
 } from "../src/agent/messages.js";
 import type { ConversationContextState, Message } from "../src/types.js";
-import { MockProvider, stripMessageIds } from "./helpers.js";
+import { MemoryLogger, MockProvider, stripMessageIds } from "./helpers.js";
 
 test("compaction split never leaves a dangling tool message", async () => {
 	const context = new ConversationContext({
@@ -264,10 +264,9 @@ test("buildMessages includes summary but does not inject a separate active-goal 
 		recentMessages: [],
 	});
 
-	const messages = context.buildMessages(
-		"You are a test agent.",
-		"还记得你的目的吗",
-	);
+	const messages = context.buildMessages("You are a test agent.", {
+		pendingUserInput: "还记得你的目的吗",
+	});
 
 	// The summary text is still present in the summary system message
 	const summaryMessage = messages.find(
@@ -1355,9 +1354,9 @@ test("summarize strips a leading <analysis> block as fallback when no <summary> 
 test("buildMessages micro-compacts older tool results into placeholders", () => {
 	// Build tool messages directly with large content so the per-tool token
 	// estimate (chars/4) clears the oldest results even though createToolMessage
-	// normally truncates rendered tool output. Each result is deliberately more
-	// than a third of the micro-compact budget, so the tail budget alone keeps
-	// exactly three of the six and the floor is not what decides it.
+	// normally truncates rendered tool output. Every call targets a *different*
+	// file or pattern: six distinct targets are six working-set members, and it
+	// is the budget (not deduplication) that has to make room for them.
 	const toolChars = MICRO_COMPACT_KEEP_TOOL_TOKENS * 2;
 	const bigTool = (id: string, name: string) => ({
 		role: "tool" as const,
@@ -1375,27 +1374,57 @@ test("buildMessages micro-compacts older tool results into placeholders", () => 
 	const recent: Message[] = [
 		{ role: "user", content: "start" },
 		createAssistantMessage(null, [
-			{ id: "t1", name: "grep", arguments: {}, rawArguments: "{}" },
+			{
+				id: "t1",
+				name: "grep",
+				arguments: { pattern: "alpha" },
+				rawArguments: '{"pattern":"alpha"}',
+			},
 		]),
 		bigTool("t1", "grep"),
 		createAssistantMessage(null, [
-			{ id: "t2", name: "read", arguments: {}, rawArguments: "{}" },
+			{
+				id: "t2",
+				name: "read",
+				arguments: { file_path: "b.ts" },
+				rawArguments: '{"file_path":"b.ts"}',
+			},
 		]),
 		failedTool("t2", "read", "boom detail message"),
 		createAssistantMessage(null, [
-			{ id: "t3", name: "grep", arguments: {}, rawArguments: "{}" },
+			{
+				id: "t3",
+				name: "grep",
+				arguments: { pattern: "gamma" },
+				rawArguments: '{"pattern":"gamma"}',
+			},
 		]),
 		bigTool("t3", "grep"),
 		createAssistantMessage(null, [
-			{ id: "t4", name: "read", arguments: {}, rawArguments: "{}" },
+			{
+				id: "t4",
+				name: "read",
+				arguments: { file_path: "d.ts" },
+				rawArguments: '{"file_path":"d.ts"}',
+			},
 		]),
 		failedTool("t4", "read", "fatal error in read"),
 		createAssistantMessage(null, [
-			{ id: "t5", name: "grep", arguments: {}, rawArguments: "{}" },
+			{
+				id: "t5",
+				name: "grep",
+				arguments: { pattern: "epsilon" },
+				rawArguments: '{"pattern":"epsilon"}',
+			},
 		]),
 		bigTool("t5", "grep"),
 		createAssistantMessage(null, [
-			{ id: "t6", name: "read", arguments: {}, rawArguments: "{}" },
+			{
+				id: "t6",
+				name: "read",
+				arguments: { file_path: "f.ts" },
+				rawArguments: '{"file_path":"f.ts"}',
+			},
 		]),
 		bigTool("t6", "read"),
 		createAssistantMessage("final answer"),
@@ -1531,4 +1560,150 @@ test("budget getter follows the active model so /model switch changes the trigge
 	);
 	// Large model: the expanded budget means no further compaction fires.
 	assert.equal(largeResult.summarized, false);
+});
+
+test("buildMessages freezes the running turn ahead of an earlier turn's results", async () => {
+	// The turn id lives on the entry stream, not on `Message`, so this covers
+	// the join between the two as well as the priority rule: an earlier turn's
+	// result must not displace content the running turn just produced. Here the
+	// running turn's results come from `bash`, whose output is not a reproducible
+	// view of any target, so only the turn id can protect them.
+	const provider = new MockProvider(() => ({
+		assistantText: "ok",
+		toolCalls: [],
+		finishReason: "stop",
+	}));
+	const logger = new MemoryLogger();
+	const context = new ConversationContext({
+		summaryEnabled: false,
+		// 0.3 x 28_334 rounds to an 8,500 token tool budget, and the fixture
+		// below is about 10,024 tokens, so exactly one drop is needed.
+		getContextBudget: () => ({
+			hardContextLimit: 28_334,
+			reserveTokens: 1_000,
+			keepRecentTokens: 1_000,
+		}),
+		logger,
+	});
+	const systemPrompt = "You are a test agent.";
+
+	const bashCall = (id: string, command: string) =>
+		createAssistantMessage(null, [
+			{
+				id,
+				name: "bash",
+				arguments: { command },
+				rawArguments: JSON.stringify({ command }),
+			},
+		]);
+	const bashResult = (id: string) => ({
+		role: "tool" as const,
+		name: "bash",
+		toolCallId: id,
+		content: "y".repeat(8_000),
+		id: `msg-${id}`,
+	});
+
+	await context.appendMessages(
+		[
+			createAssistantMessage(null, [
+				{
+					id: "keep",
+					name: "read",
+					arguments: { file_path: "keep.ts" },
+					rawArguments: '{"file_path":"keep.ts"}',
+				},
+			]),
+			{
+				role: "tool",
+				name: "read",
+				toolCallId: "keep",
+				content: "x".repeat(16_000),
+				id: "msg-keep",
+			},
+		],
+		provider,
+		systemPrompt,
+		[],
+		{ turnId: "turn-old" },
+	);
+	await context.appendMessages(
+		[
+			bashCall("b1", "ls"),
+			bashResult("b1"),
+			bashCall("b2", "pwd"),
+			bashResult("b2"),
+			bashCall("b3", "git status"),
+			bashResult("b3"),
+		],
+		provider,
+		systemPrompt,
+		[],
+		{ turnId: "turn-new" },
+	);
+
+	const idsIn = (messages: Message[]) =>
+		messages
+			.filter((message) => message.role === "tool")
+			.map((message) => ({
+				id: (message as { toolCallId: string }).toolCallId,
+				elided: (message.content ?? "").startsWith(OMITTED_TOOL_RESULT_MARKER),
+			}));
+
+	// With the running turn identified, everything it produced is intact and
+	// the earlier turn's file is what gives way.
+	const frozen = idsIn(
+		context.buildMessages(systemPrompt, { currentTurnId: "turn-new" }),
+	);
+	assert.deepEqual(
+		frozen.map((entry) => entry.elided),
+		[true, false, false, false],
+		"the older turn is elided; the running turn is verbatim",
+	);
+
+	// The same window without a turn id falls back to pure recency: the oldest
+	// result in the window is the one that gives way, whichever turn produced it.
+	const byRecency = idsIn(context.buildMessages(systemPrompt));
+	assert.deepEqual(
+		byRecency.map((entry) => entry.elided),
+		[true, false, false, false],
+		"by recency the earlier turn's file is the oldest result",
+	);
+
+	// The decision is reported once per distinct decision — not once per
+	// request, and not at all before this change (micro-compaction used to
+	// leave no trace anywhere). Both windows above elide the *same* position
+	// (the earlier turn's file) by different routes, so the second call is not a
+	// new decision and adds nothing.
+	const reports = () =>
+		logger.entries.filter((entry) => entry.event === "micro_compact_applied");
+	assert.equal(reports().length, 1);
+	assert.equal(reports()[0]?.fields?.elidedToolResults, 1);
+	assert.equal(reports()[0]?.fields?.budget, 8_500);
+
+	// Rebuilding the same request changes nothing, so it logs nothing.
+	context.buildMessages(systemPrompt);
+	assert.equal(reports().length, 1);
+
+	// A decision that really changes — one more position elided as two more
+	// results push the window past the budget — is reported again.
+	await context.appendMessages(
+		[
+			bashCall("b4", "ls -la"),
+			bashResult("b4"),
+			bashCall("b5", "whoami"),
+			bashResult("b5"),
+		],
+		provider,
+		systemPrompt,
+		[],
+		{ turnId: "turn-newer" },
+	);
+	const grown = idsIn(context.buildMessages(systemPrompt));
+	assert.deepEqual(
+		grown.map((entry) => entry.elided),
+		[true, true, false, false, false, false],
+	);
+	assert.equal(reports().length, 2);
+	assert.equal(reports()[1]?.fields?.elidedToolResults, 2);
 });
