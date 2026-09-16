@@ -295,6 +295,61 @@ test("context_compacted renders a system message highlighting the window change"
 	]);
 });
 
+test("context_elided renders a system line that says what the request lost", () => {
+	// Micro-compaction is invisible in the transcript (the entry stream keeps
+	// every result), so this line is the only place a user can learn that the
+	// model received less than they can see — and it has to say that the output
+	// is not gone.
+	const view = new RecordingReplView();
+	let current: AssistantMessageView | null = null;
+	const toolLines = new Map<string, ToolLineHandle>();
+
+	current = applyTurnProgress(
+		view,
+		{ type: "model_delta", step: 3, contentDelta: "x" },
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "context_elided",
+			step: 3,
+			elidedToolResults: 7,
+			elidedTokens: 12_345,
+			keptToolResults: 4,
+			budget: 60_000,
+		},
+		current,
+		toolLines,
+	);
+
+	assert.deepEqual(view.ops, [
+		"answer",
+		"system:info:Context elided: 7 tool results (12.3K tokens) left out of this request to fit the 60K-token tool-result budget. Their full output stays in the session record.",
+	]);
+});
+
+test("context_elided uses the singular for one result", () => {
+	const view = new RecordingReplView();
+	applyTurnProgress(
+		view,
+		{
+			type: "context_elided",
+			step: 2,
+			elidedToolResults: 1,
+			elidedTokens: 0,
+			keptToolResults: 3,
+			budget: 0,
+		},
+		null,
+		new Map(),
+	);
+	assert.deepEqual(view.ops, [
+		"system:info:Context elided: 1 tool result left out of this request. Its full output stays in the session record.",
+	]);
+});
+
 test("context_compacted without a token snapshot uses the plain notice", () => {
 	const view = new RecordingReplView();
 	applyTurnProgress(

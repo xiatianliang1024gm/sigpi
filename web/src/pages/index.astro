@@ -22,6 +22,11 @@ const features = [
     body: 'Chat with session persistence. Resume any conversation later with --session. Multi-turn memory survives restarts.',
   },
   {
+    icon: '🖥️',
+    title: 'Two frontends, one core',
+    body: 'The same agent drives a terminal REPL and a local web UI. Add multiple project directories and run sessions in parallel in the browser — both consume one progress-event stream.',
+  },
+  {
     icon: '🔌',
     title: 'Works with any OpenAI-compatible LLM',
     body: 'OpenAI, Ollama, LiteLLM, or a local model — anything that speaks the chat completions API. Configure in a single TOML file.',
@@ -70,12 +75,12 @@ const principles = [
     <title>SigPi — a coding-agent harness you can read</title>
     <meta
       name="description"
-      content="SigPi is an open-source, plain-TypeScript agent harness: ~18k lines, 8 runtime dependencies, no framework to learn. Read it in an afternoon."
+      content="SigPi is an open-source, plain-TypeScript agent harness with both a terminal and a web frontend: ~18k lines, 8 runtime dependencies, no framework to learn. Read it in an afternoon."
     />
     <meta property="og:title" content="SigPi — a coding-agent harness you can read" />
     <meta
       property="og:description"
-      content="An open-source agent harness in plain TypeScript. Small enough to read, simple enough to hack."
+      content="An open-source agent harness in plain TypeScript, running in your terminal or your browser. Small enough to read, simple enough to hack."
     />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
@@ -92,7 +97,7 @@ const principles = [
           <div class="badge-row">
             <span class="badge"><span class="dot"></span> MIT · open source</span>
             <span class="badge">100% TypeScript</span>
-            <span class="badge">interactive REPL</span>
+            <span class="badge">terminal + web</span>
           </div>
 
           <h1>
@@ -101,8 +106,8 @@ const principles = [
           </h1>
           <p class="subtitle">
             <strong>SigPi</strong> is an open-source agent harness in plain TypeScript —
-            the REPL, the loop, the tools, the sessions. No black box.
-            ~18k lines and 8 dependencies, built to be read and hacked on.
+            the loop, the tools, the sessions, driven by a terminal UI or a local web UI.
+            No black box. ~18k lines and 8 dependencies, built to be read and hacked on.
           </p>
 
           <div class="cta-row">
@@ -211,10 +216,11 @@ const principles = [
               <div class="path-step">
                 <span class="n">05</span>
                 <div>
-                  <h3>Meet the REPL in <code>src/tui/</code></h3>
+                  <h3>Meet the frontends in <code>src/tui/</code> &amp; <code>src/server/</code></h3>
                   <p>
-                    The interactive shell, the status bar, the render loop. Finish
-                    here and you have seen the whole product.
+                    The terminal REPL and the local web UI — two thin layers over the
+                    same session controller and progress-event stream. Finish here and
+                    you have seen the whole product.
                   </p>
                 </div>
               </div>
@@ -232,16 +238,18 @@ const principles = [
                 <div><span class="d">src/</span></div>
                 <div>&nbsp;&nbsp;<span class="d hl">agent/</span> <span class="c">← the loop · 8 files</span></div>
                 <div>&nbsp;&nbsp;<span class="d hl">tools/</span> <span class="c">← grep · glob · read · edit · shell</span></div>
-                <div>&nbsp;&nbsp;<span class="d">tui/</span> <span class="c">← the REPL</span></div>
-                <div>&nbsp;&nbsp;<span class="d">session/</span> <span class="c">← persistence</span></div>
+                <div>&nbsp;&nbsp;<span class="d">tui/</span> <span class="c">← the terminal frontend</span></div>
+                <div>&nbsp;&nbsp;<span class="d">server/</span> <span class="c">← the web frontend</span></div>
+                <div>&nbsp;&nbsp;<span class="d">session/</span> <span class="c">← controller + persistence</span></div>
                 <div>&nbsp;&nbsp;<span class="d">skills/</span> <span class="c">← SKILL.md loading</span></div>
                 <div>&nbsp;&nbsp;<span class="d">model/</span> <span class="c">← LLM adapters</span></div>
                 <div>&nbsp;</div>
                 <div><span class="f">package.json</span> <span class="c-cyan">← 8 deps, no framework to learn</span></div>
               </div>
               <div class="tree-foot">
-                No build pipeline beyond tsc. The only UI dependency is pi-tui, a
-                terminal-UI library. Everything else is TypeScript you can read.
+                No build pipeline beyond tsc. The terminal frontend uses pi-tui; the web
+                frontend is a zero-build browser client served from src/server/web/.
+                Everything else is TypeScript you can read.
               </div>
             </div>
           </div>

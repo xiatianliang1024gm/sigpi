@@ -157,6 +157,25 @@ class Harness {
 			{ id: "m2", name: "Model Two" },
 		],
 	};
+	/** The context-window usage snapshot served by `GET .../context`. */
+	contextState: {
+		limit: number;
+		usedTokens: number | null;
+		modelName: string;
+	} = { limit: 100000, usedTokens: 2500, modelName: "Model One" };
+	/** The session statistics snapshot served by `GET .../stats`. */
+	statsState: Record<string, unknown> = {
+		turns: 2,
+		steps: 108,
+		inputTokens: 11200000,
+		outputTokens: 62400,
+		cacheReadTokens: 990000,
+		cacheWriteTokens: 0,
+		llmMs: 354000,
+		toolMs: 314000,
+		firstTokenAvgMs: 1000,
+		tokensPerSecond: 255,
+	};
 
 	private constructor(dom: JSDOM) {
 		this.dom = dom;
@@ -237,8 +256,13 @@ class Harness {
 			return jsonResponse(200, { path: this.pickPath });
 		}
 		if (method === "POST" && pathname === "/projects") {
-			const project = { key: "k1", cwd: String(body?.path ?? "") };
-			this.projects = [project];
+			const project = {
+				key: `k${this.projects.length + 1}`,
+				cwd: String(body?.path ?? ""),
+			};
+			// Append (rather than replace) so a test can stand up several
+			// workspaces; each still gets a distinct key.
+			this.projects = [...this.projects, project];
 			return jsonResponse(201, { key: project.key });
 		}
 		if (method === "PATCH" && /^\/projects\/[^/]+$/.test(pathname)) {
@@ -298,6 +322,18 @@ class Harness {
 				current: String(body?.modelId ?? this.modelState.current),
 			};
 			return jsonResponse(200, this.modelState);
+		}
+		if (
+			method === "GET" &&
+			/^\/projects\/[^/]+\/sessions\/[^/]+\/context$/.test(pathname)
+		) {
+			return jsonResponse(200, this.contextState);
+		}
+		if (
+			method === "GET" &&
+			/^\/projects\/[^/]+\/sessions\/[^/]+\/stats$/.test(pathname)
+		) {
+			return jsonResponse(200, this.statsState);
 		}
 		if (
 			method === "POST" &&
@@ -630,6 +666,176 @@ test("add-project ignores a cancelled picker", async () => {
 	assert.equal(
 		harness.document.querySelectorAll("#projects .project").length,
 		0,
+	);
+});
+
+test("collapses and expands every workspace at once", async () => {
+	const harness = await Harness.create();
+	harness.pickPath = "/tmp/one";
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+	harness.pickPath = "/tmp/two";
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	assert.equal(
+		harness.document.querySelectorAll("#projects .project").length,
+		2,
+		"both workspaces render",
+	);
+	assert.equal(
+		harness.document.querySelectorAll("#projects .sessions").length,
+		2,
+		"both start expanded",
+	);
+
+	element<HTMLButtonElement>(harness.document, "collapse-projects").click();
+	await flush();
+	assert.equal(
+		harness.document.querySelectorAll("#projects .sessions").length,
+		0,
+		"collapse-all hides every session list",
+	);
+	const collapsed = Array.from(
+		harness.document.querySelectorAll("#projects .project-toggle"),
+	);
+	assert.ok(
+		collapsed.every((el) => el.getAttribute("aria-expanded") === "false"),
+		"every workspace reports itself collapsed",
+	);
+
+	element<HTMLButtonElement>(harness.document, "expand-projects").click();
+	await flush();
+	assert.equal(
+		harness.document.querySelectorAll("#projects .sessions").length,
+		2,
+		"expand-all restores every session list",
+	);
+});
+
+test("copies and saves an assistant message as markdown", async () => {
+	const harness = await openSession();
+	const originalNavigator = Object.getOwnPropertyDescriptor(
+		globalThis,
+		"navigator",
+	);
+	const copied: string[] = [];
+	Object.defineProperty(globalThis, "navigator", {
+		value: {
+			clipboard: {
+				writeText: async (text: string) => {
+					copied.push(text);
+				},
+			},
+		},
+		configurable: true,
+	});
+	const downloadNames: string[] = [];
+	const originalCreateObjectUrl = URL.createObjectURL;
+	URL.createObjectURL = () => "blob:test";
+	URL.revokeObjectURL = () => {};
+	const win = harness.document.defaultView as unknown as {
+		HTMLAnchorElement: { prototype: HTMLAnchorElement };
+	};
+	const anchorProto = win.HTMLAnchorElement.prototype;
+	const originalAnchorClick = anchorProto.click;
+	anchorProto.click = function (this: HTMLElement): void {
+		downloadNames.push((this as HTMLAnchorElement).download);
+	};
+
+	try {
+		const source = harness.sources.at(-1);
+		assert.ok(source, "an EventSource was opened");
+		source.message({ type: "ready", turnActive: false });
+		source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+		source.message({
+			type: "model_delta",
+			step: 1,
+			contentDelta: "# Title\n\n```js\nrun()\n```",
+		});
+		await flush();
+
+		const copy = harness.document.querySelector<HTMLButtonElement>(
+			".msg.assistant .copy-message",
+		);
+		assert.ok(copy, "the assistant message offers a copy button");
+		copy.click();
+		await flush();
+		assert.deepEqual(copied, ["# Title\n\n```js\nrun()\n```"]);
+
+		const save = harness.document.querySelector<HTMLButtonElement>(
+			".msg.assistant .save-message",
+		);
+		assert.ok(save, "the assistant message offers a save button");
+		save.click();
+		await flush();
+		assert.equal(downloadNames.length, 1, "saving triggers one download");
+		assert.match(downloadNames[0] ?? "", /^sigpi-\d{8}-\d{6}\.md$/);
+	} finally {
+		URL.createObjectURL = originalCreateObjectUrl;
+		anchorProto.click = originalAnchorClick;
+		if (originalNavigator) {
+			Object.defineProperty(globalThis, "navigator", originalNavigator);
+		}
+	}
+});
+
+test("offers copy/save only on the turn's final assistant message", async () => {
+	const harness = await openSession();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	source.message({ type: "ready", turnActive: false });
+
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	// First step: the model narrates, finalizes, then calls a tool. That is an
+	// intermediate step, so it must not carry the copy/save toolbar.
+	source.message({
+		type: "model_delta",
+		step: 1,
+		contentDelta: "Let me look.",
+	});
+	source.message({ type: "model_request_finished", step: 1 });
+	source.message({
+		type: "tool_execution_started",
+		step: 1,
+		toolName: "read",
+		toolCallId: "t1",
+		message: "Reading a.ts",
+	});
+	source.message({
+		type: "tool_execution_finished",
+		step: 1,
+		toolName: "read",
+		toolCallId: "t1",
+		ok: true,
+	});
+	// Second step: the final answer, which keeps the toolbar.
+	source.message({ type: "model_delta", step: 2, contentDelta: "Done." });
+	source.message({ type: "turn_finished", step: 2 });
+	await flush();
+
+	const messages = harness.document.querySelectorAll(
+		"#transcript .msg.assistant",
+	);
+	assert.equal(messages.length, 2, "both assistant steps render");
+	assert.equal(
+		messages[0]?.querySelector(".copy-message"),
+		null,
+		"the intermediate step offers no copy button",
+	);
+	assert.equal(
+		messages[0]?.querySelector(".save-message"),
+		null,
+		"the intermediate step offers no save button",
+	);
+	assert.ok(
+		messages[1]?.querySelector(".copy-message"),
+		"the final step offers the copy button",
+	);
+	assert.equal(
+		harness.document.querySelectorAll("#transcript .copy-message").length,
+		1,
+		"exactly one copy button is present for the turn",
 	);
 });
 
@@ -1107,6 +1313,144 @@ test("shows the session's models and switches from the dropdown", async () => {
 	);
 });
 
+test("shows the context-window usage as a ring next to the model picker", async () => {
+	const harness = await openSession();
+	await flush();
+
+	const el = element<HTMLElement>(harness.document, "context-usage");
+	assert.equal(el.hidden, false);
+	// The ring conveys the ratio; the token figures live in the tooltip, in
+	// compact units so a large window stays legible.
+	assert.ok(el.querySelector("svg.context-ring"), "renders the ring svg");
+	assert.equal(
+		el.querySelector(".context-ring-label")?.textContent,
+		"3%",
+		"the label shows the rounded percentage",
+	);
+	assert.match(el.title, /3%/);
+	assert.match(el.title, /2\.5K/);
+	assert.match(el.title, /100K/);
+	assert.equal(
+		harness.callsTo("GET", "/projects/k1/sessions/s1/context").length,
+		1,
+	);
+});
+
+test("folds live context estimates and refreshes after the turn ends", async () => {
+	const harness = await openSession();
+	await flush();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	const el = element<HTMLElement>(harness.document, "context-usage");
+
+	// An in-flight frame's estimate updates the indicator immediately.
+	source.message({
+		type: "model_delta",
+		step: 1,
+		estimatedContextTokens: 4200,
+	});
+	await flush();
+	assert.equal(el.querySelector(".context-ring-label")?.textContent, "4%");
+
+	// The terminal frame refetches the measured usage from the server.
+	source.message({ type: "turn_finished", step: 1, usage: null });
+	await flush();
+	assert.equal(
+		harness.callsTo("GET", "/projects/k1/sessions/s1/context").length,
+		2,
+	);
+});
+
+test("hides the context indicator before any usage is known", async () => {
+	const harness = await Harness.create();
+	harness.contextState = {
+		limit: 100000,
+		usedTokens: null,
+		modelName: "Model One",
+	};
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
+	assert.ok(newSession, "the project menu offers a new session");
+	newSession.click();
+	await flush();
+
+	const el = element<HTMLElement>(harness.document, "context-usage");
+	assert.equal(el.hidden, false);
+	assert.equal(el.querySelector(".context-ring-label")?.textContent, "?");
+});
+
+test("renders the session info line in the composer", async () => {
+	const harness = await openSession();
+	await flush();
+
+	const el = element<HTMLElement>(harness.document, "session-info");
+	assert.equal(el.hidden, false);
+	assert.equal(
+		el.textContent,
+		"2 轮 · 108 步| LLM 5分54秒 · 工具调用 5分14秒| 首 token 平均 1秒 · 255 tok/s| 缓存命中 8%| 输入 11.2M tok · 输出 62.4K tok",
+	);
+	// The line leads the composer action row: text first (left), then the model
+	// picker / context ring and the send button (right), all on the same row.
+	const actions = harness.document.querySelector(".composer .composer-actions");
+	assert.ok(actions, "the composer action row renders");
+	const tokens = Array.from(actions.children).map((node) => {
+		if (node.id === "session-info") return "info";
+		if (node.classList.contains("composer-meta")) return "meta";
+		if (node.id === "submit") return "submit";
+		return "other";
+	});
+	assert.deepEqual(
+		tokens,
+		["info", "meta", "submit"],
+		"info text leads, model picker/context ring and send button follow",
+	);
+	assert.equal(
+		harness.callsTo("GET", "/projects/k1/sessions/s1/stats").length,
+		1,
+	);
+});
+
+test("refreshes the session info line after the turn ends", async () => {
+	const harness = await openSession();
+	await flush();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+
+	source.message({ type: "turn_finished", step: 1, usage: null });
+	await flush();
+	assert.equal(
+		harness.callsTo("GET", "/projects/k1/sessions/s1/stats").length,
+		2,
+	);
+});
+
+test("refreshes the session info line at each step, before the turn ends", async () => {
+	const harness = await openSession();
+	await flush();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	const statsCalls = () =>
+		harness.callsTo("GET", "/projects/k1/sessions/s1/stats").length;
+	assert.equal(statsCalls(), 1, "opening the session fetches the stats once");
+
+	// The turn is still running — only a step boundary has passed — yet the line
+	// must already pick up the new totals rather than waiting for turn end.
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	source.message({ type: "step_started", step: 1 });
+	await flush();
+	assert.equal(statsCalls(), 2, "a step boundary refreshes mid-turn");
+
+	harness.statsState = { turns: 1, steps: 1 };
+	source.message({ type: "step_started", step: 2 });
+	await flush();
+	assert.equal(
+		element<HTMLElement>(harness.document, "session-info").textContent,
+		"1 轮 · 1 步",
+		"the refreshed totals render while the turn is still open",
+	);
+});
+
 test("renders streamed reasoning in a collapsed details panel", async () => {
 	const harness = await openSession();
 	const source = harness.sources.at(-1);
@@ -1238,6 +1582,40 @@ test("renders resumed history reasoning and markdown content", async () => {
 	);
 	assert.equal(content?.querySelector("h2")?.textContent, "Answer");
 	assert.equal(content?.querySelectorAll("ul li").length, 2);
+});
+
+test("resumed history offers copy/save only on the final assistant step", async () => {
+	const harness = await Harness.create();
+	element<HTMLButtonElement>(harness.document, "add-project").click();
+	await flush();
+
+	harness.historyPages.set("", {
+		items: [
+			{ kind: "user", text: "hi" },
+			{ kind: "assistant", text: "On it.", reasoning: null, final: false },
+			{ kind: "tool", name: "read", label: "read" },
+			{ kind: "assistant", text: "Done.", reasoning: null, final: true },
+		],
+		cursor: null,
+	});
+	const newSession = await chooseProjectMenu(harness, ".menu-new-session");
+	assert.ok(newSession, "the project menu offers a new session");
+	newSession.click();
+	await flush();
+
+	const messages = harness.document.querySelectorAll(
+		"#transcript .msg.assistant",
+	);
+	assert.equal(messages.length, 2, "both persisted assistant steps render");
+	assert.equal(
+		messages[0]?.querySelector(".copy-message"),
+		null,
+		"the intermediate step offers no copy button",
+	);
+	assert.ok(
+		messages[1]?.querySelector(".copy-message"),
+		"the final step offers the copy button",
+	);
 });
 
 test("adjusts the workspace width with the divider", async () => {

@@ -17,7 +17,13 @@ import type {
 	SessionEntry,
 	ToolSchema,
 } from "../types.js";
-import { decide, execute, microCompactMessages } from "./compaction.js";
+import {
+	decide,
+	execute,
+	type MicroCompactionPlan,
+	microCompactMessages,
+	microCompactToolTokenBudget,
+} from "./compaction.js";
 import { CompactionFailedError } from "./compaction-error.js";
 
 // Re-export for backwards compatibility (tests and potential consumers)
@@ -64,6 +70,12 @@ export class ConversationContext {
 	 * at or before `messageIndex` from `recentMessages`.
 	 */
 	private lastUsage: { usage: ModelUsage; messageIndex: number } | null = null;
+	/**
+	 * Signature of the last micro-compaction decision written to the log. The
+	 * decision is recomputed on every request (it is a pure view), so an
+	 * unchanged decision is logged once instead of once per request.
+	 */
+	private lastMicroCompactSignature: string | null = null;
 
 	constructor(options: Partial<ContextManagerOptions> = {}) {
 		this.options = { ...DEFAULT_CONTEXT_OPTIONS, ...options };
@@ -94,7 +106,30 @@ export class ConversationContext {
 		this.lastUsage = { usage, messageIndex };
 	}
 
-	buildMessages(systemPrompt: string, pendingUserInput?: string): Message[] {
+	/**
+	 * Build the provider-bound message list for one request.
+	 *
+	 * Micro-compaction is applied here — as a view, never to the entry stream —
+	 * with the two request-scoped inputs that make it cache-friendly and
+	 * turn-safe: the turn that is still running (whose tool results are frozen,
+	 * see `planMicroCompaction`) and the active model's window (which sizes the
+	 * tool-result budget, so `/model switch` retargets it immediately).
+	 *
+	 * `onMicroCompaction` observes the decision for this request (the runner
+	 * turns it into a progress event so the user can see what was elided); the
+	 * plan is recomputed per request either way, so the callback never
+	 * influences the result.
+	 */
+	buildMessages(
+		systemPrompt: string,
+		options: {
+			pendingUserInput?: string;
+			/** Turn whose tool results must stay verbatim in this request. */
+			currentTurnId?: string | null;
+			/** Observes this request's micro-compaction decision. */
+			onMicroCompaction?: (plan: MicroCompactionPlan) => void;
+		} = {},
+	): Message[] {
 		const messages: Message[] = [createSystemMessage(systemPrompt)];
 
 		if (this.summary) {
@@ -105,10 +140,23 @@ export class ConversationContext {
 			);
 		}
 
-		messages.push(...microCompactMessages(this.recentMessages));
+		messages.push(
+			...microCompactMessages(this.recentMessages, {
+				keepToolTokens: microCompactToolTokenBudget(
+					this.getContextBudget().hardContextLimit,
+				),
+				protectedToolCallIds: this.protectedToolCallIds(
+					options.currentTurnId ?? null,
+				),
+				onPlan: (plan) => {
+					this.reportMicroCompaction(plan);
+					options.onMicroCompaction?.(plan);
+				},
+			}),
+		);
 
-		if (pendingUserInput) {
-			messages.push(createUserMessage(pendingUserInput));
+		if (options.pendingUserInput) {
+			messages.push(createUserMessage(options.pendingUserInput));
 		}
 
 		return messages;
@@ -314,6 +362,77 @@ export class ConversationContext {
 		this.recentMessages = [];
 		this.entries = [];
 		this.lastUsage = null;
+		this.lastMicroCompactSignature = null;
+	}
+
+	/**
+	 * Tool-call ids whose results were produced by `turnId` — the results the
+	 * running turn must not lose. The turn id lives on the entry stream, not on
+	 * `Message`, so this joins the two by identifier: `recentMessages` holds the
+	 * very message objects the entries wrap, and `ensureMessageIds` keeps the
+	 * entry id and the message id identical.
+	 *
+	 * Returns undefined when the turn is unknown (resume paths, tests) or has no
+	 * tool results yet, leaving the planner's older rules in sole charge.
+	 */
+	private protectedToolCallIds(turnId: string | null): Set<string> | undefined {
+		if (!turnId) {
+			return undefined;
+		}
+
+		const entryIds = new Set<string>();
+		for (const entry of this.entries) {
+			if (entry.kind === "message" && entry.turnId === turnId) {
+				entryIds.add(entry.id);
+			}
+		}
+		if (entryIds.size === 0) {
+			return undefined;
+		}
+
+		const toolCallIds = new Set<string>();
+		for (const message of this.recentMessages) {
+			if (message.role !== "tool" || !message.id) {
+				continue;
+			}
+			if (entryIds.has(message.id)) {
+				toolCallIds.add(message.toolCallId);
+			}
+		}
+		return toolCallIds.size > 0 ? toolCallIds : undefined;
+	}
+
+	/**
+	 * Report micro-compaction to the log, but only when the decision changes.
+	 *
+	 * A change is the interesting event: it means the *request prefix* moved,
+	 * which is what invalidates the provider's prompt cache and, before the
+	 * turn-freeze rule landed, silently starved the model of file contents it
+	 * had already fetched (the model then re-read them, which is how the
+	 * problem was noticed at all). Before this, micro-compaction left no trace
+	 * anywhere — no log line, no progress event.
+	 *
+	 * The signature is the set of elided positions, not their count: two
+	 * decisions that drop one result each are different decisions when they drop
+	 * *different* results, and a count cannot tell them apart. Positions are
+	 * stable between requests for the same window, because the window only ever
+	 * grows at its tail.
+	 */
+	private reportMicroCompaction(plan: MicroCompactionPlan): void {
+		const signature = [...plan.elidedIndexes].sort((a, b) => a - b).join(",");
+		if (signature === this.lastMicroCompactSignature) {
+			return;
+		}
+		this.lastMicroCompactSignature = signature;
+		this.logger?.info("micro_compact_applied", {
+			runId: this.runId,
+			sessionId: this.sessionId,
+			budget: plan.budget,
+			keptToolResults: plan.keptToolResults,
+			keptTokens: plan.keptTokens,
+			elidedToolResults: plan.elidedIndexes.size,
+			elidedTokens: plan.elidedTokens,
+		});
 	}
 
 	private recordCompaction(args: {
@@ -479,6 +598,11 @@ export class ConversationContext {
 					instructions: options?.instructions,
 					requestContext,
 					reserveTokens: budget.reserveTokens,
+					// Same window-scaled budget the request view uses, so the
+					// summarized slice is never micro-compacted more or less
+					// aggressively than the window it came from. `/model switch`
+					// retargets both together.
+					keepToolTokens: microCompactToolTokenBudget(budget.hardContextLimit),
 					abortSignal: compactAbortController.signal,
 				});
 			} catch (error) {

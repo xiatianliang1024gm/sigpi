@@ -22,10 +22,19 @@ export const MAX_HISTORY_LIMIT = 200;
  * *output* can be arbitrarily large and is not part of the readable
  * transcript); `compaction` is a context-window notice, matching the live
  * `context_compacted` line.
+ *
+ * `assistant.final` marks the turn's last LLM output (the step that answered
+ * rather than one that went on to call a tool). Only that step earns the
+ * client's copy/save affordance; intermediate steps render as plain content.
  */
 export type HistoryItem =
 	| { kind: "user"; text: string }
-	| { kind: "assistant"; text: string; reasoning: string | null }
+	| {
+			kind: "assistant";
+			text: string;
+			reasoning: string | null;
+			final: boolean;
+	  }
 	| { kind: "tool"; name: string; label: string }
 	| { kind: "compaction"; text: string };
 
@@ -121,7 +130,15 @@ function toHistoryItem(
 		if (!text && !reasoning) {
 			return null;
 		}
-		return { kind: "assistant", text, reasoning };
+		// A step that requested tools is intermediate: the turn's final LLM
+		// output is the text-only answer that follows it, so only that one is
+		// `final` and gets the copy/save affordance.
+		return {
+			kind: "assistant",
+			text,
+			reasoning,
+			final: !message.toolCalls?.length,
+		};
 	}
 	if (message.role === "tool") {
 		const call = toolCallsById.get(message.toolCallId);

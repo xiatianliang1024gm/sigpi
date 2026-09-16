@@ -231,6 +231,8 @@ export function getStatusEventLabel(
 			return "checkpoint";
 		case "context_compacted":
 			return "compacted";
+		case "context_elided":
+			return "elided";
 		case "turn_finished":
 			return "done";
 		case "turn_interrupted":

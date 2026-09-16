@@ -16,14 +16,34 @@
 				<section class="panel">
 					<div class="panel-head">
 						<h2>工作区</h2>
-						<button
-							id="add-project"
-							type="button"
-							class="icon-button"
-							title="Add a working directory"
-						>
-							＋
-						</button>
+						<div class="panel-actions">
+							<button
+								id="collapse-projects"
+								type="button"
+								class="icon-button"
+								title="全部折叠"
+								aria-label="全部折叠"
+							>
+								折叠
+							</button>
+							<button
+								id="expand-projects"
+								type="button"
+								class="icon-button"
+								title="全部展开"
+								aria-label="全部展开"
+							>
+								展开
+							</button>
+							<button
+								id="add-project"
+								type="button"
+								class="icon-button"
+								title="Add a working directory"
+							>
+								＋
+							</button>
+						</div>
 					</div>
 					<div id="projects" class="tree"></div>
 				</section>
@@ -50,13 +70,26 @@
 						disabled
 					></textarea>
 					<div class="composer-actions">
-						<select
-							id="model-select"
-							class="model-select"
-							title="选择模型"
-							aria-label="选择模型"
-							disabled
-						></select>
+						<span
+							id="session-info"
+							class="session-info"
+							hidden
+						></span>
+						<div class="composer-meta">
+							<select
+								id="model-select"
+								class="model-select"
+								title="选择模型"
+								aria-label="选择模型"
+								disabled
+							></select>
+							<span
+								id="context-usage"
+								class="context-usage"
+								title="上下文窗口使用情况"
+								hidden
+							></span>
+						</div>
 						<button
 							id="submit"
 							class="composer-submit"

@@ -1,8 +1,13 @@
 import { rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { getDefaultSessionsRoot } from "../config.js";
+import { estimateContextTokens } from "../context-window.js";
 import { createModelProvider } from "../model/provider.js";
-import { createAgentRuntime, createRuntimeSessionStore } from "../runtime.js";
+import {
+	type AgentRuntime,
+	createAgentRuntime,
+	createRuntimeSessionStore,
+} from "../runtime.js";
 import {
 	SessionController,
 	type SessionControllerRuntime,
@@ -17,6 +22,11 @@ import type {
 	SessionSummary,
 } from "../types.js";
 import { SessionEventLog } from "./event-log.js";
+import {
+	derivePersistedStats,
+	type SessionStats,
+	SessionStatsTracker,
+} from "./session-stats.js";
 
 /**
  * The slice of a runtime a {@link SessionManager} owns: the headless
@@ -37,6 +47,19 @@ export interface ManagedRuntime extends SessionControllerRuntime {
 	getModelState?(): RuntimeModelState;
 	/** Switch the active model; returns `false` for an unknown model id. */
 	setModel?(modelId: string): boolean;
+	/**
+	 * Live context-window usage (usable budget + used tokens) plus the active
+	 * model name. Optional so lightweight test runtimes need not implement it;
+	 * the HTTP layer degrades gracefully when it is absent.
+	 */
+	getContextUsage?(): RuntimeContextUsage;
+	/**
+	 * Session-level statistics (durable turn/step/token totals from the entry
+	 * stream, plus the live timings this process measured). Optional so
+	 * lightweight test runtimes need not implement it; the HTTP layer degrades
+	 * gracefully when it is absent.
+	 */
+	getSessionStats?(): SessionStats;
 	/**
 	 * Register a listener invoked after each successful flush of the runtime's
 	 * session store, i.e. whenever a message batch or turn boundary advances what
@@ -61,6 +84,19 @@ export interface RuntimeModelState {
 	current: string;
 	/** Every model the runtime can switch to. */
 	models: ModelOption[];
+}
+
+/**
+ * A runtime's live context-window usage, mirroring the TUI status bar's
+ * `{used}/{limit} ({pct}%)` segment.
+ */
+export interface RuntimeContextUsage {
+	/** Usable context budget: hard context limit minus reserved tokens. */
+	limit: number;
+	/** Used tokens (last provider usage, else an idle estimate), or `null` when empty. */
+	usedTokens: number | null;
+	/** Display name of the active model. */
+	modelName: string;
 }
 
 /** A directory the server has been told to host sessions for. */
@@ -204,12 +240,18 @@ async function defaultCreateRuntime(args: {
 	// Track the active model locally: the runtime's `config.modelId` is only the
 	// startup default, and `/model`-style switches must be reflected here.
 	let currentModelId = runtime.config.modelId;
+	// Measure the wall-clock timings the entry stream does not retain. Subscribing
+	// to the runner keeps them accruing even while no browser is connected.
+	const statsTracker = new SessionStatsTracker(runtime.runner);
 	return {
 		runner: runtime.runner,
 		turn: runtime.turn,
 		logger: runtime.logger,
 		sessionId: runtime.session?.sessionId ?? "",
-		dispose: () => runtime.dispose(),
+		dispose: () => {
+			statsTracker.dispose();
+			runtime.dispose();
+		},
 		onPersisted: (listener) => runtime.turn.onPersisted(listener),
 		getModelState: () => ({
 			current: currentModelId,
@@ -228,7 +270,47 @@ async function defaultCreateRuntime(args: {
 			currentModelId = modelId;
 			return true;
 		},
+		getContextUsage: () => {
+			const context = runtime.context;
+			// Prefer the provider-reported ground-truth count from the last
+			// response; fall back to the same idle estimate the TUI uses when the
+			// provider never reported usage (or compaction dropped the measured
+			// message). A fresh conversation stays `null` → an honest `?`.
+			const usage = context.getLastUsage()?.usage ?? null;
+			const budget = context.getContextBudget();
+			return {
+				limit: Math.max(1, budget.hardContextLimit - budget.reserveTokens),
+				usedTokens: usage
+					? usage.totalTokens
+					: estimateRuntimeContextTokens(runtime),
+				modelName:
+					runtime.config.models[currentModelId]?.name ?? currentModelId,
+			};
+		},
+		getSessionStats: (): SessionStats => ({
+			...derivePersistedStats(runtime.context.exportState().entries ?? []),
+			...statsTracker.snapshot(),
+		}),
 	};
+}
+
+/**
+ * Estimate the runtime's current context size from its live state, mirroring the
+ * TUI's idle estimate (`estimateIdleContextTokens` in `src/chat-repl.ts`).
+ * Returns `null` for a conversation with no content yet, so the UI keeps an
+ * honest `?` instead of reporting a system-prompt-only figure as measured usage.
+ */
+function estimateRuntimeContextTokens(runtime: AgentRuntime): number | null {
+	const context = runtime.context;
+	if (!context.getSummary() && context.getRecentMessages().length === 0) {
+		return null;
+	}
+	return estimateContextTokens({
+		systemPrompt: runtime.systemPrompt,
+		summary: context.getSummary(),
+		recentMessages: context.getRecentMessages(),
+		toolSchemas: runtime.toolSchemas,
+	}).totalTokens;
 }
 
 async function defaultListStoredSessions(

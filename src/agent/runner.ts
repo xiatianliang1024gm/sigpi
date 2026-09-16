@@ -25,6 +25,7 @@ import type {
 	TurnProgressPayload,
 } from "../types.js";
 import { TURN_PROGRESS_EVENTS } from "../types.js";
+import type { MicroCompactionPlan } from "./compaction.js";
 import type { ConversationContext } from "./context.js";
 import {
 	createAssistantMessage,
@@ -134,6 +135,13 @@ class TurnState {
 	 */
 	lastResponseUsage: ModelUsage | undefined;
 	lastStep = 0;
+	/**
+	 * Signature of the last micro-compaction decision reported to the progress
+	 * stream. The decision is recomputed in full on every request (it is a pure
+	 * view over the live window), so without this the transcript would gain a
+	 * line per step; what the user needs to see is a decision that *changed*.
+	 */
+	private lastElisionSignature: string | null = null;
 
 	private readonly context: ConversationContext;
 	private readonly getProvider: () => ModelProvider;
@@ -199,6 +207,31 @@ class TurnState {
 		this.runner.emitProgress(type, {
 			...payload,
 			estimatedContextTokens: this.estimateRequestTokens(),
+		});
+	}
+
+	/**
+	 * Report one request's micro-compaction decision as a progress event, once
+	 * per distinct decision within the turn. Elision is a view: the entry stream
+	 * and the transcript keep every tool result in full, so without this event
+	 * the user has no way to see that the model received less than the
+	 * transcript shows.
+	 */
+	reportElision(plan: MicroCompactionPlan): void {
+		const signature = [...plan.elidedIndexes].sort((a, b) => a - b).join(",");
+		if (signature === this.lastElisionSignature) {
+			return;
+		}
+		this.lastElisionSignature = signature;
+		if (plan.elidedIndexes.size === 0) {
+			return;
+		}
+		this.emitProgress("context_elided", {
+			step: this.lastStep,
+			elidedToolResults: plan.elidedIndexes.size,
+			elidedTokens: plan.elidedTokens,
+			keptToolResults: plan.keptToolResults,
+			budget: plan.budget,
 		});
 	}
 
@@ -463,11 +496,19 @@ export class AgentRunner extends EventEmitter {
 	}
 
 	/**
-	 * Auto trigger (ADR 0026, D1): once per step, before the first request,
-	 * the full request-shape estimate (persisted context + buffered turn
-	 * messages + system + tools) over the soft limit compacts. The actual
-	 * split decision stays in `decide`; if the overshoot lives only in the
-	 * buffered turn messages (which compaction never touches), `compact`
+	 * Auto trigger (ADR 0026, D1; amendment in T2): **only at the head of a
+	 * turn** — the estimate over the soft limit on the turn's first step
+	 * compacts before the first request of that turn. Inside a turn the window
+	 * is whatever this turn has accumulated, and a full compaction there would
+	 * replace the content the turn is actively working from with a summary of
+	 * it: strictly worse than the micro-compaction view (`context.buildMessages`),
+	 * which never touches the entry stream and only drops what does not fit.
+	 * A genuinely over-budget mid-turn request is still handled, by the
+	 * provider's `context_length_exceeded` → force-compact → retry once path in
+	 * `generateResponse`.
+	 *
+	 * The actual split decision stays in `decide`; if the overshoot lives only
+	 * in the buffered turn messages (which compaction never touches), `compact`
 	 * reports `summarized: false` and the request proceeds.
 	 */
 	private async maybeAutoCompactBeforeRequest(
@@ -475,6 +516,9 @@ export class AgentRunner extends EventEmitter {
 		step: number,
 		interruptController?: TurnInterruptController,
 	): Promise<void> {
+		if (step > 1) {
+			return;
+		}
 		const budget = this.context.getContextBudget();
 		const softLimit = Math.max(
 			0,
@@ -505,10 +549,10 @@ export class AgentRunner extends EventEmitter {
 
 	/**
 	 * One model request per step, with the retry policy folded in:
-	 * auto-compaction before the first attempt (ADR 0026, D1) and a single
-	 * shared retry for both failure modes — `context_length_exceeded`
-	 * (force-compact + retry, D3) and an empty response (retry, D5). Records
-	 * usage + progress once a response lands.
+	 * auto-compaction before the turn's first request only (ADR 0026, D1 as
+	 * amended by T2) and a single shared retry for both failure modes —
+	 * `context_length_exceeded` (force-compact + retry, D3) and an empty
+	 * response (retry, D5). Records usage + progress once a response lands.
 	 */
 	private async generateResponse(
 		turn: TurnState,
@@ -518,8 +562,8 @@ export class AgentRunner extends EventEmitter {
 		turn.emitProgress("model_request_started", { step });
 		interruptController?.enterModel();
 
-		// Auto trigger (ADR 0026, D1): once per step, before the first
-		// request (see `maybeAutoCompactBeforeRequest`).
+		// Auto trigger (ADR 0026, D1): a turn-head decision, before the first
+		// request of the turn (see `maybeAutoCompactBeforeRequest`).
 		interruptController?.throwIfInterrupted();
 		await this.maybeAutoCompactBeforeRequest(turn, step, interruptController);
 
@@ -532,7 +576,7 @@ export class AgentRunner extends EventEmitter {
 			// before every generate, so a mid-turn compaction (pre-request
 			// estimate or a provider `context_length_exceeded` retry) is
 			// automatically reflected in the next attempt (ADR 0026, D1).
-			const messages = this.buildRequestMessages(turn.pending);
+			const messages = this.buildRequestMessages(turn);
 			let response: ModelResponse;
 			try {
 				response = await this.provider
@@ -778,9 +822,17 @@ export class AgentRunner extends EventEmitter {
 		};
 	}
 
-	private buildRequestMessages(pending: Message[]): Message[] {
-		const messages = this.context.buildMessages(this.systemPrompt);
-		messages.push(...pending);
+	private buildRequestMessages(turn: TurnState): Message[] {
+		const messages = this.context.buildMessages(this.systemPrompt, {
+			// The running turn's tool results are frozen into this request: a
+			// step must never lose what the previous steps of the same turn
+			// fetched (see `planMicroCompaction`).
+			currentTurnId: turn.turnId,
+			// Elision happens only in the request shape, so the transcript alone
+			// cannot show it; surface the decision on the progress stream.
+			onMicroCompaction: (plan) => turn.reportElision(plan),
+		});
+		messages.push(...turn.pending);
 		return messages;
 	}
 

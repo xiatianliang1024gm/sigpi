@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -237,7 +237,7 @@ test("client assets are served and unknown paths still 404", async () => {
 		const app = await fetch(`${baseUrl}/app.js`);
 		assert.equal(app.status, 200);
 		assert.match(app.headers.get("content-type") ?? "", /javascript/);
-		assert.match(await app.text(), /applyTurnProgress/);
+		assert.match(await app.text(), /loadProjects/);
 
 		const reducer = await fetch(`${baseUrl}/reducer.js`);
 		assert.equal(reducer.status, 200);
@@ -255,6 +255,33 @@ test("client assets are served and unknown paths still 404", async () => {
 		const missing = await fetch(`${baseUrl}/nope.js`);
 		assert.equal(missing.status, 404);
 		assert.deepEqual(await missing.json(), { error: "not_found" });
+	});
+});
+
+test("every bundled client module is allow-listed for serving", async () => {
+	// Regression guard: the browser client loads as ES modules, so a new file
+	// imported by `app.js` (or a transitive import) that is left out of the
+	// `static.ts` allow-list 404s and silently breaks the whole page. Enumerate
+	// the staged assets and require each one to be served.
+	const webDir = new URL("../src/server/web/", import.meta.url);
+	const files = (await readdir(webDir)).filter((name) =>
+		/\.(?:js|css|html)$/.test(name),
+	);
+	assert.ok(files.length > 0, "the web client ships at least one asset");
+
+	await withServer(async (baseUrl) => {
+		for (const file of files) {
+			const response = await fetch(`${baseUrl}/${file}`);
+			assert.equal(response.status, 200, `${file} should be served`);
+			const contentType = response.headers.get("content-type") ?? "";
+			if (file.endsWith(".js")) {
+				assert.match(contentType, /javascript/, `${file} content type`);
+			} else if (file.endsWith(".css")) {
+				assert.match(contentType, /text\/css/, `${file} content type`);
+			} else {
+				assert.match(contentType, /text\/html/, `${file} content type`);
+			}
+		}
 	});
 });
 
@@ -666,6 +693,136 @@ test("GET .../model reports 501 when the runtime has no model control", async ()
 		assert.equal(response.status, 501);
 		assert.deepEqual(await response.json(), {
 			error: "model_control_unavailable",
+		});
+	});
+});
+
+test("GET .../context reports the live context-window usage", async () => {
+	const manager = new SessionManager({
+		createRuntime: async () => {
+			const bus = new FakeProgressBus();
+			return {
+				runner: bus,
+				turn: new FakeTurnRunner(bus),
+				logger: noopLogger,
+				sessionId: "sess",
+				dispose() {},
+				getContextUsage: () => ({
+					limit: 100000,
+					usedTokens: 2500,
+					modelName: "Model One",
+				}),
+			};
+		},
+		listStoredSessions: async () => [],
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess/context`,
+		);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), {
+			limit: 100000,
+			usedTokens: 2500,
+			modelName: "Model One",
+		});
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("GET .../context reports 501 when the runtime has no context usage", async () => {
+	await withServer(async (baseUrl) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess-1/context`,
+		);
+		assert.equal(response.status, 501);
+		assert.deepEqual(await response.json(), {
+			error: "context_usage_unavailable",
+		});
+	});
+});
+
+test("GET .../stats reports the live session's statistics", async () => {
+	const manager = new SessionManager({
+		createRuntime: async () => {
+			const bus = new FakeProgressBus();
+			return {
+				runner: bus,
+				turn: new FakeTurnRunner(bus),
+				logger: noopLogger,
+				sessionId: "sess",
+				dispose() {},
+				getSessionStats: () => ({
+					turns: 2,
+					steps: 108,
+					inputTokens: 11_200_000,
+					outputTokens: 62_400,
+					cacheReadTokens: 990_000,
+					cacheWriteTokens: 0,
+					totalTokens: 12_252_400,
+					llmMs: 354_000,
+					toolMs: 314_000,
+					firstTokenAvgMs: 1000,
+					tokensPerSecond: 255,
+				}),
+			};
+		},
+		listStoredSessions: async () => [],
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess/stats`,
+		);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), {
+			turns: 2,
+			steps: 108,
+			inputTokens: 11_200_000,
+			outputTokens: 62_400,
+			cacheReadTokens: 990_000,
+			cacheWriteTokens: 0,
+			totalTokens: 12_252_400,
+			llmMs: 354_000,
+			toolMs: 314_000,
+			firstTokenAvgMs: 1000,
+			tokensPerSecond: 255,
+		});
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("GET .../stats reports 501 when the runtime has no statistics", async () => {
+	await withServer(async (baseUrl) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/sess-1/stats`,
+		);
+		assert.equal(response.status, 501);
+		assert.deepEqual(await response.json(), {
+			error: "session_stats_unavailable",
 		});
 	});
 });

@@ -31,6 +31,7 @@ import { ToolRegistry } from "../src/tools/registry.js";
 import {
 	createTempDir,
 	defaultShellIsPosix,
+	MemoryLogger,
 	posixShellUsable,
 	pythonAvailable,
 	sleepAvailable,
@@ -1566,7 +1567,7 @@ test("read returns PARTIAL with continuation when file exceeds char limit", asyn
 	assert.match(rendered, /Line 1/);
 });
 
-test("read throws error when explicit range exceeds char limit", async () => {
+test("read errors only when the first line alone exceeds the char limit", async () => {
 	const cwd = await createTempDir("sigpi-read-chunk-explicit-");
 	// Create file with content well over DEFAULT_READ_MAX_CHARS
 	const bigContent = "x".repeat(60_000);
@@ -1583,11 +1584,83 @@ test("read throws error when explicit range exceeds char limit", async () => {
 		{ cwd },
 	);
 
+	// A single line longer than the cap cannot be paged by line, so returning a
+	// page would return nothing: this is the one range shape that stays an
+	// error. Every other overflowing range now pages (see the test below).
 	assert.equal(result.ok, false);
 	assert.match(
 		result.error ?? "",
 		/exceeds the maximum allowed character count/,
 	);
+});
+
+test("read pages an explicit range that exceeds the char limit", async () => {
+	const cwd = await createTempDir("sigpi-read-explicit-page-");
+	// 60 lines of 1,000 chars overflow the 50 KB page limit but are pageable by
+	// line, so the range must page instead of failing. An error here pushed the
+	// model into trial-and-error paging: the reported session read
+	// `manager.ts` in four separate windows looking for the right one.
+	const lines = Array.from({ length: 60 }, (_, index) =>
+		`line${index + 1}`.padEnd(1_000, "x"),
+	);
+	await writeWorkspaceFile(cwd, "wide.txt", lines.join("\n"));
+	const tools = new ToolRegistry([readTool]);
+
+	const result = await tools.execute(
+		{
+			id: "call_explicit_page",
+			name: "read",
+			arguments: { file_path: "wide.txt", offset: 0, limit: 60 },
+			rawArguments: '{"file_path":"wide.txt","offset":0,"limit":60}',
+		},
+		{ cwd },
+	);
+
+	assert.equal(result.ok, true);
+	assert.equal((result.data as { truncated: boolean }).truncated, true);
+	const continuation = (
+		result.data as { continuation: { nextOffset: number } | null }
+	).continuation;
+	assert.notEqual(continuation, null);
+	assert.ok((continuation?.nextOffset ?? 0) > 0);
+	// The page starts at the beginning of the requested range, so continuing
+	// from the notice really does read the rest of it.
+	assert.match((result.data as { content: string }).content, /1 │ line1/);
+	assert.match(
+		(result.data as { rendered: string }).rendered,
+		/\[...truncated, continue from line/,
+	);
+});
+
+test("read serves a repeated identical range from its cache, and reports it", async () => {
+	const cwd = await createTempDir("sigpi-read-cache-");
+	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nbeta\n");
+	const tools = new ToolRegistry([createReadTool(new ReadTracker())]);
+	const logger = new MemoryLogger();
+	const call = (id: string) => ({
+		id,
+		name: "read",
+		arguments: { file_path: "demo.txt" },
+		rawArguments: '{"file_path":"demo.txt"}',
+	});
+	const cacheHits = () =>
+		logger.entries.filter((entry) => entry.event === "read_cache_hit").length;
+
+	const first = await tools.execute(call("call_cache_1"), { cwd, logger });
+	const second = await tools.execute(call("call_cache_2"), { cwd, logger });
+
+	assert.equal(first.ok, true);
+	assert.equal(second.ok, true);
+	// Byte-identical: re-reading a range must never drift.
+	assert.deepEqual(second.data, first.data);
+	assert.equal(cacheHits(), 1);
+
+	// The file changed, so the fingerprint no longer matches: the next read is
+	// fresh and is not reported as a repeat.
+	await writeWorkspaceFile(cwd, "demo.txt", "alpha\nGAMMA\n");
+	const third = await tools.execute(call("call_cache_3"), { cwd, logger });
+	assert.match((third.data as { content: string }).content, /GAMMA/);
+	assert.equal(cacheHits(), 1);
 });
 
 test("read default reads an entire small file without truncation", async () => {

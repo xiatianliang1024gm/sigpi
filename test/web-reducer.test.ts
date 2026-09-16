@@ -204,6 +204,19 @@ test("applyTurnProgress surfaces interrupts, failures, and compactions as system
 	applyTurnProgress(
 		view,
 		{
+			type: "context_elided",
+			step: 2,
+			elidedToolResults: 3,
+			elidedTokens: 8_400,
+			keptToolResults: 5,
+			budget: 60_000,
+		},
+		null,
+		toolLines,
+	);
+	applyTurnProgress(
+		view,
+		{
 			type: "tool_execution_finished",
 			step: 2,
 			toolName: "bash",
@@ -224,6 +237,7 @@ test("applyTurnProgress surfaces interrupts, failures, and compactions as system
 	assert.deepEqual(log, [
 		"sys:info:Cancelling current model request",
 		"sys:info:Context compacted: context window 12K → 3K tokens.",
+		"sys:info:Context elided: 3 tool results (8.4K tokens) left out of this request to fit the 60K-token tool-result budget. Their full output stays in the session record.",
 		"sys:info:Turn interrupted.",
 	]);
 

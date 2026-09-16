@@ -11,8 +11,9 @@
 	--ok: #5fd08a;
 	/* Workspace column width; driven by the draggable divider in `app.js`. */
 	--sidebar-width: 280px;
-	/* Max width of the centered message/input column inside the chat pane. */
-	--chat-max: 820px;
+	/* Max width of the centered message/input column inside the chat pane.
+	   Wide enough that the long session-info summary rarely truncates. */
+	--chat-max: 1000px;
 }
 
 * {
@@ -52,6 +53,20 @@ body {
 body.busy .status::before {
 	content: "● ";
 	color: var(--accent);
+}
+
+/* Session summary (turns/steps/timings/tokens), leading the composer action row:
+   the text is left-aligned and ellipsizes, while the model picker / context ring
+   and the send button stay pinned to the right on the same row. */
+.session-info {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
 }
 
 .layout {
@@ -155,6 +170,12 @@ body.resizing {
 
 .panel-head h2 {
 	margin: 0;
+}
+
+.panel-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
 }
 
 .icon-button {
@@ -407,8 +428,11 @@ button:disabled {
 	gap: 10px;
 }
 
+/* Fill the message column so the transcript (assistant markdown, reasoning,
+   user bubbles) lines up with the composer input below it. The column is
+   already capped at `--chat-max`, so `100%` is the same width as the input. */
 .msg {
-	max-width: 80ch;
+	max-width: 100%;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
@@ -546,6 +570,41 @@ button:disabled {
 	padding: 0;
 	background: none;
 }
+/* A fenced block plus its hover "copy" affordance, anchored to a corner. */
+.content .code-block {
+	position: relative;
+	margin: 0 0 8px;
+}
+.content .code-block pre {
+	margin: 0;
+}
+.code-copy {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	padding: 2px 8px;
+	font-size: 12px;
+	line-height: 1.3;
+	color: var(--muted);
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+.code-block:hover .code-copy,
+.code-copy:focus-visible {
+	opacity: 1;
+}
+.code-copy:hover {
+	color: var(--text);
+	border-color: var(--accent);
+}
+.code-copy.copied {
+	color: var(--ok);
+	border-color: var(--ok);
+	opacity: 1;
+}
 .content blockquote {
 	margin: 0 0 8px;
 	padding-left: 10px;
@@ -575,6 +634,39 @@ button:disabled {
 .content th {
 	background: var(--panel-2);
 	font-weight: 600;
+}
+
+/* --- assistant message actions (copy / save) ------------------------------- */
+
+/* Revealed on hover (or keyboard focus) so they stay out of the way of the
+   prose but are always reachable. */
+.msg.assistant .msg-actions {
+	display: flex;
+	gap: 6px;
+	margin-top: 6px;
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+.msg.assistant:hover .msg-actions,
+.msg-actions:focus-within {
+	opacity: 1;
+}
+.msg-action {
+	padding: 2px 8px;
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--muted);
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+}
+.msg-action:hover {
+	color: var(--text);
+	border-color: var(--accent);
+}
+.msg-action.copied {
+	color: var(--ok);
+	border-color: var(--ok);
 }
 
 .tool {
@@ -626,12 +718,60 @@ button:disabled {
 .composer-actions {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
+	/* Info text leads on the left; the controls cluster right. */
+	justify-content: flex-end;
 	gap: 8px;
 }
 
-.model-select {
+/* Right cluster: the model picker plus the context-window usage readout. The cap
+   lives on the cluster (not the select) so it sizes to its content and sits
+   flush against the send button; capping the select instead let the cluster
+   reserve the select's unbounded width and leave a dead gap before the button. */
+.composer-meta {
+	flex: 0 1 auto;
 	max-width: 60%;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.context-usage {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-variant-numeric: tabular-nums;
+	color: var(--muted);
+	font-size: 12px;
+	white-space: nowrap;
+	cursor: default;
+}
+
+.context-ring {
+	display: block;
+	flex: none;
+}
+
+.context-ring-track {
+	stroke: var(--border);
+	stroke-width: 3;
+}
+
+.context-ring-value {
+	stroke: var(--accent);
+	stroke-width: 3;
+	stroke-linecap: round;
+	/* Start the arc at 12 o'clock instead of 3 o'clock. */
+	transform: rotate(-90deg);
+	transform-origin: 50% 50%;
+	transition: stroke-dashoffset 0.2s ease;
+}
+
+.model-select {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 100%;
 	background: var(--panel);
 	border: 1px solid var(--border);
 	color: var(--text);

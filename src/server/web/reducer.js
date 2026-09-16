@@ -34,6 +34,30 @@ export function formatCompactionMessage(event) {
 	return "Context compacted.";
 }
 
+/**
+ * Micro-compaction notice: how much tool output the *request* lost. Mirrors
+ * `formatElisionMessage` in `src/session/events.ts`, including the reassurance
+ * that the transcript is complete — elision is a view over the request, not a
+ * deletion.
+ */
+export function formatElisionMessage(event) {
+	const count = event.elidedToolResults;
+	const results = `${count} tool result${count === 1 ? "" : "s"}`;
+	const pronoun = count === 1 ? "Its" : "Their";
+	const reclaimed =
+		event.elidedTokens > 0
+			? ` (${formatCompactNumber(event.elidedTokens)} tokens)`
+			: "";
+	const budget =
+		event.budget > 0
+			? ` to fit the ${formatCompactNumber(event.budget)}-token tool-result budget`
+			: "";
+	return (
+		`Context elided: ${results}${reclaimed} left out of this request${budget}. ` +
+		`${pronoun} full output stays in the session record.`
+	);
+}
+
 /** True for the four events that end a turn. */
 export function isTurnTerminalEvent(event) {
 	return (
@@ -69,6 +93,11 @@ export function applyTurnProgress(view, event, currentAssistant, toolLines) {
 
 	if (event.type === "context_compacted") {
 		view.appendSystem(formatCompactionMessage(event), "info");
+		return currentAssistant;
+	}
+
+	if (event.type === "context_elided") {
+		view.appendSystem(formatElisionMessage(event), "info");
 		return currentAssistant;
 	}
 

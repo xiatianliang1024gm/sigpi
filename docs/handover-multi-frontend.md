@@ -218,7 +218,7 @@ SessionManager
 
 `src/server/web/` 是零构建的原生 ES module 页面，由多会话服务**同源**托管（无 CORS）：
 
-- `index.html` / `styles.css` / `app.js`：极简 UI —— 左侧是**两级可折叠树**：第一层为工作
+- `index.html` / `styles.css` / `app.js`（入口）：极简 UI —— 左侧是**两级可折叠树**：第一层为工作
   目录（project），**只显示完整路径的最后一个目录名**（完整路径留在 hover title）。点开后
   在目录下嵌套列出其 live/stored 会话；每个目录行有「新建会话」与「删除目录」按钮，每个
   会话行有「删除会话」按钮。会话名不显示裸 sessionId：优先用服务端根据首次用户输入派生的
@@ -235,9 +235,21 @@ SessionManager
 - `reducer.js`：`applyTurnProgress` 的**逐行移植**（`src/session/events.ts`），并导出
   `isTurnTerminalEvent` / `formatCompactionMessage`。因为 SSE 的 `message` 帧就是
   `TurnProgressEvent`，浏览器归约器与 TUI 同源、行为一致。
-- `src/server/static.ts`：只服务**固定白名单**路径（`/`、`/index.html`、`/app.js`、
-  `/reducer.js`、`/styles.css`），无目录穿越面。由 `multi.ts` 的 `route()` 在进入
-  `projects` 路由前处理。
+- 客户端按功能拆成一组小 ES module：`app.js` 仅作入口（`initDom` / `resetState` 后接线），
+  其余 `dom` / `state` / `format` / `api` / `sidebar` / `transcript` / `events` / `tree` /
+  `menus` / `projects` / `sessions` / `composer` 各管一块；模块间用 ES import 组合，共享
+  状态由 `state.js` 持有（`resetState()` 每次加载重建，保证 jsdom 多 harness 隔离）。
+- 会话信息与上下文环：输入框操作行左侧 `#session-info` 显示会话统计（`N 轮 · M 步| LLM … · 工具调用
+  …| 首 token 平均 … · … tok/s| 缓存命中 …%| 输入 … tok · 输出 … tok`，左对齐、超长省略），数据来自新路由
+  `GET .../stats`（`src/server/session-stats.ts`：`derivePersistedStats` 从持久化 entry 流
+  汇总轮/步/token，`SessionStatsTracker` 订阅 controller 事件测 LLM/工具/首 token 时长；
+  时长不落盘，故只覆盖本进程观察到的轮次）。同一操作行右对齐的模型选择器与上下文用量**圆环**
+  （`context.js` 内联 SVG，弧长=已用比例，中心显示百分比，hover `title` 给出精确 token）。
+  客户端 `stats.js` 只拉取并渲染，`session-format.js` 为无依赖的纯格式化（供 Node 测试）。
+- `src/server/static.ts`：只服务**固定白名单**的客户端资源（`index.html`、`styles.css`、
+  `app.js` 及其拆出的各 `*.js` 功能模块、`reducer.js`、`markdown.js`、`stats.js`、
+  `session-format.js`），无目录穿越面。由
+  `multi.ts` 的 `route()` 在进入 `projects` 路由前处理。
 - 资源通过 `scripts/copy-assets.mjs` 复制到 `dist/src/server/web/`，`import.meta.url`
   在构建产物与测试中都解析得到。
 - 测试：`test/web-reducer.test.ts`（归约器语义）、`test/chat-server-multi.test.ts`
