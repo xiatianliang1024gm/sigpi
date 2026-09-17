@@ -25,15 +25,20 @@ import {
 import { switchModel } from "./sessions.js";
 import { initSidebarResizer, restoreSidebarWidth } from "./sidebar.js";
 import { resetState, state } from "./state.js";
+import { closeTasksPanel, initTasks } from "./tasks.js";
 import { loadHistory } from "./transcript.js";
 import { refreshRelativeTimes } from "./tree.js";
 
 initDom();
 resetState();
 
-// A click anywhere outside a menu dismisses it; menu item/trigger clicks stop
-// propagation so only genuinely outside clicks reach the document.
-document.addEventListener("click", () => closeMenu());
+// A click anywhere outside a menu (or the background-task popover) dismisses
+// it; their own item/trigger clicks stop propagation so only genuinely outside
+// clicks reach the document.
+document.addEventListener("click", () => {
+	closeMenu();
+	closeTasksPanel();
+});
 
 // --- wiring ----------------------------------------------------------------
 
@@ -86,6 +91,7 @@ els.modelSelect.addEventListener("change", () => {
 
 restoreSidebarWidth();
 initSidebarResizer();
+initTasks();
 
 // Keep the tree's "time since" labels honest without a full re-render (which
 // would close any open row menu). `unref` keeps the timer from pinning the

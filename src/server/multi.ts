@@ -56,6 +56,13 @@ export interface ServerErrorContext {
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
 /**
+ * Cap on the background-task output tail served to the browser. The task log is
+ * read from disk and returned as the last window of this size, so a task that
+ * produced a huge log never ships the whole file to the client.
+ */
+const MAX_TASK_OUTPUT_BYTES = 256 * 1024;
+
+/**
  * Default {@link MultiSessionServerOptions.onError}: print a one-line report to
  * stderr so a running `serve` process surfaces request failures the same way
  * the browser receives them, instead of failing silently off-screen.
@@ -108,6 +115,9 @@ function reportError(
  * POST   /projects/:key/sessions/:id/model          switch the active model
  * GET    /projects/:key/sessions/:id/context        context-window usage (budget + used)
  * GET    /projects/:key/sessions/:id/stats          session totals (turns/steps/tokens/timings)
+ * GET    /projects/:key/sessions/:id/tasks          list background shell tasks
+ * GET    /projects/:key/sessions/:id/tasks/:taskId  a task's metadata + output tail
+ * POST   /projects/:key/sessions/:id/tasks/:taskId/kill  stop a running task
  * POST   /projects/:key/sessions/:id/message        submit one turn
  * POST   /projects/:key/sessions/:id/interrupt      interrupt the in-flight turn
  * DELETE /projects/:key/sessions/:id                delete the session + its stored messages
@@ -320,6 +330,45 @@ async function route(
 		if (method === "GET" && sub === "stats") {
 			manager.touch(session);
 			handleSessionStats(res, session);
+			return;
+		}
+		if (method === "GET" && sub === "tasks") {
+			manager.touch(session);
+			handleListTasks(res, session);
+			return;
+		}
+		methodNotAllowed(res);
+		return;
+	}
+
+	// /projects/:key/sessions/:id/tasks/:taskId
+	if (segments.length === 6 && segments[4] === "tasks") {
+		const session = resolveSession(manager, projectKey, sessionId, res);
+		if (!session) {
+			return;
+		}
+		if (method === "GET") {
+			manager.touch(session);
+			handleTaskDetail(res, session, segments[5] ?? "");
+			return;
+		}
+		methodNotAllowed(res);
+		return;
+	}
+
+	// /projects/:key/sessions/:id/tasks/:taskId/kill
+	if (
+		segments.length === 7 &&
+		segments[4] === "tasks" &&
+		segments[6] === "kill"
+	) {
+		const session = resolveSession(manager, projectKey, sessionId, res);
+		if (!session) {
+			return;
+		}
+		if (method === "POST") {
+			manager.touch(session);
+			handleKillTask(res, session, segments[5] ?? "");
 			return;
 		}
 		methodNotAllowed(res);
@@ -628,6 +677,78 @@ function handleSessionStats(res: ServerResponse, session: SessionEntry): void {
 		return;
 	}
 	writeJson(res, 200, getSessionStats());
+}
+
+/**
+ * List the live session's background shell tasks (the `bash` tool's
+ * non-blocking jobs), oldest first, for the composer's task viewer. Responds
+ * `501` when the runtime cannot report them (a lightweight/legacy runtime).
+ */
+function handleListTasks(res: ServerResponse, session: SessionEntry): void {
+	const { getBackgroundTasks } = session.runtime;
+	if (!getBackgroundTasks) {
+		writeJson(res, 501, { error: "tasks_unavailable" });
+		return;
+	}
+	writeJson(res, 200, { tasks: getBackgroundTasks() });
+}
+
+/**
+ * Return one background task's metadata plus a bounded tail of its captured
+ * output. Responds `404` for an unknown task id and `501` when the runtime does
+ * not expose tasks; when the runtime can list tasks but not read output, the
+ * output is simply empty.
+ */
+function handleTaskDetail(
+	res: ServerResponse,
+	session: SessionEntry,
+	taskId: string,
+): void {
+	const { getBackgroundTasks, readBackgroundTaskOutput } = session.runtime;
+	if (!getBackgroundTasks) {
+		writeJson(res, 501, { error: "tasks_unavailable" });
+		return;
+	}
+	const task = getBackgroundTasks().find(
+		(candidate) => candidate.id === taskId,
+	);
+	if (!task) {
+		writeJson(res, 404, { error: "task_not_found" });
+		return;
+	}
+	const output = readBackgroundTaskOutput
+		? readBackgroundTaskOutput(taskId, MAX_TASK_OUTPUT_BYTES)
+		: null;
+	writeJson(res, 200, {
+		task,
+		output: output?.output ?? "",
+		truncated: output?.truncated ?? false,
+	});
+}
+
+/**
+ * Stop one running background task by id. Responds `404` for an unknown task
+ * id, `501` when the runtime cannot control tasks, and otherwise `{ killed }`,
+ * where `false` means no signal was delivered (the task already finished).
+ */
+function handleKillTask(
+	res: ServerResponse,
+	session: SessionEntry,
+	taskId: string,
+): void {
+	const { getBackgroundTasks, killBackgroundTask } = session.runtime;
+	if (!getBackgroundTasks || !killBackgroundTask) {
+		writeJson(res, 501, { error: "tasks_unavailable" });
+		return;
+	}
+	const task = getBackgroundTasks().find(
+		(candidate) => candidate.id === taskId,
+	);
+	if (!task) {
+		writeJson(res, 404, { error: "task_not_found" });
+		return;
+	}
+	writeJson(res, 200, { killed: killBackgroundTask(taskId) });
 }
 
 /**

@@ -29,6 +29,8 @@ function createState() {
 		contextUsedTokens: null,
 		/** Cumulative session statistics for the info line, or null when unknown. */
 		sessionStats: null,
+		/** Background shell tasks for the active session, oldest first. */
+		backgroundTasks: [],
 		currentAssistant: null,
 		toolLines: new Map(),
 		/**
