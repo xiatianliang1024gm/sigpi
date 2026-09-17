@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { getDefaultSessionsRoot } from "../config.js";
@@ -16,6 +17,7 @@ import {
 	createProjectKey,
 	resolveSessionStoragePaths,
 } from "../session/paths.js";
+import type { BackgroundTask } from "../tools/background.js";
 import type {
 	PersistedSession,
 	SessionEntry as SessionStreamEntry,
@@ -61,6 +63,27 @@ export interface ManagedRuntime extends SessionControllerRuntime {
 	 */
 	getSessionStats?(): SessionStats;
 	/**
+	 * Snapshot of the runtime's background shell tasks (oldest first). Optional
+	 * so lightweight test runtimes need not implement it; the HTTP layer
+	 * degrades gracefully when it is absent.
+	 */
+	getBackgroundTasks?(): RuntimeBackgroundTask[];
+	/**
+	 * Read a bounded tail of a background task's captured output, identified by
+	 * the runtime's own process. Returns `null` for an unknown task id. Optional
+	 * alongside {@link getBackgroundTasks}.
+	 */
+	readBackgroundTaskOutput?(
+		id: string,
+		maxBytes: number,
+	): RuntimeBackgroundTaskOutput | null;
+	/**
+	 * Stop a running background task by id; returns `true` when a signal was
+	 * delivered (and `false` for an unknown, already-finished, or unkillable
+	 * task). Optional alongside {@link getBackgroundTasks}.
+	 */
+	killBackgroundTask?(id: string): boolean;
+	/**
 	 * Register a listener invoked after each successful flush of the runtime's
 	 * session store, i.e. whenever a message batch or turn boundary advances what
 	 * is on disk. The manager uses it to keep a session's event-log watermark in
@@ -97,6 +120,47 @@ export interface RuntimeContextUsage {
 	usedTokens: number | null;
 	/** Display name of the active model. */
 	modelName: string;
+}
+
+/** Durable `run | done` status of a background shell task. */
+export type RuntimeBackgroundTaskStatus = "running" | "done";
+
+/**
+ * A background shell task's snapshot, mirroring the fields the TUI's task
+ * picker shows (`src/task-selector.ts`). The task's log path is deliberately
+ * omitted: the browser reads output through {@link
+ * ManagedRuntime.readBackgroundTaskOutput} rather than the filesystem.
+ */
+export interface RuntimeBackgroundTask {
+	/** Stable task id (`randomUUID()`); also the log file's base name. */
+	id: string;
+	/** Process id, or `null` when the spawn failed before it was known. */
+	pid: number | null;
+	command: string;
+	cwd: string;
+	/** Optional human label the model gave the task; else `null`. */
+	description: string | null;
+	/** Epoch ms the task was spawned. */
+	startedAt: number;
+	/** Epoch ms the task finished, or `null` while it still runs. */
+	endedAt: number | null;
+	status: RuntimeBackgroundTaskStatus;
+	/** Exit code once finished (may be `null` on signal / spawn error). */
+	exitCode: number | null;
+	/** Terminating signal name, or `null` when it exited normally. */
+	signal: string | null;
+	/** True once a stop signal has been delivered. */
+	killed: boolean;
+	/** True when the task's optional deadline killed the process group. */
+	timedOut: boolean;
+}
+
+/** A bounded tail of a background task's captured output. */
+export interface RuntimeBackgroundTaskOutput {
+	/** The output tail, decoded as UTF-8. */
+	output: string;
+	/** True when the log was longer than the returned window. */
+	truncated: boolean;
 }
 
 /** A directory the server has been told to host sessions for. */
@@ -291,7 +355,55 @@ async function defaultCreateRuntime(args: {
 			...derivePersistedStats(runtime.context.exportState().entries ?? []),
 			...statsTracker.snapshot(),
 		}),
+		getBackgroundTasks: (): RuntimeBackgroundTask[] =>
+			runtime.backgroundTasks.list().map(snapshotBackgroundTask),
+		readBackgroundTaskOutput: (id, maxBytes) =>
+			readBackgroundTaskOutput(runtime.backgroundTasks.get(id), maxBytes),
+		killBackgroundTask: (id) => runtime.backgroundTasks.stop(id),
 	};
+}
+
+/** Project one managed {@link BackgroundTask} into its wire snapshot. */
+function snapshotBackgroundTask(task: BackgroundTask): RuntimeBackgroundTask {
+	return {
+		id: task.id,
+		pid: task.pid,
+		command: task.command,
+		cwd: task.cwd,
+		description: task.description,
+		startedAt: task.startedAt,
+		endedAt: task.endedAt,
+		status: task.status,
+		exitCode: task.exitCode,
+		signal: task.signal,
+		killed: task.killed,
+		timedOut: task.timedOut,
+	};
+}
+
+/**
+ * Read a bounded tail of a task's log. Reads the whole file (background logs
+ * are small by design) and keeps the last `maxBytes` characters; a missing or
+ * unreadable file yields empty output rather than an error, so a task whose log
+ * the runtime already removed still reports its metadata.
+ */
+function readBackgroundTaskOutput(
+	task: BackgroundTask | undefined,
+	maxBytes: number,
+): RuntimeBackgroundTaskOutput | null {
+	if (!task) {
+		return null;
+	}
+	let raw: string;
+	try {
+		raw = readFileSync(task.logPath, "utf8");
+	} catch {
+		return { output: "", truncated: false };
+	}
+	const limit = Math.max(1, Math.floor(maxBytes));
+	return raw.length <= limit
+		? { output: raw, truncated: false }
+		: { output: raw.slice(raw.length - limit), truncated: true };
 }
 
 /**

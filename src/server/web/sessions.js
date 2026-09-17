@@ -8,6 +8,7 @@ import { connect, disconnect, updateSubmitButton } from "./events.js";
 import { loadProjects } from "./projects.js";
 import { state } from "./state.js";
 import { loadSessionStats, resetSessionStats } from "./stats.js";
+import { refreshTasks } from "./tasks.js";
 import { clearTranscript, loadHistory } from "./transcript.js";
 import { renderProjects } from "./tree.js";
 
@@ -114,6 +115,7 @@ export async function selectSession(projectKey, sessionId, { resume }) {
 	void loadModelState();
 	void loadContextUsage();
 	void loadSessionStats();
+	void refreshTasks();
 }
 
 /** Delete one session and its stored messages; stop it first if it is live. */

@@ -17,6 +17,12 @@ function collectEls() {
 		modelSelect: document.getElementById("model-select"),
 		contextUsage: document.getElementById("context-usage"),
 		sessionInfo: document.getElementById("session-info"),
+		tasksButton: document.getElementById("tasks-button"),
+		tasksCount: document.getElementById("tasks-count"),
+		tasksPanel: document.getElementById("tasks-panel"),
+		tasksList: document.getElementById("tasks-list"),
+		tasksDetail: document.getElementById("tasks-detail"),
+		tasksClose: document.getElementById("tasks-close"),
 		error: document.getElementById("error"),
 	};
 }

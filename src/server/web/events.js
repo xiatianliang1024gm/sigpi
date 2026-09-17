@@ -7,6 +7,7 @@ import { applyTurnProgress, isTurnTerminalEvent } from "./reducer.js";
 import { loadSessions, resetModelState } from "./sessions.js";
 import { state } from "./state.js";
 import { loadSessionStats, refreshSessionStats } from "./stats.js";
+import { refreshTasks, resetTasks } from "./tasks.js";
 import { clearTurnNodes, view } from "./transcript.js";
 
 export function handleEvent(event) {
@@ -31,6 +32,9 @@ export function handleEvent(event) {
 		// the durable step count has advanced. Refresh the info line now instead
 		// of waiting for the whole turn to finish.
 		void refreshSessionStats();
+		// A step may have launched a background task (the `bash` tool), so keep
+		// the badge current mid-turn rather than only at the turn's end.
+		void refreshTasks();
 	}
 	state.currentAssistant = applyTurnProgress(
 		view,
@@ -49,6 +53,9 @@ export function handleEvent(event) {
 		void loadContextUsage();
 		// The turn's stats are final now too; refresh the session info line.
 		void loadSessionStats();
+		// Background tasks the turn started (or finished) may have changed; the
+		// turn boundary is the natural point to refresh the badge.
+		void refreshTasks();
 	}
 }
 
@@ -112,4 +119,5 @@ export function disconnect() {
 	}
 	setTurnActive(false);
 	resetModelState();
+	resetTasks();
 }

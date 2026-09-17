@@ -70,6 +70,54 @@
 						disabled
 					></textarea>
 					<div class="composer-actions">
+						<div id="tasks" class="tasks">
+							<button
+								id="tasks-button"
+								class="tasks-button"
+								type="button"
+								title="后台任务"
+								aria-label="后台任务"
+								aria-haspopup="dialog"
+								hidden
+							>
+								<svg
+									class="icon"
+									viewBox="0 0 24 24"
+									aria-hidden="true"
+								>
+									<path
+										d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm3.7 4.3a1 1 0 0 0-1.4 1.4L8.6 12l-2.3 2.3a1 1 0 1 0 1.42 1.4l3-3a1 1 0 0 0 0-1.4l-3-3ZM12 15a1 1 0 1 0 0 2h5a1 1 0 1 0 0-2h-5Z"
+									/>
+								</svg>
+								<span id="tasks-count" class="tasks-count">0</span>
+							</button>
+							<div
+								id="tasks-panel"
+								class="tasks-panel"
+								role="dialog"
+								aria-label="后台任务"
+								hidden
+							>
+								<div class="tasks-panel-head">
+									<span class="tasks-panel-title">后台任务</span>
+									<button
+										id="tasks-close"
+										class="tasks-close"
+										type="button"
+										title="关闭"
+										aria-label="关闭"
+									>
+										×
+									</button>
+								</div>
+								<div id="tasks-list" class="tasks-list"></div>
+								<div
+									id="tasks-detail"
+									class="tasks-detail"
+									hidden
+								></div>
+							</div>
+						</div>
 						<span
 							id="session-info"
 							class="session-info"

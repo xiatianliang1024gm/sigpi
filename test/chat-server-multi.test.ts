@@ -827,6 +827,141 @@ test("GET .../stats reports 501 when the runtime has no statistics", async () =>
 	});
 });
 
+test("GET .../tasks lists background tasks; .../tasks/:id returns output; kill stops one", async () => {
+	const tasks: Array<{
+		id: string;
+		pid: number | null;
+		command: string;
+		cwd: string;
+		description: string | null;
+		startedAt: number;
+		endedAt: number | null;
+		status: "running" | "done";
+		exitCode: number | null;
+		signal: string | null;
+		killed: boolean;
+		timedOut: boolean;
+	}> = [
+		{
+			id: "t1",
+			pid: 123,
+			command: "sleep 10",
+			cwd: "/tmp/x",
+			description: "long job",
+			startedAt: 1_000,
+			endedAt: null,
+			status: "running",
+			exitCode: null,
+			signal: null,
+			killed: false,
+			timedOut: false,
+		},
+		{
+			id: "t2",
+			pid: 124,
+			command: "echo hi",
+			cwd: "/tmp/x",
+			description: null,
+			startedAt: 900,
+			endedAt: 950,
+			status: "done",
+			exitCode: 0,
+			signal: null,
+			killed: false,
+			timedOut: false,
+		},
+	];
+	const killed: string[] = [];
+	const manager = new SessionManager({
+		createRuntime: async () => {
+			const bus = new FakeProgressBus();
+			return {
+				runner: bus,
+				turn: new FakeTurnRunner(bus),
+				logger: noopLogger,
+				sessionId: "sess",
+				dispose() {},
+				getBackgroundTasks: () => tasks,
+				readBackgroundTaskOutput: (id, maxBytes) => {
+					if (id !== "t1") return null;
+					const raw = "a".repeat(50);
+					return raw.length <= maxBytes
+						? { output: raw, truncated: false }
+						: { output: raw.slice(raw.length - maxBytes), truncated: true };
+				},
+				killBackgroundTask: (id) => {
+					killed.push(id);
+					return id === "t1";
+				},
+			};
+		},
+		listStoredSessions: async () => [],
+	});
+	const server = createMultiSessionServer({ manager });
+	const baseUrl = await listen(server);
+	try {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+		const base = `${baseUrl}/projects/${key}/sessions/sess`;
+
+		const list = await fetch(`${base}/tasks`);
+		assert.equal(list.status, 200);
+		const listBody = (await list.json()) as { tasks: Array<{ id: string }> };
+		assert.deepEqual(
+			listBody.tasks.map((task) => task.id),
+			["t1", "t2"],
+		);
+
+		const detail = await fetch(`${base}/tasks/t1`);
+		assert.equal(detail.status, 200);
+		const detailBody = (await detail.json()) as {
+			task: { id: string; description: string | null };
+			output: string;
+			truncated: boolean;
+		};
+		assert.equal(detailBody.task.id, "t1");
+		assert.equal(detailBody.task.description, "long job");
+		assert.equal(detailBody.output, "a".repeat(50));
+		assert.equal(detailBody.truncated, false);
+
+		const unknown = await fetch(`${base}/tasks/nope`);
+		assert.equal(unknown.status, 404);
+		assert.deepEqual(await unknown.json(), { error: "task_not_found" });
+
+		const kill = await fetch(`${base}/tasks/t1/kill`, { method: "POST" });
+		assert.equal(kill.status, 200);
+		assert.deepEqual(await kill.json(), { killed: true });
+		assert.deepEqual(killed, ["t1"]);
+
+		const unknownKill = await fetch(`${base}/tasks/nope/kill`, {
+			method: "POST",
+		});
+		assert.equal(unknownKill.status, 404);
+	} finally {
+		await manager.disposeAll();
+		await close(server);
+	}
+});
+
+test("GET .../tasks reports 501 when the runtime has no task reporting", async () => {
+	await withServer(async (baseUrl) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		await fetch(`${baseUrl}/projects/${key}/sessions`, { method: "POST" });
+
+		for (const path of ["tasks", "tasks/t1", "tasks/t1/kill"]) {
+			const method = path.endsWith("kill") ? "POST" : "GET";
+			const response = await fetch(
+				`${baseUrl}/projects/${key}/sessions/sess-1/${path}`,
+				{ method },
+			);
+			assert.equal(response.status, 501, `${method} ${path}`);
+			assert.deepEqual(await response.json(), { error: "tasks_unavailable" });
+		}
+	});
+});
+
 test("routes to unknown projects and sessions return 404", async () => {
 	await withServer(async (baseUrl) => {
 		let response = await fetch(`${baseUrl}/projects/missing/sessions`);

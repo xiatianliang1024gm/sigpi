@@ -824,3 +824,213 @@ button:disabled {
 	background: var(--error);
 	border-color: var(--error);
 }
+
+/* --- background-task badge + popover --------------------------------------- */
+
+/* The badge leads the composer action row: the row is right-aligned, so the
+   auto right margin pins this to the far left (the otherwise-blank space),
+   whether or not the session info line is present. Muted with no tasks,
+   accented while one runs, and hidden entirely when no session is open. */
+.tasks {
+	position: relative;
+	flex: none;
+	display: flex;
+	align-items: center;
+	margin-right: auto;
+}
+
+.tasks-button {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: 30px;
+	padding: 0 9px;
+	border-radius: 6px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.tasks-button.has-tasks {
+	color: var(--text);
+}
+
+.tasks-button.has-running {
+	color: var(--accent);
+	border-color: var(--accent);
+}
+
+.tasks-button .icon {
+	width: 16px;
+	height: 16px;
+	fill: currentColor;
+}
+
+.tasks-count {
+	min-width: 14px;
+	text-align: center;
+	font-size: 12px;
+}
+
+/* The popover floats above the badge, anchored to the row's left edge. */
+.tasks-panel {
+	position: absolute;
+	bottom: calc(100% + 8px);
+	left: 0;
+	z-index: 20;
+	width: min(440px, calc(100vw - 32px));
+	max-height: min(60vh, 520px);
+	display: flex;
+	flex-direction: column;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+	overflow: hidden;
+}
+
+.tasks-panel-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+.tasks-close {
+	padding: 0 8px;
+	line-height: 1.4;
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	font-size: 16px;
+}
+
+.tasks-close:hover {
+	color: var(--text);
+}
+
+.tasks-list {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px;
+	overflow-y: auto;
+}
+
+.tasks-empty {
+	padding: 12px 8px;
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.task-item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	text-align: left;
+	background: transparent;
+	border: none;
+	border-radius: 6px;
+	padding: 6px 8px;
+}
+
+.task-item:hover {
+	background: var(--panel-2);
+}
+
+.task-label {
+	overflow: hidden;
+	color: var(--text);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.task-item.running .task-label {
+	color: var(--accent);
+}
+
+.task-meta {
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
+.tasks-detail {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 8px 10px 10px;
+	overflow-y: auto;
+}
+
+.task-back {
+	align-self: flex-start;
+	padding: 3px 8px;
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.task-back:hover {
+	color: var(--text);
+}
+
+.task-detail-meta {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	gap: 2px 10px;
+	margin: 0;
+	font-size: 12px;
+}
+
+.task-detail-meta dt {
+	color: var(--muted);
+}
+
+.task-detail-meta dd {
+	margin: 0;
+	overflow: hidden;
+	color: var(--text);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.task-output-label {
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.task-output {
+	margin: 0;
+	max-height: 240px;
+	overflow: auto;
+	padding: 8px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text);
+	font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.task-kill {
+	align-self: flex-start;
+	color: var(--error);
+	border-color: var(--error);
+}
+
+/* `hidden` toggles these elements off; without these rules the author `display`
+   above would win over the UA `[hidden] { display: none }` and leave them shown. */
+.tasks-button[hidden],
+.tasks-panel[hidden],
+.tasks-list[hidden],
+.tasks-detail[hidden] {
+	display: none;
+}

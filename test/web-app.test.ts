@@ -176,6 +176,23 @@ class Harness {
 		firstTokenAvgMs: 1000,
 		tokensPerSecond: 255,
 	};
+	/** Background tasks served by `GET .../tasks` (mutated by the kill route). */
+	tasks: Array<{
+		id: string;
+		pid: number | null;
+		command: string;
+		cwd: string;
+		description: string | null;
+		startedAt: number;
+		endedAt: number | null;
+		status: "running" | "done";
+		exitCode: number | null;
+		signal: string | null;
+		killed: boolean;
+		timedOut: boolean;
+	}> = [];
+	/** Canned output tails served by `GET .../tasks/:id`, keyed by task id. */
+	taskOutput = new Map<string, { output: string; truncated: boolean }>();
 
 	private constructor(dom: JSDOM) {
 		this.dom = dom;
@@ -346,6 +363,39 @@ class Harness {
 			/^\/projects\/[^/]+\/sessions\/[^/]+\/interrupt$/.test(pathname)
 		) {
 			return jsonResponse(200, { accepted: true });
+		}
+		if (
+			method === "GET" &&
+			/^\/projects\/[^/]+\/sessions\/[^/]+\/tasks$/.test(pathname)
+		) {
+			return jsonResponse(200, { tasks: this.tasks });
+		}
+		const taskKill =
+			/^\/projects\/[^/]+\/sessions\/[^/]+\/tasks\/([^/]+)\/kill$/.exec(
+				pathname,
+			);
+		if (method === "POST" && taskKill) {
+			const id = decodeURIComponent(taskKill[1] ?? "");
+			const task = this.tasks.find((candidate) => candidate.id === id);
+			if (!task) return jsonResponse(404, { error: "task_not_found" });
+			const wasRunning = task.status === "running";
+			task.status = "done";
+			task.killed = true;
+			task.endedAt = Date.now();
+			return jsonResponse(200, { killed: wasRunning });
+		}
+		const taskDetail =
+			/^\/projects\/[^/]+\/sessions\/[^/]+\/tasks\/([^/]+)$/.exec(pathname);
+		if (method === "GET" && taskDetail) {
+			const id = decodeURIComponent(taskDetail[1] ?? "");
+			const task = this.tasks.find((candidate) => candidate.id === id);
+			if (!task) return jsonResponse(404, { error: "task_not_found" });
+			const out = this.taskOutput.get(id) ?? { output: "", truncated: false };
+			return jsonResponse(200, {
+				task,
+				output: out.output,
+				truncated: out.truncated,
+			});
 		}
 
 		const sessionPatch = /^\/projects\/([^/]+)\/sessions\/([^/]+)$/.exec(
@@ -1380,6 +1430,106 @@ test("hides the context indicator before any usage is known", async () => {
 	assert.equal(el.querySelector(".context-ring-label")?.textContent, "?");
 });
 
+test("keeps the task badge hidden until a session is open", async () => {
+	const harness = await Harness.create();
+	const button = element<HTMLButtonElement>(harness.document, "tasks-button");
+	assert.equal(button.hidden, true, "no session means no badge");
+});
+
+test("lists background tasks, shows output, and kills one from the badge", async () => {
+	const harness = await openSession();
+	await flush();
+
+	const button = element<HTMLButtonElement>(harness.document, "tasks-button");
+	assert.equal(button.hidden, false, "an open session shows the badge");
+	assert.equal(
+		button.querySelector(".tasks-count")?.textContent,
+		"0",
+		"the badge starts at zero",
+	);
+	// The badge leads the action row, filling the blank space on its left.
+	const actions = harness.document.querySelector(".composer .composer-actions");
+	assert.equal(actions?.firstElementChild?.id, "tasks");
+
+	harness.tasks = [
+		{
+			id: "t1",
+			pid: 5,
+			command: "sleep 10",
+			cwd: "/tmp/demo",
+			description: "long job",
+			startedAt: Date.now() - 5000,
+			endedAt: null,
+			status: "running",
+			exitCode: null,
+			signal: null,
+			killed: false,
+			timedOut: false,
+		},
+	];
+	harness.taskOutput.set("t1", {
+		output: "line one\nline two",
+		truncated: false,
+	});
+
+	button.click();
+	await flush();
+
+	const panel = element<HTMLElement>(harness.document, "tasks-panel");
+	assert.equal(panel.hidden, false, "clicking the badge opens the popover");
+	assert.equal(
+		button.querySelector(".tasks-count")?.textContent,
+		"1",
+		"the badge reflects the refreshed count",
+	);
+	const item = harness.document.querySelector<HTMLButtonElement>(".task-item");
+	assert.ok(item, "the task row renders");
+	assert.match(item.textContent ?? "", /long job/);
+	assert.match(item.textContent ?? "", /运行中/);
+
+	item.click();
+	await flush();
+	assert.equal(
+		harness.document.querySelector(".task-output")?.textContent,
+		"line one\nline two",
+	);
+	const kill = harness.document.querySelector<HTMLButtonElement>(".task-kill");
+	assert.ok(kill, "a running task offers a stop button");
+	kill.click();
+	await flush();
+	assert.equal(
+		harness.callsTo("POST", "/projects/k1/sessions/s1/tasks/t1/kill").length,
+		1,
+	);
+	// After the kill the detail refreshes: the task is done, so the stop button
+	// is gone and the status reads as finished.
+	assert.equal(harness.document.querySelector(".task-kill"), null);
+	assert.match(
+		harness.document.querySelector(".task-detail-meta")?.textContent ?? "",
+		/完成/,
+	);
+});
+
+test("closes the task popover from the badge and the close button", async () => {
+	const harness = await openSession();
+	await flush();
+	const button = element<HTMLButtonElement>(harness.document, "tasks-button");
+	const panel = element<HTMLElement>(harness.document, "tasks-panel");
+
+	button.click();
+	await flush();
+	assert.equal(panel.hidden, false);
+	button.click();
+	await flush();
+	assert.equal(panel.hidden, true, "clicking the badge again closes it");
+
+	button.click();
+	await flush();
+	element<HTMLButtonElement>(harness.document, "tasks-close").click();
+	await flush();
+	assert.equal(panel.hidden, true, "the close button closes it");
+});
+
 test("renders the session info line in the composer", async () => {
 	const harness = await openSession();
 	await flush();
@@ -1395,6 +1545,7 @@ test("renders the session info line in the composer", async () => {
 	const actions = harness.document.querySelector(".composer .composer-actions");
 	assert.ok(actions, "the composer action row renders");
 	const tokens = Array.from(actions.children).map((node) => {
+		if (node.id === "tasks") return "tasks";
 		if (node.id === "session-info") return "info";
 		if (node.classList.contains("composer-meta")) return "meta";
 		if (node.id === "submit") return "submit";
@@ -1402,8 +1553,8 @@ test("renders the session info line in the composer", async () => {
 	});
 	assert.deepEqual(
 		tokens,
-		["info", "meta", "submit"],
-		"info text leads, model picker/context ring and send button follow",
+		["tasks", "info", "meta", "submit"],
+		"task badge leads, then info text, model picker/context ring and send button",
 	);
 	assert.equal(
 		harness.callsTo("GET", "/projects/k1/sessions/s1/stats").length,
