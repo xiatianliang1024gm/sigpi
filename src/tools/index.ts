@@ -37,3 +37,33 @@ export function createDefaultToolRegistry(
 	}
 	return registry;
 }
+
+/**
+ * Registry for the delegated sub-agent. It keeps the read-only inspection
+ * tools (`glob` / `grep` / `read`) and adds `bash` so a child can run commands
+ * — tests, builds, `git` — while gathering evidence. The dedicated mutation
+ * tools (`edit` / `write`) and the sub-agent's own `SubAgent` tool stay out, so
+ * a child can never recurse or reach for the file-editing tools.
+ *
+ * A sub-agent call is blocking and never runs concurrently with another
+ * sub-agent, and it is never backgrounded itself, so a shared shell is safe
+ * here. `bash` still runs against the project directory, and when the caller
+ * supplies a `bashToolContext` on the runner it reuses the main agent's output
+ * and background-task roots too.
+ */
+export function createSubAgentToolRegistry(
+	shellRuntime?: ShellRuntime,
+	bashConfig: RunShellConfig = {},
+): ToolRegistry {
+	const readTracker = new ReadTracker();
+	return new ToolRegistry([
+		globTool,
+		grepTool,
+		createReadTool(readTracker),
+		createBashTool(
+			shellRuntime ?? detectShellRuntime(),
+			bashConfig,
+			readTracker,
+		),
+	]);
+}

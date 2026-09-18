@@ -126,11 +126,11 @@ export const SUB_AGENT_OUTPUT_MAX_CHARS = 2_000;
 
 /**
  * System prompt for the delegated sub-agent. Deliberately separate from
- * {@link buildSystemPrompt}: the sub-agent gets no skills, no shell guidance,
- * and none of the main conversation's conventions — only its single-task
- * output contract. That contract is what makes context savings real: the
- * entire reply is fed back into the parent's window, so it must be short and
- * self-contained rather than a transcript of what was read.
+ * {@link buildSystemPrompt}: the sub-agent gets no skills and none of the main
+ * conversation's conventions — only its single-task output contract. That
+ * contract is what makes context savings real: the entire reply is fed back
+ * into the parent's window, so it must be short and self-contained rather than
+ * a transcript of what was read.
  */
 export function buildSubAgentSystemPrompt(options: { cwd: string }): string {
 	return [
@@ -139,7 +139,7 @@ export function buildSubAgentSystemPrompt(options: { cwd: string }): string {
 		[
 			"## Your task",
 			"Complete only the single task you were given. Do not broaden the scope, do not modify files, and do not ask questions — there is no one to answer them.",
-			"You have read-only tools (read, grep, glob); use them to gather evidence yourself instead of assuming file contents.",
+			"You have read, grep and glob to inspect the repo, and bash to run commands (tests, builds, git). Gather evidence yourself instead of assuming file contents; you have no file-editing tools, so keep the repo unchanged.",
 		].join("\n"),
 		[
 			"## Output contract",

@@ -3,6 +3,7 @@ import { TurnInterruptController, TurnInterruptedError } from "../interrupt.js";
 import { compactWhitespace, truncate } from "../progress.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type {
+	BashToolContext,
 	ContextBudget,
 	ModelProvider,
 	ModelUsage,
@@ -139,6 +140,12 @@ export function createSubAgentRunner(deps: {
 	/** Optional context-budget getter, reused from the main agent when given. */
 	getContextBudget?: () => ContextBudget;
 	/**
+	 * Shared `bash` tool context (output/background roots + rc definitions), so
+	 * the child's `bash` behaves like the main agent's. Omitted, `bash` falls
+	 * back to the OS temp dir and has no background-task manager.
+	 */
+	bashToolContext?: BashToolContext;
+	/**
 	 * Optional progress forwarding: relays the child's activity to the parent's
 	 * progress stream, each event tagged with a {@link SubAgentProgressMarker}
 	 * so a frontend can nest it under the parent's `SubAgent` tool line. See
@@ -170,6 +177,7 @@ export function createSubAgentRunner(deps: {
 					workingDirectory: deps.workingDirectory,
 					runId: deps.runId,
 					sessionId: deps.sessionId ?? null,
+					bashToolContext: deps.bashToolContext,
 				},
 			});
 

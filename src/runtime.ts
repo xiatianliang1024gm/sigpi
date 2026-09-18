@@ -33,12 +33,10 @@ import {
 import { captureRcDefinitions, detectShellRuntime } from "./shell.js";
 import { loadSkillCatalog } from "./skills/catalog.js";
 import { BackgroundTaskManager } from "./tools/background.js";
-import { globTool } from "./tools/builtin/glob.js";
-import { grepTool } from "./tools/builtin/grep.js";
-import { createReadTool } from "./tools/builtin/read.js";
-import { createDefaultToolRegistry } from "./tools/index.js";
-import { ReadTracker } from "./tools/read-tracker.js";
-import { ToolRegistry } from "./tools/registry.js";
+import {
+	createDefaultToolRegistry,
+	createSubAgentToolRegistry,
+} from "./tools/index.js";
 import type {
 	LoadedSession,
 	LoadedSkill,
@@ -280,34 +278,11 @@ export async function createAgentRuntime(
 	// sub-agent's progress callback forwards through it; without it the
 	// sub-agent's events would have no subscriber and the UI would stay silent.
 	const runnerRef: { current: AgentRunner | null } = { current: null };
-	// Restricted, read-only registry for the sub-agent: no edit/write/bash and
-	// no `SubAgent` itself, so a child can never recurse or mutate the repo.
-	const subTools = new ToolRegistry([
-		globTool,
-		grepTool,
-		createReadTool(new ReadTracker()),
-	]);
-	const subAgentRunner = createSubAgentRunner({
-		provider,
-		tools: subTools,
-		systemPrompt: buildSubAgentSystemPrompt({ cwd }),
-		workingDirectory: cwd,
-		maxSteps: config.tools.subAgent.maxSteps,
-		runId,
-		sessionId: sessionState.session?.sessionId ?? null,
-		logger: runtimeLogger,
-		getContextBudget,
-		onProgress: (event) => {
-			runnerRef.current?.emitProgress(event.type, event);
-		},
-	});
-	const tools = createDefaultToolRegistry(shellRuntime, config.tools.bash, {
-		// Only expose `SubAgent` when configured on; tests and default runs
-		// keep the registry unchanged.
-		subAgent: config.tools.subAgent.enabled ? subAgentRunner : undefined,
-	});
-	const toolSchemas = tools.getSchemas();
 
+	// Shell context shared by the main agent's `bash` tool and the sub-agent's:
+	// both write overflow/background output under the session's `bash-outputs`
+	// and source the same captured rc definitions. Built before either registry
+	// so the sub-agent can be handed a fully-formed context.
 	const sessionStoragePaths = resolveSessionStoragePaths({
 		cwd,
 		sessionsRoot: config.storage.sessionsRoot,
@@ -331,6 +306,29 @@ export async function createAgentRuntime(
 		rcDefinitionsFile,
 		tasks: backgroundTaskManager,
 	};
+
+	const subTools = createSubAgentToolRegistry(shellRuntime, config.tools.bash);
+	const subAgentRunner = createSubAgentRunner({
+		provider,
+		tools: subTools,
+		systemPrompt: buildSubAgentSystemPrompt({ cwd }),
+		workingDirectory: cwd,
+		maxSteps: config.tools.subAgent.maxSteps,
+		runId,
+		sessionId: sessionState.session?.sessionId ?? null,
+		logger: runtimeLogger,
+		getContextBudget,
+		bashToolContext,
+		onProgress: (event) => {
+			runnerRef.current?.emitProgress(event.type, event);
+		},
+	});
+	const tools = createDefaultToolRegistry(shellRuntime, config.tools.bash, {
+		// Only expose `SubAgent` when configured on; tests and default runs
+		// keep the registry unchanged.
+		subAgent: config.tools.subAgent.enabled ? subAgentRunner : undefined,
+	});
+	const toolSchemas = tools.getSchemas();
 
 	const runner = new AgentRunner({
 		provider,

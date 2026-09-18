@@ -3,7 +3,10 @@ import test from "node:test";
 import { createToolMessage } from "../src/agent/messages.js";
 import type { SubAgentResult, SubAgentRunner } from "../src/agent/sub-agent.js";
 import { createSubAgentTool } from "../src/tools/builtin/sub-agent.js";
-import { createDefaultToolRegistry } from "../src/tools/index.js";
+import {
+	createDefaultToolRegistry,
+	createSubAgentToolRegistry,
+} from "../src/tools/index.js";
 import { formatToolExecutionResult } from "../src/tools/render.js";
 
 function stubRunner(
@@ -95,4 +98,20 @@ test("the registry includes SubAgent when a runner is provided", () => {
 	const names = registry.getSchemas().map((schema) => schema.function.name);
 
 	assert.ok(names.includes("SubAgent"));
+});
+
+test("the sub-agent registry includes bash but not the mutation tools", () => {
+	const names = createSubAgentToolRegistry()
+		.getSchemas()
+		.map((schema) => schema.function.name);
+
+	for (const expected of ["glob", "grep", "read", "bash"]) {
+		assert.ok(names.includes(expected), `expected ${expected} in the registry`);
+	}
+	for (const forbidden of ["edit", "write", "update-plan", "SubAgent"]) {
+		assert.ok(
+			!names.includes(forbidden),
+			`did not expect ${forbidden} in the registry`,
+		);
+	}
 });

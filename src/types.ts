@@ -87,7 +87,7 @@ export interface SystemPromptSection {
 	content: string;
 }
 
-interface BashToolContext {
+export interface BashToolContext {
 	/** Directory where overflow output / background logs are written. */
 	outputDir: string;
 	/** Captured rc alias/function definitions written to this file (sourced as a preamble). */
