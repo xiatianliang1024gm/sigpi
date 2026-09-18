@@ -1313,6 +1313,119 @@ test("GET .../messages pages a stored session's history newest-first", async () 
 	});
 });
 
+/** An assistant step whose single tool call is an `update_plan`. */
+function historyPlanEntry(
+	id: string,
+	timestamp: string,
+	plan: Array<{ step: string; status: string }>,
+	explanation?: string,
+): SessionEntry {
+	const args: Record<string, unknown> = { plan };
+	if (explanation !== undefined) args.explanation = explanation;
+	return {
+		kind: "message",
+		id,
+		turnId: null,
+		timestamp,
+		message: {
+			role: "assistant",
+			content: null,
+			id: `${id}-msg`,
+			toolCalls: [
+				{
+					id: `${id}-call`,
+					name: "update_plan",
+					arguments: args,
+					rawArguments: JSON.stringify(args),
+				},
+			],
+		},
+	};
+}
+
+test("GET .../plan rebuilds a stored session's plan from its entries", async () => {
+	const entries = [
+		historyUserEntry("plan this", "e0"),
+		historyPlanEntry("e1", "2025-01-01T00:00:00.000Z", [
+			{ step: "a", status: "in_progress" },
+			{ step: "b", status: "pending" },
+		]),
+		historyPlanEntry(
+			"e2",
+			"2025-01-01T00:00:45.000Z",
+			[
+				{ step: "a", status: "completed" },
+				{ step: "b", status: "in_progress" },
+			],
+			"halfway",
+		),
+	];
+
+	await withHistoryServer("stored", entries, async (baseUrl) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+		const key = await addProject(baseUrl, dir);
+		const response = await fetch(
+			`${baseUrl}/projects/${key}/sessions/stored/plan`,
+		);
+		assert.equal(response.status, 200);
+		const body = (await response.json()) as {
+			plan: {
+				explanation: string | null;
+				updatedAt: string | null;
+				items: Array<{
+					step: string;
+					status: string;
+					startedAt: string | null;
+					completedAt: string | null;
+					elapsedMs: number | null;
+				}>;
+			} | null;
+		};
+		assert.equal(body.plan?.explanation, "halfway");
+		assert.equal(body.plan?.updatedAt, "2025-01-01T00:00:45.000Z");
+		assert.deepEqual(
+			body.plan?.items.map((item) => [item.step, item.status, item.elapsedMs]),
+			[
+				["a", "completed", 45_000],
+				["b", "in_progress", null],
+			],
+		);
+	});
+});
+
+test("GET .../plan answers null without a plan and 404s on unknown ids", async () => {
+	await withHistoryServer(
+		"stored",
+		[historyUserEntry("no plan here", "e0")],
+		async (baseUrl) => {
+			const dir = await mkdtemp(path.join(os.tmpdir(), "sigpi-web-"));
+			const key = await addProject(baseUrl, dir);
+
+			const empty = await fetch(
+				`${baseUrl}/projects/${key}/sessions/stored/plan`,
+			);
+			assert.equal(empty.status, 200);
+			assert.deepEqual(await empty.json(), { plan: null });
+
+			const unknownSession = await fetch(
+				`${baseUrl}/projects/${key}/sessions/nope/plan`,
+			);
+			assert.equal(unknownSession.status, 404);
+			assert.deepEqual(await unknownSession.json(), {
+				error: "session_not_found",
+			});
+
+			const unknownProject = await fetch(
+				`${baseUrl}/projects/missing/sessions/stored/plan`,
+			);
+			assert.equal(unknownProject.status, 404);
+			assert.deepEqual(await unknownProject.json(), {
+				error: "project_not_found",
+			});
+		},
+	);
+});
+
 async function withPickedServer(
 	pickDirectory: () => Promise<string | null>,
 	run: (baseUrl: string) => Promise<void>,

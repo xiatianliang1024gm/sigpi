@@ -3,6 +3,8 @@
 import { sessionBase } from "./api.js";
 import { loadContextUsage, setContextUsedTokens } from "./context.js";
 import { els, setConnection } from "./dom.js";
+import { renderPlan, resetPlan } from "./plan.js";
+import { foldPlanEvent } from "./plan-fold.js";
 import { applyTurnProgress, isTurnTerminalEvent } from "./reducer.js";
 import { loadSessions, resetModelState } from "./sessions.js";
 import { state } from "./state.js";
@@ -11,6 +13,10 @@ import { refreshTasks, resetTasks } from "./tasks.js";
 import { clearTurnNodes, view } from "./transcript.js";
 
 export function handleEvent(event) {
+	// The plan bar is a web-only surface fed by the same frames that drive the
+	// transcript: fold it here, before anything returns early, and repaint only
+	// when the plan actually changed.
+	if (foldPlanEvent(event)) renderPlan();
 	// Every in-flight frame carries the runner's live request-token estimate;
 	// fold it into the composer's context indicator so the count tracks the turn.
 	// A sub-agent frame's estimate describes the *child's* context window, which
@@ -127,4 +133,5 @@ export function disconnect() {
 	setTurnActive(false);
 	resetModelState();
 	resetTasks();
+	resetPlan();
 }

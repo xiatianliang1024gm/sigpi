@@ -237,8 +237,14 @@ SessionManager
   `TurnProgressEvent`，浏览器归约器与 TUI 同源、行为一致。
 - 客户端按功能拆成一组小 ES module：`app.js` 仅作入口（`initDom` / `resetState` 后接线），
   其余 `dom` / `state` / `format` / `api` / `sidebar` / `transcript` / `events` / `tree` /
-  `menus` / `projects` / `sessions` / `composer` 各管一块；模块间用 ES import 组合，共享
-  状态由 `state.js` 持有（`resetState()` 每次加载重建，保证 jsdom 多 harness 隔离）。
+  `menus` / `projects` / `sessions` / `composer` / `tasks` / `plan` / `plan-fold` 各管一块；
+  模块间用 ES import 组合，共享状态由 `state.js` 持有（`resetState()` 每次加载重建，保证
+  jsdom 多 harness 隔离）。其中 `reducer.js` / `plan-fold.js` / `session-format.js` /
+  `markdown.js` 保持**零 DOM**，以便 Node 直接单测。
+- `plan.js` + `plan-fold.js`：web 专属的 `update_plan` 视图（bar + 面板，见
+  `docs/handover-web-plan-panel.md`）——直播期间由 `plan-fold.js` 折叠 SSE 的
+  `tool_execution_started/finished` 帧，切会话时由 `plan.js` 拉 `GET .../plan`
+  （服务端 `src/server/plan-state.ts` 从持久化 entry 流重建）恢复。
 - 会话信息与上下文环：输入框操作行左侧 `#session-info` 显示会话统计（`N 轮 · M 步| LLM … · 工具调用
   …| 首 token 平均 … · … tok/s| 缓存命中 …%| 输入 … tok · 输出 … tok`，左对齐、超长省略），数据来自新路由
   `GET .../stats`（`src/server/session-stats.ts`：`derivePersistedStats` 从持久化 entry 流

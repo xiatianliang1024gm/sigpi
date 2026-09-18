@@ -29,6 +29,8 @@ const ASSET_CONTENT_TYPES: Record<string, string> = {
 	"context.js": JS,
 	"stats.js": JS,
 	"tasks.js": JS,
+	"plan.js": JS,
+	"plan-fold.js": JS,
 	"session-format.js": JS,
 	"tree.js": JS,
 	"menus.js": JS,

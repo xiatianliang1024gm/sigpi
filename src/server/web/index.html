@@ -61,6 +61,46 @@
 					Load earlier messages
 				</button>
 				<div id="transcript" class="transcript"></div>
+				<!-- The plan bar sits between the transcript and the composer: the
+				     step the agent is working on, with a live timer; clicking it
+				     opens the full plan above it. -->
+				<div id="plan" class="plan">
+					<button
+						id="plan-bar"
+						class="plan-bar"
+						type="button"
+						aria-haspopup="dialog"
+						aria-expanded="false"
+						hidden
+					>
+						<span class="plan-bar-icon" aria-hidden="true">📋</span>
+						<span id="plan-bar-label" class="plan-bar-label"></span>
+						<span id="plan-bar-time" class="plan-bar-time"></span>
+						<span class="plan-bar-caret" aria-hidden="true">▾</span>
+					</button>
+					<div
+						id="plan-panel"
+						class="plan-panel"
+						role="dialog"
+						aria-label="任务计划"
+						hidden
+					>
+						<div class="plan-panel-head">
+							<span class="plan-panel-title">任务计划</span>
+							<button
+								id="plan-close"
+								class="plan-close"
+								type="button"
+								title="关闭"
+								aria-label="关闭"
+							>
+								×
+							</button>
+						</div>
+						<div id="plan-list" class="plan-list"></div>
+						<div id="plan-meta" class="plan-meta"></div>
+					</div>
+				</div>
 				<div id="error" class="error" hidden></div>
 				<form id="composer" class="composer">
 					<textarea

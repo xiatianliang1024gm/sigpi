@@ -23,6 +23,13 @@ function collectEls() {
 		tasksList: document.getElementById("tasks-list"),
 		tasksDetail: document.getElementById("tasks-detail"),
 		tasksClose: document.getElementById("tasks-close"),
+		planBar: document.getElementById("plan-bar"),
+		planBarLabel: document.getElementById("plan-bar-label"),
+		planBarTime: document.getElementById("plan-bar-time"),
+		planPanel: document.getElementById("plan-panel"),
+		planList: document.getElementById("plan-list"),
+		planMeta: document.getElementById("plan-meta"),
+		planClose: document.getElementById("plan-close"),
 		error: document.getElementById("error"),
 	};
 }

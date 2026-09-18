@@ -5,6 +5,7 @@ import { restoreDraft, saveDraft } from "./composer.js";
 import { loadContextUsage, resetContextUsage } from "./context.js";
 import { els, showError } from "./dom.js";
 import { connect, disconnect, updateSubmitButton } from "./events.js";
+import { fetchPlan } from "./plan.js";
 import { loadProjects } from "./projects.js";
 import { state } from "./state.js";
 import { loadSessionStats, resetSessionStats } from "./stats.js";
@@ -109,6 +110,8 @@ export async function selectSession(projectKey, sessionId, { resume }) {
 	await loadHistory();
 	// Abandon the connect when the user switched again while history loaded.
 	if (state.sessionId !== sessionId || state.projectKey !== projectKey) return;
+	// `connect()` resets the plan (via `disconnect`), so restore the stored one
+	// only afterwards — otherwise the reset would wipe the fetch's result.
 	connect();
 	els.input.disabled = false;
 	els.input.focus();
@@ -116,6 +119,7 @@ export async function selectSession(projectKey, sessionId, { resume }) {
 	void loadContextUsage();
 	void loadSessionStats();
 	void refreshTasks();
+	void fetchPlan();
 }
 
 /** Delete one session and its stored messages; stop it first if it is live. */
