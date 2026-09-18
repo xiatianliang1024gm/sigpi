@@ -133,9 +133,36 @@ function dropToolbarCandidate() {
 	}
 }
 
+/**
+ * The chip that marks a line as a delegated sub-agent's activity. The reducer
+ * tags every forwarded sub-agent event with `subAgent` (see
+ * `src/session/events.ts`); the views render it as a nested, labelled block so
+ * it can never be read as the parent turn's own output.
+ */
+function buildSubAgentTag() {
+	const tag = document.createElement("span");
+	tag.className = "sub-tag";
+	tag.textContent = "sub-agent";
+	return tag;
+}
+
+/**
+ * Apply a line's scope to its element: sub-agent lines are indented under the
+ * `delegate to sub-agent` tool line and carry the chip. Returns nothing — the
+ * chip is the only added node, and callers that rewrite their label later
+ * (tool lines) keep it.
+ */
+function applyLineScope(element, options) {
+	if (!options?.subAgent) {
+		return;
+	}
+	element.classList.add("sub");
+	element.prepend(buildSubAgentTag());
+}
+
 /** The DOM-backed {@link TurnTranscriptView} the shared reducer writes to. */
 export const view = {
-	beginAssistantMessage() {
+	beginAssistantMessage(options) {
 		// A fresh LLM output supersedes the previous one, which was therefore an
 		// intermediate step: drop its copy/save toolbar.
 		dropToolbarCandidate();
@@ -144,7 +171,14 @@ export const view = {
 		let done = false;
 		const { root, reasoning, preview, body, content, actions } =
 			createAssistantMessage(() => contentText);
-		toolbarCandidate = actions;
+		// A sub-agent's streamed text is never the turn's answer, so it offers
+		// no copy/save toolbar — only the parent's final output does.
+		if (options?.subAgent) {
+			actions.remove();
+			applyLineScope(root, options);
+		} else {
+			toolbarCandidate = actions;
+		}
 		appendTurnNode(root);
 		return {
 			appendReasoning(text) {
@@ -168,7 +202,7 @@ export const view = {
 			},
 		};
 	},
-	beginToolLine(_id, label) {
+	beginToolLine(_id, label, options) {
 		// The assistant step that requested this tool call was intermediate, not
 		// the turn's final answer, so its copy/save toolbar is dropped.
 		dropToolbarCandidate();
@@ -178,6 +212,9 @@ export const view = {
 		labelEl.className = "tool-label";
 		labelEl.textContent = `⚙ ${label}`;
 		line.append(labelEl);
+		// The chip is a sibling of the label, so `finish()` / `fail()` can keep
+		// rewriting the label without losing it.
+		applyLineScope(line, options);
 		appendTurnNode(line);
 		return {
 			finish() {
@@ -199,10 +236,11 @@ export const view = {
 			},
 		};
 	},
-	appendSystem(text, tone) {
+	appendSystem(text, tone, options) {
 		const line = document.createElement("div");
 		line.className = tone ? `system ${tone}` : "system";
 		line.textContent = text;
+		applyLineScope(line, options);
 		appendTurnNode(line);
 	},
 };

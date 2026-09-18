@@ -69,6 +69,36 @@ test("every in-turn event gets a visible label (working/thinking/checkpoint)", (
 	}
 });
 
+test("sub-agent phases are labelled as delegated, never as the parent's own work", () => {
+	// The bar describes the main session, so a child's "thinking" must not read
+	// as the parent thinking — the turn is waiting on a delegated run.
+	const marker = { id: "run-1", task: "find the retry policy" };
+	assert.equal(
+		getStatusEventLabel({
+			type: "model_request_started",
+			step: 1,
+			subAgent: marker,
+		}),
+		"sub-agent · thinking",
+	);
+	assert.equal(
+		getStatusEventLabel({
+			type: "tool_execution_started",
+			step: 1,
+			toolName: "read",
+			toolCallId: "tc-child",
+			message: "Read runner.ts",
+			subAgent: marker,
+		}),
+		"sub-agent · working",
+	);
+	// The parent's own events keep the unprefixed label.
+	assert.equal(
+		getStatusEventLabel({ type: "model_request_started", step: 1 }),
+		"thinking",
+	);
+});
+
 test("model generation phases map to thinking", () => {
 	assert.equal(
 		getStatusEventLabel({ type: "model_request_started", step: 1 }),

@@ -697,6 +697,38 @@ button:disabled {
 	color: var(--error);
 }
 
+/* --- sub-agent activity ---------------------------------------------------- */
+
+/* A delegated sub-agent run's lines (its tool calls, streamed text, notices)
+   are nested under the parent's `delegate to sub-agent` line: one extra indent
+   plus a faint rule, and a chip so a scrolled-away delegate line can never make
+   the child's output read as the parent's. */
+.sub-tag {
+	display: inline-block;
+	margin-right: 6px;
+	padding: 0 5px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	color: var(--muted);
+	font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 11px;
+	line-height: 1.5;
+	vertical-align: baseline;
+	opacity: 0.9;
+}
+
+.tool.sub,
+.system.sub,
+.msg.assistant.sub {
+	margin-left: 14px;
+	padding-left: 10px;
+	border-left: 2px solid var(--border);
+}
+
+.msg.assistant.sub {
+	color: var(--muted);
+}
+
 .error {
 	margin: 0 16px;
 	padding: 8px 12px;

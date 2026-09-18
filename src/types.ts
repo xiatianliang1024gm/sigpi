@@ -274,6 +274,29 @@ export interface TurnProgressEventMap {
 	};
 }
 
+/**
+ * Marks a turn-progress event as belonging to a **sub-agent run** instead of
+ * the parent turn that spawned it.
+ *
+ * The sub-agent's own `AgentRunner` emits the same events as the parent's
+ * (`TURN_PROGRESS_EVENTS`); the parent's runtime forwards them onto its own
+ * stream so a frontend can show the delegated work instead of going silent for
+ * the whole run (see `docs/handover-subagent-tool.md` §7). The marker is what
+ * lets TUI/Web tell the two apart.
+ *
+ * Invariant: a tagged event is always *mid-run activity*. The child's turn
+ * lifecycle events (`turn_started` and the four terminal ones) are **not**
+ * forwarded — they would end the parent's turn in every frontend that keys on
+ * them (transcript reset, turn clock, session event log). The parent's
+ * `SubAgent` tool line already brackets the run in the transcript.
+ */
+export interface SubAgentProgressMarker {
+	/** Correlates every event of one sub-agent run. */
+	id: string;
+	/** Short label of the delegated task, for progress lines. */
+	task: string;
+}
+
 /** Names of every turn-progress event, for subscribing to the whole stream. */
 export const TURN_PROGRESS_EVENTS = [
 	"turn_started",
@@ -299,6 +322,7 @@ export const TURN_PROGRESS_EVENTS = [
 export type TurnProgressPayload = {
 	[K in keyof TurnProgressEventMap]: TurnProgressEventMap[K] & {
 		estimatedContextTokens?: number;
+		subAgent?: SubAgentProgressMarker;
 	};
 }[keyof TurnProgressEventMap];
 
@@ -307,10 +331,12 @@ export type TurnProgressPayload = {
  * event name tagged back onto the payload. `estimatedContextTokens` is the
  * live in-flight request-token estimate the runner attaches at emit time; it
  * is absent on synthetic events (e.g. a REPL-emitted `interrupt_requested`).
+ * `subAgent` is present only on events forwarded from a sub-agent run.
  */
 export type TurnProgressEvent = {
 	[K in keyof TurnProgressEventMap]: { type: K } & TurnProgressEventMap[K] & {
 			estimatedContextTokens?: number;
+			subAgent?: SubAgentProgressMarker;
 		};
 }[keyof TurnProgressEventMap];
 

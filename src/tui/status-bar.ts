@@ -213,6 +213,18 @@ export function getStatusEventLabel(
 		return null;
 	}
 
+	const phase = getTurnPhaseLabel(event);
+	if (!event.subAgent) {
+		return phase;
+	}
+	// A sub-agent run's events describe delegated work: without the prefix the
+	// bar would report the parent turn "thinking"/"working" and the user would
+	// have no way to tell that the turn is currently blocked on a child.
+	return phase ? `sub-agent · ${phase}` : "sub-agent";
+}
+
+/** The phase label of an event, ignoring which agent emitted it. */
+function getTurnPhaseLabel(event: TurnProgressEvent): string | null {
 	switch (event.type) {
 		case "turn_started":
 		case "step_started":

@@ -47,6 +47,11 @@ test("alias maps drive parseTomlConfig for every section", () => {
 			max_output_length: 1,
 			env_file: "e",
 		},
+		subAgent: {
+			enabled: true,
+			max_steps: 1,
+			model: "m",
+		},
 	};
 	const tomlSections: Record<string, string> = {
 		model: "models.t",
@@ -55,6 +60,7 @@ test("alias maps drive parseTomlConfig for every section", () => {
 		storage: "storage",
 		shell: "shell",
 		bash: "tools.bash",
+		subAgent: "tools.sub_agent",
 	};
 
 	for (const [section, aliases] of Object.entries(CONFIG_ALIASES)) {
@@ -74,9 +80,11 @@ test("alias maps drive parseTomlConfig for every section", () => {
 		const mapped =
 			section === "bash"
 				? parsed.tools?.bash
-				: section === "model"
-					? parsed.models?.t
-					: (parsed as Record<string, unknown>)[section];
+				: section === "subAgent"
+					? parsed.tools?.subAgent
+					: section === "model"
+						? parsed.models?.t
+						: (parsed as Record<string, unknown>)[section];
 		assert.ok(
 			mapped,
 			`section "${section}" should map through parseTomlConfig`,
@@ -356,6 +364,55 @@ test("loadAppConfig defaults [tools.bash] bounds when unset", async () => {
 	assert.equal(config.tools.bash.maxTimeoutMs, 600000);
 	assert.equal(config.tools.bash.maxOutputLength, 30000);
 	assert.equal(config.tools.bash.envFile, undefined);
+});
+
+test("loadAppConfig defaults [tools.sub_agent] to disabled", async () => {
+	const homeDir = await createTempDir("sigpi-config-subagent-default-home-");
+	await mkdir(path.join(homeDir, ".sigpi"), { recursive: true });
+	await writeFile(
+		path.join(homeDir, ".sigpi", "config.toml"),
+		[
+			"[model]",
+			'default = "m"',
+			"[models.m]",
+			'base_url = "https://x/v1"',
+			'api_key = "k"',
+			'name = "n"',
+		].join("\n"),
+		"utf8",
+	);
+
+	const config = loadAppConfig({ homeDir, env: {} });
+	assert.equal(config.tools.subAgent.enabled, false);
+	assert.equal(config.tools.subAgent.maxSteps, 20);
+	assert.equal(config.tools.subAgent.model, undefined);
+});
+
+test("loadAppConfig parses [tools.sub_agent] keys incl. the max_steps alias", async () => {
+	const homeDir = await createTempDir("sigpi-config-subagent-home-");
+	await mkdir(path.join(homeDir, ".sigpi"), { recursive: true });
+	await writeFile(
+		path.join(homeDir, ".sigpi", "config.toml"),
+		[
+			"[model]",
+			'default = "m"',
+			"[models.m]",
+			'base_url = "https://x/v1"',
+			'api_key = "k"',
+			'name = "n"',
+			"",
+			"[tools.sub_agent]",
+			"enabled = true",
+			"max_steps = 7",
+			'model = "fast"',
+		].join("\n"),
+		"utf8",
+	);
+
+	const config = loadAppConfig({ homeDir, env: {} });
+	assert.equal(config.tools.subAgent.enabled, true);
+	assert.equal(config.tools.subAgent.maxSteps, 7);
+	assert.equal(config.tools.subAgent.model, "fast");
 });
 
 test("loadAppConfig remembers the last selected configured model", async () => {

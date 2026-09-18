@@ -1,5 +1,10 @@
 import type { AgentRunner } from "./agent/runner.js";
-import type { ModelUsage, RuntimeLogger, TurnProgressEvent } from "./types.js";
+import type {
+	JsonValue,
+	ModelUsage,
+	RuntimeLogger,
+	TurnProgressEvent,
+} from "./types.js";
 
 /**
  * Turn-progress events the runner used to log inline, now logged from a
@@ -22,6 +27,17 @@ export function wireProgressLogging(
 	});
 
 	runner.onProgress((event: TurnProgressEvent) => {
+		// A forwarded sub-agent event belongs to the parent turn (its `turnId` is
+		// still the parent's, and the child's own turn events are never
+		// forwarded) but carries its own run id, so a reader can tell the child's
+		// tool calls from the parent's — without it the child's step numbers read
+		// as extra steps the parent never took.
+		const subAgentFields: Record<string, JsonValue | undefined> = event.subAgent
+			? {
+					subAgentId: event.subAgent.id,
+					subAgentTask: event.subAgent.task,
+				}
+			: {};
 		switch (event.type) {
 			case "turn_started":
 				turnId = event.turnId;
@@ -37,12 +53,14 @@ export function wireProgressLogging(
 					trigger: event.trigger,
 					tokensBefore: event.tokensBefore,
 					tokensAfter: event.tokensAfter,
+					...subAgentFields,
 				});
 				break;
 			case "context_checkpoint":
 				logger.warn("turn_empty_response_retry", {
 					turnId: turnId ?? undefined,
 					step: event.step,
+					...subAgentFields,
 				});
 				break;
 			case "tool_calls_received":
@@ -50,6 +68,7 @@ export function wireProgressLogging(
 					turnId: turnId ?? undefined,
 					step: event.step,
 					toolCallCount: event.count,
+					...subAgentFields,
 				});
 				break;
 			case "tool_execution_started":
@@ -60,6 +79,7 @@ export function wireProgressLogging(
 					arguments: event.arguments
 						? JSON.stringify(event.arguments)
 						: undefined,
+					...subAgentFields,
 				});
 				break;
 			case "tool_execution_finished":
@@ -70,6 +90,7 @@ export function wireProgressLogging(
 						toolName: event.toolName,
 						ok: true,
 						elapsedMs: event.elapsedMs,
+						...subAgentFields,
 					});
 				} else {
 					logger.error("tool_execution_failed", {
@@ -78,6 +99,7 @@ export function wireProgressLogging(
 						toolName: event.toolName,
 						error: event.result ?? null,
 						elapsedMs: event.elapsedMs,
+						...subAgentFields,
 					});
 				}
 				break;

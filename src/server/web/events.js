@@ -13,7 +13,12 @@ import { clearTurnNodes, view } from "./transcript.js";
 export function handleEvent(event) {
 	// Every in-flight frame carries the runner's live request-token estimate;
 	// fold it into the composer's context indicator so the count tracks the turn.
-	setContextUsedTokens(event.estimatedContextTokens);
+	// A sub-agent frame's estimate describes the *child's* context window, which
+	// is a separate, discarded conversation — folding it in would make the
+	// session's context ring jump to an unrelated (usually tiny) figure.
+	if (!event.subAgent) {
+		setContextUsedTokens(event.estimatedContextTokens);
+	}
 	if (event.type === "ready") {
 		setTurnActive(Boolean(event.turnActive));
 		return;
@@ -21,6 +26,8 @@ export function handleEvent(event) {
 	if (event.type === "turn_started") {
 		// A (re)played turn_started begins a fresh in-flight turn: drop whatever
 		// partial copy the transcript holds so a reconnect rebuilds in place.
+		// Only the parent turn emits this: sub-agent frames are activity-only,
+		// so a child run can never reset the transcript or end the turn below.
 		clearTurnNodes();
 		state.currentAssistant = null;
 		state.toolLines.clear();

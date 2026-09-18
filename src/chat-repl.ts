@@ -169,7 +169,14 @@ export async function formatStatusBarForEvent(
 	turnContext: StatusBarTurnContext = {},
 ): Promise<StatusBarModel> {
 	let model: StatusBarModel;
-	if (typeof event?.estimatedContextTokens === "number") {
+	if (
+		typeof event?.estimatedContextTokens === "number" &&
+		// A sub-agent frame's estimate measures the *child's* own context, which
+		// is discarded when the run returns. Letting it through would make the
+		// bar's context window (the main session's) jump to an unrelated figure
+		// for the duration of the child run; only the label follows the child.
+		!event.subAgent
+	) {
 		// A live, in-flight estimate of the request being built. It has no
 		// completed `usage` payload yet, so the bar shows the estimate only.
 		model = await buildStatusBarModel(

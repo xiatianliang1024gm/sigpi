@@ -52,4 +52,6 @@ web/SSE frontend hold one; it never touches the terminal.
 The minimal output surface (`TurnTranscriptView`, `src/session/events.ts`) that
 `applyTurnProgress` folds `TurnProgressEvent`s into. `ReplView` (TUI) and a web
 transcript sink both implement it, which is what lets one reducer drive every
-frontend.
+frontend. Every line may carry a scope (`TranscriptLineOptions.subAgent`): a
+delegated sub-agent run's activity is rendered nested and labelled rather than
+as the parent turn's own output — see `docs/handover-subagent-tool.md` §7.

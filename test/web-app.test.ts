@@ -944,6 +944,113 @@ test("folds a streamed turn into the DOM transcript", async () => {
 	);
 });
 
+test("nests a delegated sub-agent run in the DOM transcript", async () => {
+	const harness = await openSession();
+	await flush();
+	const source = harness.sources.at(-1);
+	assert.ok(source, "an EventSource was opened");
+	source.message({ type: "ready", turnActive: false });
+	source.message({ type: "turn_started", turnId: "t", userInput: "hi" });
+	// The parent's own estimate, which the context ring shows.
+	source.message({
+		type: "model_delta",
+		step: 2,
+		estimatedContextTokens: 4200,
+	});
+	const marker = { id: "run-1", task: "find the retry policy" };
+
+	// The parent delegates. This line is the only thing the parent emits for the
+	// rest of the run — the child does everything else.
+	source.message({
+		type: "tool_execution_started",
+		step: 2,
+		toolName: "SubAgent",
+		toolCallId: "tc-sub",
+		message: 'delegate to sub-agent: "find the retry policy"',
+	});
+	// The child streams a step, then calls a tool; its own estimate is tiny
+	// because the child's context is a separate, discarded conversation.
+	source.message({
+		type: "model_delta",
+		step: 1,
+		contentDelta: "Looking at the runner.",
+		estimatedContextTokens: 1_200,
+		subAgent: marker,
+	});
+	source.message({ type: "model_request_finished", step: 1, subAgent: marker });
+	source.message({
+		type: "tool_execution_started",
+		step: 2,
+		toolName: "read",
+		toolCallId: "tc-child",
+		message: "Read runner.ts",
+		subAgent: marker,
+	});
+	await flush();
+
+	const tools = harness.document.querySelectorAll("#transcript .tool");
+	assert.equal(tools.length, 2);
+	// The parent's delegate line is still running: the child's step boundary
+	// resolved nothing and failed nothing.
+	assert.match(tools[0]?.className ?? "", /tool running/);
+	assert.equal(tools[0]?.querySelector(".sub-tag"), null);
+	// The child's read is nested and tagged.
+	assert.equal(tools[1]?.classList.contains("sub"), true);
+	assert.equal(tools[1]?.querySelector(".sub-tag")?.textContent, "sub-agent");
+	assert.equal(tools[1]?.textContent, "sub-agent⚙ Read runner.ts");
+
+	const childAnswer = harness.document.querySelector(
+		"#transcript .msg.assistant.sub",
+	);
+	assert.equal(
+		childAnswer?.querySelector(".sub-tag")?.textContent,
+		"sub-agent",
+	);
+	assert.equal(
+		childAnswer?.querySelector(".content")?.textContent,
+		"Looking at the runner.",
+	);
+	// A sub-agent's streamed text is never the turn's answer, so it offers no
+	// copy/save toolbar.
+	assert.equal(childAnswer?.querySelector(".msg-actions"), null);
+
+	// The turn is still in flight, and the ring still shows the *parent's*
+	// estimate rather than the child's unrelated figure.
+	assert.equal(harness.document.body.classList.contains("busy"), true);
+	assert.equal(
+		element<HTMLElement>(harness.document, "context-usage").querySelector(
+			".context-ring-label",
+		)?.textContent,
+		"4%",
+	);
+
+	// The child returns: its own tool resolves, then the parent's delegate line.
+	source.message({
+		type: "tool_execution_finished",
+		step: 2,
+		toolName: "read",
+		toolCallId: "tc-child",
+		ok: true,
+		subAgent: marker,
+	});
+	source.message({
+		type: "tool_execution_finished",
+		step: 2,
+		toolName: "SubAgent",
+		toolCallId: "tc-sub",
+		ok: true,
+	});
+	assert.match(tools[0]?.className ?? "", /tool ok/);
+	assert.equal(
+		tools[0]?.textContent,
+		'✓ delegate to sub-agent: "find the retry policy"',
+	);
+
+	source.message({ type: "turn_finished", step: 2, usage: null });
+	await flush();
+	assert.equal(harness.document.body.classList.contains("busy"), false);
+});
+
 test("rebuilds the in-flight turn when a reconnect replays turn_started", async () => {
 	const harness = await openSession();
 	const source = harness.sources.at(-1);

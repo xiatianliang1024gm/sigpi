@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { ConversationContext } from "./agent/context.js";
 import { AgentRunner } from "./agent/runner.js";
+import { createSubAgentRunner } from "./agent/sub-agent.js";
 import { type AgentTurn, createAgentTurn } from "./agent/turn.js";
 import {
 	type AppConfig,
@@ -11,7 +12,11 @@ import {
 	loadAppConfig,
 	type ModelConfig,
 } from "./config.js";
-import { buildSystemPrompt, buildSystemPromptSections } from "./defaults.js";
+import {
+	buildSubAgentSystemPrompt,
+	buildSystemPrompt,
+	buildSystemPromptSections,
+} from "./defaults.js";
 import { createChildLogger, createLogger } from "./logger.js";
 import { createModelProvider } from "./model/provider.js";
 import { wireProgressLogging } from "./progress-logging.js";
@@ -28,7 +33,12 @@ import {
 import { captureRcDefinitions, detectShellRuntime } from "./shell.js";
 import { loadSkillCatalog } from "./skills/catalog.js";
 import { BackgroundTaskManager } from "./tools/background.js";
+import { globTool } from "./tools/builtin/glob.js";
+import { grepTool } from "./tools/builtin/grep.js";
+import { createReadTool } from "./tools/builtin/read.js";
 import { createDefaultToolRegistry } from "./tools/index.js";
+import { ReadTracker } from "./tools/read-tracker.js";
+import { ToolRegistry } from "./tools/registry.js";
 import type {
 	LoadedSession,
 	LoadedSkill,
@@ -232,18 +242,18 @@ export async function createAgentRuntime(
 			cwd,
 			config,
 		});
-	const tools = createDefaultToolRegistry(shellRuntime, config.tools.bash);
 	// Holder for the *active* model so the context budget getter can track
 	// `/model switch` each turn. The context never caches a budget;
 	// it re-reads this holder on every compaction / estimate.
 	const activeModelRef: { current: ModelConfig } = { current: config.model };
+	const getContextBudget = () => ({
+		hardContextLimit: activeModelRef.current.hardContextLimit ?? 200_000,
+		reserveTokens: activeModelRef.current.reserveTokens ?? 16_384,
+		keepRecentTokens: activeModelRef.current.keepRecentTokens ?? 20_000,
+	});
 	const conversationContext = new ConversationContext({
 		summaryEnabled: true,
-		getContextBudget: () => ({
-			hardContextLimit: activeModelRef.current.hardContextLimit ?? 200_000,
-			reserveTokens: activeModelRef.current.reserveTokens ?? 16_384,
-			keepRecentTokens: activeModelRef.current.keepRecentTokens ?? 20_000,
-		}),
+		getContextBudget,
 		logger: runLogger,
 		runId,
 		sessionId: args.sessionId ?? null,
@@ -265,6 +275,37 @@ export async function createAgentRuntime(
 		sessionId: sessionState.session?.sessionId ?? null,
 	});
 	const provider = createModelProvider(config.model, runtimeLogger);
+
+	// Holder for the main runner, filled in once it exists below. The
+	// sub-agent's progress callback forwards through it; without it the
+	// sub-agent's events would have no subscriber and the UI would stay silent.
+	const runnerRef: { current: AgentRunner | null } = { current: null };
+	// Restricted, read-only registry for the sub-agent: no edit/write/bash and
+	// no `SubAgent` itself, so a child can never recurse or mutate the repo.
+	const subTools = new ToolRegistry([
+		globTool,
+		grepTool,
+		createReadTool(new ReadTracker()),
+	]);
+	const subAgentRunner = createSubAgentRunner({
+		provider,
+		tools: subTools,
+		systemPrompt: buildSubAgentSystemPrompt({ cwd }),
+		workingDirectory: cwd,
+		maxSteps: config.tools.subAgent.maxSteps,
+		runId,
+		sessionId: sessionState.session?.sessionId ?? null,
+		logger: runtimeLogger,
+		getContextBudget,
+		onProgress: (event) => {
+			runnerRef.current?.emitProgress(event.type, event);
+		},
+	});
+	const tools = createDefaultToolRegistry(shellRuntime, config.tools.bash, {
+		// Only expose `SubAgent` when configured on; tests and default runs
+		// keep the registry unchanged.
+		subAgent: config.tools.subAgent.enabled ? subAgentRunner : undefined,
+	});
 	const toolSchemas = tools.getSchemas();
 
 	const sessionStoragePaths = resolveSessionStoragePaths({
@@ -306,6 +347,9 @@ export async function createAgentRuntime(
 	});
 	// Turn-progress events → dated log file (the runner itself only emits).
 	wireProgressLogging(runner, runtimeLogger);
+	// Now that the main runner exists, the sub-agent's progress bridge can
+	// forward child events onto it (see `onProgress` above).
+	runnerRef.current = runner;
 
 	const sessionRuntime = sessionState.session
 		? new SessionRuntime(

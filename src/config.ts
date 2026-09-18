@@ -90,6 +90,18 @@ const bashConfigSchema = z.object({
 	envFile: z.string().min(1).optional(),
 });
 
+const subAgentConfigSchema = z.object({
+	/** Whether the `SubAgent` tool is exposed to the main agent. Off by default. */
+	enabled: z.boolean().default(false),
+	/** Hard cap on the sub-agent's own agent-loop steps. */
+	maxSteps: z.number().int().positive().default(20),
+	/**
+	 * Optional model id (a key under `[models]`) for the sub-agent to use
+	 * instead of the main agent's active model. Unset reuses the main provider.
+	 */
+	model: z.string().optional(),
+});
+
 const appConfigSchema = z.object({
 	model: modelConfigSchema,
 	modelId: z.string().min(1),
@@ -101,6 +113,7 @@ const appConfigSchema = z.object({
 	tools: z
 		.object({
 			bash: bashConfigSchema.default({}),
+			subAgent: subAgentConfigSchema.default({}),
 		})
 		.default({}),
 });
@@ -150,9 +163,14 @@ const BASH_ALIASES: Record<string, string> = {
 	maxOutputLength: "max_output_length",
 	envFile: "env_file",
 };
+const SUB_AGENT_ALIASES: Record<string, string> = {
+	enabled: "enabled",
+	maxSteps: "max_steps",
+	model: "model",
+};
 
 /**
- * The six section alias maps, grouped as the canonical camelCase ↔ snake_case
+ * The section alias maps, grouped as the canonical camelCase ↔ snake_case
  * contract. Exported so tests can assert every alias is wired through
  * `parseTomlConfig` (forward completeness); the reverse direction is enforced
  * at module load by `snakeFields`.
@@ -164,6 +182,7 @@ export const CONFIG_ALIASES = {
 	storage: STORAGE_ALIASES,
 	shell: SHELL_ALIASES,
 	bash: BASH_ALIASES,
+	subAgent: SUB_AGENT_ALIASES,
 };
 
 /**
@@ -212,6 +231,11 @@ const tomlRootSchema = z.object({
 	tools: z
 		.object({
 			bash: snakeFields(bashConfigSchema, BASH_ALIASES, true).optional(),
+			sub_agent: snakeFields(
+				subAgentConfigSchema,
+				SUB_AGENT_ALIASES,
+				true,
+			).optional(),
 		})
 		.strict()
 		.partial()
@@ -272,8 +296,18 @@ export interface RunShellConfig {
 	envFile?: string;
 }
 
+export interface SubAgentConfig {
+	/** Whether the `SubAgent` tool is exposed to the main agent. */
+	enabled: boolean;
+	/** Hard cap on the sub-agent's own agent-loop steps. */
+	maxSteps: number;
+	/** Optional model id for the sub-agent; unset reuses the main provider. */
+	model?: string;
+}
+
 interface ToolsConfig {
 	bash: RunShellConfig;
+	subAgent: SubAgentConfig;
 }
 
 export interface AppConfig {
@@ -289,6 +323,7 @@ export interface AppConfig {
 
 interface PartialToolsConfig {
 	bash?: Partial<RunShellConfig>;
+	subAgent?: Partial<SubAgentConfig>;
 }
 
 interface PartialConfig {
@@ -523,6 +558,14 @@ export function parseTomlConfig(content: string): PartialConfig {
 					bash: validated.tools.bash
 						? mapSection<RunShellConfig>(validated.tools.bash, BASH_ALIASES)
 						: undefined,
+					...(validated.tools.sub_agent
+						? {
+								subAgent: mapSection<SubAgentConfig>(
+									validated.tools.sub_agent,
+									SUB_AGENT_ALIASES,
+								),
+							}
+						: {}),
 				}
 			: undefined,
 	};
@@ -773,6 +816,10 @@ function mergeToolConfig(
 		bash: {
 			...(base?.bash ?? {}),
 			...(override.bash ?? {}),
+		},
+		subAgent: {
+			...(base?.subAgent ?? {}),
+			...(override.subAgent ?? {}),
 		},
 	};
 }

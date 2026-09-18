@@ -31,17 +31,23 @@ async function loadReducer(): Promise<{
 	};
 }
 
+/** `:sub-agent` when the line belongs to a delegated sub-agent run. */
+function scopeSuffix(options?: { subAgent?: unknown }): string {
+	return options?.subAgent ? ":sub-agent" : "";
+}
+
 function makeView() {
 	const assistants: Assistant[] = [];
 	const log: string[] = [];
 	const view = {
-		beginAssistantMessage() {
+		beginAssistantMessage(options?: { subAgent?: unknown }) {
 			const assistant: Assistant = {
 				reasoning: "",
 				content: "",
 				finalized: false,
 			};
 			assistants.push(assistant);
+			log.push(`answer${scopeSuffix(options)}`);
 			return {
 				appendReasoning(text: string) {
 					if (!assistant.finalized) assistant.reasoning += text;
@@ -54,8 +60,8 @@ function makeView() {
 				},
 			};
 		},
-		beginToolLine(id: string, label: string) {
-			log.push(`start:${id}:${label}`);
+		beginToolLine(id: string, label: string, options?: { subAgent?: unknown }) {
+			log.push(`start:${id}:${label}${scopeSuffix(options)}`);
 			return {
 				finish() {
 					log.push(`finish:${id}`);
@@ -65,8 +71,12 @@ function makeView() {
 				},
 			};
 		},
-		appendSystem(text: string, tone?: string) {
-			log.push(`sys:${tone ?? "none"}:${text}`);
+		appendSystem(
+			text: string,
+			tone?: string,
+			options?: { subAgent?: unknown },
+		) {
+			log.push(`sys:${tone ?? "none"}:${text}${scopeSuffix(options)}`);
 		},
 	};
 	return { view, assistants, log };
@@ -244,6 +254,166 @@ test("applyTurnProgress surfaces interrupts, failures, and compactions as system
 	assert.equal(isTurnTerminalEvent({ type: "turn_finished" }), true);
 	assert.equal(isTurnTerminalEvent({ type: "turn_failed" }), true);
 	assert.equal(isTurnTerminalEvent({ type: "model_delta" }), false);
+});
+
+test("applyTurnProgress nests sub-agent activity and never ends the parent turn", async () => {
+	// The browser reducer is a verbatim port of the TUI's, so this mirrors the
+	// equivalent case in `cli-turn-progress.test.ts`: a delegated run's events
+	// arrive tagged, must reach the view as nested/labelled lines, and must not
+	// resolve the parent's still-running `SubAgent` tool line.
+	const { applyTurnProgress, isTurnTerminalEvent } = await loadReducer();
+	const { view, assistants, log } = makeView();
+	const toolLines = new Map<string, unknown>();
+	const marker = { id: "run-1", task: "find the retry policy" };
+
+	let current: unknown = null;
+	current = applyTurnProgress(
+		view,
+		{
+			type: "tool_execution_started",
+			step: 2,
+			toolName: "SubAgent",
+			toolCallId: "tc-sub",
+			message: 'delegate to sub-agent: "find the retry policy"',
+		},
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "model_delta",
+			step: 1,
+			contentDelta: "Looking at the runner.",
+			subAgent: marker,
+		},
+		current,
+		toolLines,
+	);
+	// The child's step boundary finalizes the child's own component and leaves
+	// the parent's delegate line alone.
+	current = applyTurnProgress(
+		view,
+		{ type: "model_request_finished", step: 1, subAgent: marker },
+		current,
+		toolLines,
+	);
+	assert.equal(current, null);
+	assert.equal(
+		toolLines.size,
+		1,
+		"the parent's delegate line is still running",
+	);
+
+	current = applyTurnProgress(
+		view,
+		{
+			type: "tool_execution_started",
+			step: 2,
+			toolName: "read",
+			toolCallId: "tc-child",
+			message: "Read runner.ts",
+			subAgent: marker,
+		},
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "tool_execution_finished",
+			step: 2,
+			toolName: "read",
+			toolCallId: "tc-child",
+			ok: true,
+			subAgent: marker,
+		},
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "context_compacted",
+			step: 2,
+			tokensBefore: 9_000,
+			tokensAfter: 4_000,
+			subAgent: marker,
+		},
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "tool_execution_finished",
+			step: 2,
+			toolName: "SubAgent",
+			toolCallId: "tc-sub",
+			ok: true,
+		},
+		current,
+		toolLines,
+	);
+	assert.equal(toolLines.size, 0);
+
+	assert.deepEqual(log, [
+		'start:tc-sub:delegate to sub-agent: "find the retry policy"',
+		"answer:sub-agent",
+		"start:tc-child:Read runner.ts:sub-agent",
+		"finish:tc-child",
+		"sys:info:Context compacted: context window 9K → 4K tokens.:sub-agent",
+		"finish:tc-sub",
+	]);
+	assert.equal(assistants.length, 1);
+	assert.equal(assistants[0].content, "Looking at the runner.");
+
+	// A tagged frame is never a turn boundary — the guard the web client and the
+	// TUI both rely on to keep the turn (and its clock) running through a run.
+	assert.equal(
+		isTurnTerminalEvent({ type: "model_delta", subAgent: marker }),
+		false,
+	);
+});
+
+test("applyTurnProgress keeps a sub-agent's stream out of the parent's answer", async () => {
+	// Mirrors the equivalent case in `cli-turn-progress.test.ts`: the two agents
+	// stream into different components, in whatever order the frames arrive.
+	const { applyTurnProgress } = await loadReducer();
+	const { view, assistants, log } = makeView();
+	const toolLines = new Map<string, unknown>();
+	const marker = { id: "run-1", task: "find it" };
+
+	let current: unknown = null;
+	current = applyTurnProgress(
+		view,
+		{ type: "model_delta", step: 2, contentDelta: "Delegating." },
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "model_delta",
+			step: 1,
+			contentDelta: "Looking.",
+			subAgent: marker,
+		},
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{ type: "model_delta", step: 3, contentDelta: "Back." },
+		current,
+		toolLines,
+	);
+
+	assert.deepEqual(log, ["answer", "answer:sub-agent", "answer"]);
+	assert.deepEqual(
+		assistants.map((assistant) => assistant.content),
+		["Delegating.", "Looking.", "Back."],
+	);
 });
 
 test("applyTurnProgress surfaces a failed turn's user-facing message", async () => {
