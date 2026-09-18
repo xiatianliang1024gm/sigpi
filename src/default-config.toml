@@ -66,3 +66,17 @@ sessions_root = "~/.sigpi/projects"
 # max_output_length = 30000
 # Optional shell script sourced before each command so env vars persist.
 # env_file = "~/.sigpi/bash-env.sh"
+
+[tools.sub_agent]
+# Delegate a self-contained exploration/research task to a sub-agent. The
+# sub-agent does all its reading/searching in its own context, and only its
+# final conclusion is fed back to the main agent, which keeps the main window
+# from filling up with raw file reads. The sub-agent is read-only and cannot
+# itself delegate (no nested sub-agents).
+# Off by default; set true to expose the `SubAgent` tool.
+enabled = false
+# Hard cap on the sub-agent's own agent-loop steps.
+# max_steps = 20
+# Optional model id (a key under [models]) for the sub-agent to use instead of
+# the main agent's active model. Unset reuses the main provider.
+# model = "local"

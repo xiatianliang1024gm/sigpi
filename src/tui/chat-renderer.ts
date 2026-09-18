@@ -10,6 +10,7 @@ import { buildEditor } from "../chat-input.js";
 import type {
 	AssistantMessageView,
 	ToolLineHandle,
+	TranscriptLineOptions,
 	TurnTranscriptView,
 } from "../session/events.js";
 import {
@@ -26,6 +27,7 @@ import { StatusBarComponent, type StatusBarModel } from "./status-bar.js";
 export type {
 	AssistantMessageView,
 	ToolLineHandle,
+	TranscriptLineOptions,
 } from "../session/events.js";
 
 /**
@@ -40,13 +42,22 @@ export interface ReplView extends TurnTranscriptView {
 	readInput(prompt?: string): Promise<string | null>;
 	takeQueuedLines(): string[];
 	addUserMessage(text: string): void;
-	beginAssistantMessage(): AssistantMessageView;
+	beginAssistantMessage(options?: TranscriptLineOptions): AssistantMessageView;
 	beginTurn(onInterrupt: () => void): void;
 	endTurn(): void;
 	/** Open a tool-call line that resolves in place when the tool finishes or
-	 *  fails. Replaces the one-shot {@link addToolResult}. */
-	beginToolLine(id: string, label: string): ToolLineHandle;
-	appendSystem(text: string, tone?: "error" | "info"): void;
+	 *  fails. Replaces the one-shot {@link addToolResult}. A `subAgent` option
+	 *  marks the line as a delegated sub-agent run's tool call. */
+	beginToolLine(
+		id: string,
+		label: string,
+		options?: TranscriptLineOptions,
+	): ToolLineHandle;
+	appendSystem(
+		text: string,
+		tone?: "error" | "info",
+		options?: TranscriptLineOptions,
+	): void;
 	/**
 	 * Replace the whole transcript with the given components, keeping the
 	 * persistent chrome (input editor + status bar). Used when attaching to a
@@ -144,8 +155,12 @@ export class ChatRenderer implements ReplView {
 		this.appendComponent(component);
 	}
 
-	beginAssistantMessage(): AssistantMessageComponent {
-		const component = new AssistantMessageComponent();
+	beginAssistantMessage(
+		options: TranscriptLineOptions = {},
+	): AssistantMessageComponent {
+		const component = new AssistantMessageComponent({
+			subAgent: options.subAgent,
+		});
 		this.appendComponent(component);
 		return component;
 	}
@@ -160,8 +175,14 @@ export class ChatRenderer implements ReplView {
 		this.interruptHandler = null;
 	}
 
-	beginToolLine(_id: string, label: string): ToolLineHandle {
-		const component = new ToolLineComponent(label);
+	beginToolLine(
+		_id: string,
+		label: string,
+		options: TranscriptLineOptions = {},
+	): ToolLineHandle {
+		const component = new ToolLineComponent(label, {
+			subAgent: options.subAgent,
+		});
 		this.appendComponent(component);
 		let finalized = false;
 
@@ -182,8 +203,14 @@ export class ChatRenderer implements ReplView {
 		return { finish, fail };
 	}
 
-	appendSystem(text: string, tone: "error" | "info" = "info"): void {
-		const component = new SystemMessageComponent(text, tone);
+	appendSystem(
+		text: string,
+		tone: "error" | "info" = "info",
+		options: TranscriptLineOptions = {},
+	): void {
+		const component = new SystemMessageComponent(text, tone, {
+			subAgent: options.subAgent,
+		});
 		this.appendComponent(component);
 	}
 

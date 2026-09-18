@@ -11,9 +11,13 @@ import type {
 	AssistantMessageView,
 	ReplView,
 	ToolLineHandle,
+	TranscriptLineOptions,
 } from "../src/tui/chat-renderer.js";
 import type { StatusBarModel } from "../src/tui/status-bar.js";
-import type { TurnProgressEvent } from "../src/types.js";
+import type {
+	SubAgentProgressMarker,
+	TurnProgressEvent,
+} from "../src/types.js";
 import { FakeTerminal } from "./helpers/fake-terminal.js";
 
 /**
@@ -54,6 +58,16 @@ class FakeToolLineHandle implements ToolLineHandle {
 	}
 }
 
+/**
+ * The scope a view was handed for a line: `:sub-agent` when the reducer says
+ * the line belongs to a delegated sub-agent run, `""` for the parent's own
+ * lines. Recording it is what proves the reducer routes a child's activity to
+ * the view as nested, labelled activity rather than as parent output.
+ */
+function scopeSuffix(options?: TranscriptLineOptions): string {
+	return options?.subAgent ? ":sub-agent" : "";
+}
+
 /** Records the ordered child operations so we can assert render order. */
 class RecordingReplView implements ReplView {
 	readonly ops: string[] = [];
@@ -64,15 +78,19 @@ class RecordingReplView implements ReplView {
 		return this.tui;
 	}
 
-	beginAssistantMessage(): AssistantMessageView {
+	beginAssistantMessage(options?: TranscriptLineOptions): AssistantMessageView {
 		const view = new FakeAssistantView();
 		this.assistants.push(view);
-		this.ops.push("answer");
+		this.ops.push(`answer${scopeSuffix(options)}`);
 		return view;
 	}
 
-	beginToolLine(id: string, label: string): ToolLineHandle {
-		this.ops.push(`tool-start:${id}:${label}`);
+	beginToolLine(
+		id: string,
+		label: string,
+		options?: TranscriptLineOptions,
+	): ToolLineHandle {
+		this.ops.push(`tool-start:${id}:${label}${scopeSuffix(options)}`);
 		return new FakeToolLineHandle(id, this.ops);
 	}
 
@@ -87,8 +105,12 @@ class RecordingReplView implements ReplView {
 	addUserMessage(): void {}
 	beginTurn(): void {}
 	endTurn(): void {}
-	appendSystem(text: string, tone: "error" | "info" = "info"): void {
-		this.ops.push(`system:${tone}:${text}`);
+	appendSystem(
+		text: string,
+		tone: "error" | "info" = "info",
+		options?: TranscriptLineOptions,
+	): void {
+		this.ops.push(`system:${tone}:${text}${scopeSuffix(options)}`);
 	}
 	replaceTranscript(components: Component[]): void {
 		this.ops.push(`transcript:${components.length}`);
@@ -263,6 +285,163 @@ test("a step with no text does not emit an empty assistant bubble", () => {
 		"answer",
 	]);
 	assert.match(view.assistants.at(-1)?.content ?? "", /Done\./);
+});
+
+test("sub-agent activity is folded in as nested, tagged lines without ending the turn", () => {
+	const view = new RecordingReplView();
+	const marker: SubAgentProgressMarker = {
+		id: "run-1",
+		task: "find the retry policy",
+	};
+	let current: AssistantMessageView | null = null;
+	const toolLines = new Map<string, ToolLineHandle>();
+
+	// The parent delegates: this is the line the child's activity nests under,
+	// and the only one the parent itself emits for the whole run.
+	current = applyTurnProgress(
+		view,
+		{
+			type: "tool_execution_started",
+			step: 2,
+			toolName: "SubAgent",
+			toolCallId: "tc-sub",
+			message: 'delegate to sub-agent: "find the retry policy"',
+		},
+		current,
+		toolLines,
+	);
+	// The child streams a step, calls a tool, and hits its own compaction.
+	current = applyTurnProgress(
+		view,
+		{
+			type: "model_delta",
+			step: 1,
+			contentDelta: "Looking at the runner.",
+			subAgent: marker,
+		},
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{ type: "model_request_finished", step: 1, subAgent: marker },
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "tool_execution_started",
+			step: 2,
+			toolName: "read",
+			toolCallId: "tc-child",
+			message: "Read runner.ts",
+			subAgent: marker,
+		},
+		current,
+		toolLines,
+	);
+	// Both the parent's delegate call and the child's read are in flight, each
+	// resolving on its own event.
+	assert.equal(toolLines.size, 2);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "tool_execution_finished",
+			step: 2,
+			toolName: "read",
+			toolCallId: "tc-child",
+			ok: true,
+			elapsedMs: 1,
+			subAgent: marker,
+		},
+		current,
+		toolLines,
+	);
+	assert.deepEqual([...toolLines.keys()], ["tc-sub"]);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "context_compacted",
+			step: 2,
+			tokensBefore: 9_000,
+			tokensAfter: 4_000,
+			trigger: "token",
+			subAgent: marker,
+		},
+		current,
+		toolLines,
+	);
+	// The child returns; the parent's delegate line resolves and the parent turn
+	// is still running (no terminal event was involved).
+	current = applyTurnProgress(
+		view,
+		{
+			type: "tool_execution_finished",
+			step: 2,
+			toolName: "SubAgent",
+			toolCallId: "tc-sub",
+			ok: true,
+			elapsedMs: 900,
+		},
+		current,
+		toolLines,
+	);
+	assert.equal(toolLines.size, 0);
+
+	// Every child line is handed to the view with the sub-agent scope; the
+	// parent's own delegate line is not.
+	assert.deepEqual(view.ops, [
+		'tool-start:tc-sub:delegate to sub-agent: "find the retry policy"',
+		"answer:sub-agent",
+		"tool-start:tc-child:Read runner.ts:sub-agent",
+		"tool-finish:tc-child",
+		"system:info:Context compacted: context window 9K → 4K tokens.:sub-agent",
+		"tool-finish:tc-sub",
+	]);
+	// The child's streamed text landed in its own component, tagged as such.
+	assert.equal(view.assistants.length, 1);
+	assert.equal(view.assistants[0]?.content, "Looking at the runner.");
+});
+
+test("a sub-agent delta never appends to the parent's in-flight answer", () => {
+	// The two agents stream into different components: the parent's answer and
+	// the child's running commentary must never merge, whichever order the
+	// events arrive in.
+	const view = new RecordingReplView();
+	const marker: SubAgentProgressMarker = { id: "run-1", task: "find it" };
+	let current: AssistantMessageView | null = null;
+	const toolLines = new Map<string, ToolLineHandle>();
+
+	current = applyTurnProgress(
+		view,
+		{ type: "model_delta", step: 2, contentDelta: "Delegating." },
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{
+			type: "model_delta",
+			step: 1,
+			contentDelta: "Looking.",
+			subAgent: marker,
+		},
+		current,
+		toolLines,
+	);
+	current = applyTurnProgress(
+		view,
+		{ type: "model_delta", step: 3, contentDelta: "Back." },
+		current,
+		toolLines,
+	);
+
+	assert.deepEqual(view.ops, ["answer", "answer:sub-agent", "answer"]);
+	assert.deepEqual(
+		view.assistants.map((assistant) => assistant.content),
+		["Delegating.", "Looking.", "Back."],
+	);
 });
 
 test("context_compacted renders a system message highlighting the window change", () => {

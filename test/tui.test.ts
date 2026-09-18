@@ -20,6 +20,7 @@ import {
 	type StatusBarModel,
 } from "../src/tui/status-bar.js";
 import { FakeTerminal } from "./helpers/fake-terminal.js";
+import { stripAnsi } from "./helpers.js";
 
 test("visibleWidth treats Chinese characters as double width", () => {
 	assert.equal(visibleWidth("ab你好"), 6);
@@ -86,6 +87,45 @@ test("Pi-tui TUI mounts on FakeTerminal and renders a Text component", async () 
 		terminal.writes.some((w) => w.includes("hello world")),
 		"expected the rendered Text to appear in terminal output",
 	);
+});
+
+test("sub-agent lines render indented and tagged, apart from the parent's own output", () => {
+	// A delegated run's lines must be visually distinct: the parent's
+	// `delegate to sub-agent` line scrolls away on a long run, and the child's
+	// streamed prose otherwise reads exactly like the parent's answer.
+	const marker = { id: "run-1", task: "find the retry policy" };
+	// `Markdown` pads its last line to the given width; the prefix is what this
+	// test is about (line-width safety is covered separately below).
+	const first = (component: { render(width: number): string[] }) =>
+		stripAnsi(component.render(60)[0] ?? "").trimEnd();
+
+	assert.equal(
+		first(new ToolLineComponent("Read runner.ts", { subAgent: marker })),
+		"    \u21B3 sub-agent Read runner.ts",
+	);
+	const assistant = new AssistantMessageComponent({ subAgent: marker });
+	assistant.appendContent("The retry budget is shared.");
+	assert.equal(
+		first(assistant),
+		"    \u25CB sub-agent The retry budget is shared.",
+	);
+	assert.equal(
+		first(
+			new SystemMessageComponent("Context compacted.", "info", {
+				subAgent: marker,
+			}),
+		),
+		"    sub-agent Context compacted.",
+	);
+
+	// Untagged lines keep their existing shape (2-space indent, blue glyph).
+	assert.equal(
+		first(new ToolLineComponent("Read runner.ts")),
+		"  \u23BF Read runner.ts",
+	);
+	const parentAnswer = new AssistantMessageComponent();
+	parentAnswer.appendContent("Answer.");
+	assert.equal(first(parentAnswer), "\u25CF Answer.");
 });
 
 const STATUS_WIDTH = 240;
