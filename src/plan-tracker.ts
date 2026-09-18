@@ -1,11 +1,11 @@
-type PlanStatus = "pending" | "in_progress" | "completed";
+export type PlanStatus = "pending" | "in_progress" | "completed";
 
-interface PlanItem {
+export interface PlanItem {
 	step: string;
 	status: PlanStatus;
 }
 
-interface PlanView {
+export interface PlanView {
 	explanation: string | null;
 	items: PlanItem[];
 	updatedAt: string | null;

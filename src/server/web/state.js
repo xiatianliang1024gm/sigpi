@@ -31,6 +31,13 @@ function createState() {
 		sessionStats: null,
 		/** Background shell tasks for the active session, oldest first. */
 		backgroundTasks: [],
+		/**
+		 * The active session's `update_plan` snapshot (`{ explanation, updatedAt,
+		 * items: [{ step, status, startedAt, completedAt, elapsedMs,
+		 * localStartedAt }] }`), or `null` when it has no plan. Folded from the
+		 * live SSE frames and restored from `GET .../plan` on session open.
+		 */
+		plan: null,
 		currentAssistant: null,
 		toolLines: new Map(),
 		/**

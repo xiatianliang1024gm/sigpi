@@ -1058,11 +1058,208 @@ button:disabled {
 	border-color: var(--error);
 }
 
+/* --- plan bar + popover ---------------------------------------------------- */
+
+/* The bar sits between the transcript and the composer and is hidden entirely
+   while the session has no plan. It reads as one muted line: the step the agent
+   is working on, plus a timer that ticks while it runs. */
+.plan {
+	position: relative;
+	flex: none;
+	/* Match the composer's horizontal inset so the bar lines up with the
+	   messages above it. */
+	padding: 0 max(16px, calc((100% - var(--chat-max)) / 2)) 6px;
+}
+
+.plan-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 6px 10px;
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	background: var(--panel-2);
+	color: var(--muted);
+	font-size: 12.5px;
+	text-align: left;
+}
+
+.plan-bar:hover {
+	color: var(--text);
+	border-color: var(--accent);
+}
+
+.plan-bar.is-running {
+	color: var(--text);
+	border-color: var(--accent);
+}
+
+.plan-bar.is-done {
+	color: var(--ok);
+}
+
+.plan-bar-icon {
+	flex: none;
+}
+
+.plan-bar-label {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	color: var(--text);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.plan-bar.is-running .plan-bar-label {
+	color: var(--text);
+}
+
+.plan-bar.is-done .plan-bar-label {
+	color: var(--ok);
+}
+
+.plan-bar-time {
+	flex: none;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.plan-bar.is-running .plan-bar-time {
+	color: var(--accent);
+}
+
+.plan-bar-caret {
+	flex: none;
+	color: var(--muted);
+	font-size: 10px;
+}
+
+/* The popover floats above the bar, anchored to the bar's left edge. */
+.plan-panel {
+	position: absolute;
+	bottom: calc(100% + 6px);
+	left: max(16px, calc((100% - var(--chat-max)) / 2));
+	z-index: 20;
+	width: min(440px, calc(100vw - 32px));
+	max-height: min(60vh, 480px);
+	display: flex;
+	flex-direction: column;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+	overflow: hidden;
+}
+
+.plan-panel-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+.plan-close {
+	padding: 0 8px;
+	line-height: 1.4;
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	font-size: 16px;
+}
+
+.plan-close:hover {
+	color: var(--text);
+}
+
+.plan-list {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px;
+	overflow-y: auto;
+}
+
+.plan-item {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: baseline;
+	gap: 8px;
+	padding: 5px 8px;
+	border-radius: 6px;
+	font-size: 13px;
+}
+
+.plan-item.running {
+	background: var(--panel-2);
+}
+
+/* Breathe the in-progress glyph so the live step is findable at a glance. */
+@keyframes plan-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.45;
+	}
+}
+
+.plan-item.running .plan-glyph {
+	animation: plan-pulse 1.4s ease-in-out infinite;
+}
+
+.plan-step {
+	overflow: hidden;
+	color: var(--text);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.plan-item.running .plan-step {
+	color: var(--accent);
+}
+
+.plan-item.done .plan-step {
+	color: var(--muted);
+}
+
+.plan-item-meta {
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.plan-meta {
+	padding: 7px 10px;
+	border-top: 1px solid var(--border);
+	overflow: hidden;
+	color: var(--muted);
+	font-size: 12px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.plan-meta:empty {
+	display: none;
+}
+
 /* `hidden` toggles these elements off; without these rules the author `display`
    above would win over the UA `[hidden] { display: none }` and leave them shown. */
 .tasks-button[hidden],
 .tasks-panel[hidden],
 .tasks-list[hidden],
-.tasks-detail[hidden] {
+.tasks-detail[hidden],
+.plan-bar[hidden],
+.plan-panel[hidden] {
 	display: none;
 }

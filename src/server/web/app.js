@@ -16,6 +16,7 @@ import { interrupt, saveDraft, submitComposer } from "./composer.js";
 import { els, initDom, showError } from "./dom.js";
 import { MINUTE_MS, projectErrorMessage } from "./format.js";
 import { closeMenu } from "./menus.js";
+import { closePlanPanel, initPlan } from "./plan.js";
 import {
 	collapseAllProjects,
 	expandAllProjects,
@@ -32,12 +33,13 @@ import { refreshRelativeTimes } from "./tree.js";
 initDom();
 resetState();
 
-// A click anywhere outside a menu (or the background-task popover) dismisses
-// it; their own item/trigger clicks stop propagation so only genuinely outside
-// clicks reach the document.
+// A click anywhere outside a menu (or either popover — background tasks, plan)
+// dismisses it; their own item/trigger clicks stop propagation so only
+// genuinely outside clicks reach the document.
 document.addEventListener("click", () => {
 	closeMenu();
 	closeTasksPanel();
+	closePlanPanel();
 });
 
 // --- wiring ----------------------------------------------------------------
@@ -92,6 +94,7 @@ els.modelSelect.addEventListener("change", () => {
 restoreSidebarWidth();
 initSidebarResizer();
 initTasks();
+initPlan();
 
 // Keep the tree's "time since" labels honest without a full re-render (which
 // would close any open row menu). `unref` keeps the timer from pinning the

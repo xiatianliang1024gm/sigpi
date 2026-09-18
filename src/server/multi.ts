@@ -24,6 +24,7 @@ import {
 	SessionManagerError,
 	type SessionManagerErrorCode,
 } from "./manager.js";
+import { derivePlanFromEntries } from "./plan-state.js";
 import { serveStaticAsset } from "./static.js";
 
 export interface MultiSessionServerOptions {
@@ -111,6 +112,7 @@ function reportError(
  * PATCH  /projects/:key/sessions/:id { title?, archived? }  rename/archive a session
  * GET    /projects/:key/sessions/:id/events         stream the session's SSE events
  * GET    /projects/:key/sessions/:id/messages       page persisted history (newest first)
+ * GET    /projects/:key/sessions/:id/plan           the session's `update_plan` snapshot
  * GET    /projects/:key/sessions/:id/model          list models + the active id
  * POST   /projects/:key/sessions/:id/model          switch the active model
  * GET    /projects/:key/sessions/:id/context        context-window usage (budget + used)
@@ -288,6 +290,12 @@ async function route(
 				sessionId,
 				url.searchParams,
 			);
+			return;
+		}
+		// The plan is reconstructed from persisted entries, so — like history —
+		// it must not require the session to be live.
+		if (method === "GET" && sub === "plan") {
+			await handleSessionPlan(res, manager, projectKey, sessionId);
 			return;
 		}
 		const session = resolveSession(manager, projectKey, sessionId, res);
@@ -644,6 +652,31 @@ async function handleSessionHistory(
 		// turn right where history ends (see `handleSessionEvents`).
 		eventsCursor: manager.eventsCursor(projectKey, sessionId),
 	});
+}
+
+/**
+ * Rebuild the session's `update_plan` snapshot from its persisted entries.
+ * Responds `{ plan: null }` when the session never issued a usable plan, so the
+ * client can hide its plan bar. Reads stored entries only, which is why this
+ * sits before {@link resolveSession}: opening an old session should still show
+ * the plan it last worked on.
+ */
+async function handleSessionPlan(
+	res: ServerResponse,
+	manager: SessionManager,
+	projectKey: string,
+	sessionId: string,
+): Promise<void> {
+	if (!manager.getProject(projectKey)) {
+		writeJson(res, 404, { error: "project_not_found" });
+		return;
+	}
+	const entries = await manager.readSessionEntries(projectKey, sessionId);
+	if (entries === null) {
+		writeJson(res, 404, { error: "session_not_found" });
+		return;
+	}
+	writeJson(res, 200, { plan: derivePlanFromEntries(entries) });
 }
 
 /**
