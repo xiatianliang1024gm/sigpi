@@ -91,7 +91,7 @@ export interface SubAgentRunner {
 
 export function createSubAgentRunner(deps: {
   provider: ModelProvider;          // 与主 agent 共享（generate 无状态）
-  tools: ToolRegistry;              // 受限注册表（一般只含只读工具）
+  tools: ToolRegistry;              // 受限注册表（read/grep/glob + bash，见 §5.2）
   systemPrompt: string;             // 子 agent 专用 prompt（含输出契约）
   workingDirectory: string;
   maxSteps: number;
@@ -154,21 +154,30 @@ return {
 
 ### 5.2 受限工具注册表
 
-在 runtime 里为子 agent **另建**一个只读注册表，而不是复用主注册表：
+在 runtime 里为子 agent **另建**一个受限注册表（`createSubAgentToolRegistry`），而不是
+复用主注册表：
 
 ```ts
-const subTools = new ToolRegistry([
-  globTool,
-  grepTool,
-  createReadTool(new ReadTracker()),
-]);              // 不含 edit / write / bash / update-plan / SubAgent
+const subTools = createSubAgentToolRegistry(shellRuntime, config.tools.bash);
+// = new ToolRegistry([
+//     globTool,
+//     grepTool,
+//     createReadTool(readTracker),
+//     createBashTool(shellRuntime, config.tools.bash, readTracker),
+//   ]);   // 不含 edit / write / update-plan / SubAgent
 ```
+
+> 修订（2026-09）：注册表**放开 `bash`**。`SubAgent` 是阻塞调用，且不存在并发或后台调用
+> 子 agent 的场景，因此共享 shell 安全；`bash` 复用主 agent 的 `bashToolContext`
+> （输出/后台任务根、rc 定义）。`edit` / `write` / `update-plan` / `SubAgent` 仍然不注册。
 
 - **不注册 `SubAgent` 本身** → 天然防止无限递归。若确实想要嵌套子 agent，则改为
   传一个 `depth` 参数，超过阈值时从子注册表里剔除 `SubAgent`。
-- 探索/调研类任务通常只给 `read / grep / glob`，最省心、也最省上下文。
-- 若要让子 agent 具备**改文件**能力，需要与主 agent **共享同一个 `ReadTracker`**
-  （read-before-edit 语义），并谨慎处理 `bash` 的并发写；否则建议保持只读。
+- 探索/调研类任务通常只给 `read / grep / glob / bash`：`bash` 用来跑测试、构建、`git`
+  等，仍是"只读式"调研，最省心、也最省上下文。
+- 若要让子 agent 用 `edit` / `write` 直接改文件，需要与主 agent **共享同一个
+  `ReadTracker`**（read-before-edit 语义），并重新评估 `bash` 的并发写；本期不做——子
+  agent 只经 `bash` 间接改动。
 
 ### 5.3 `SubAgent` 工具 —— `src/tools/builtin/sub-agent.ts`
 
@@ -322,7 +331,7 @@ prompt 分离，明确**输出契约**（这是"省上下文"能否成立的核�
 | 维度 | 选项 A | 选项 B | 建议 |
 | --- | --- | --- | --- |
 | provider | 共享主 agent 实例 | 子 agent 独立（更便宜的模型） | 先用共享，配置化后再拆 |
-| 子 agent 权限 | 只读（read/grep/glob） | 可写（共享 ReadTracker + 谨慎 bash） | 先只读 |
+| 子 agent 权限 | 只读调研（read/grep/glob + bash） | 可写（共享 ReadTracker + 谨慎 bash） | 先只读取调研工具 + bash |
 | 进度透传 | 只写日志（简单） | 桥接到父 runner（体验好，需 runnerRef） | 视需要 |
 | 递归 | 子注册表不含 `SubAgent` | 带 `depth` 允许有限嵌套 | 先不递归 |
 

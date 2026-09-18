@@ -5,6 +5,10 @@
 > 标签的行；子 agent 自己的 turn 生命周期事件**不透传**。设计见
 > `docs/design-subagent-tool.md`。本文只给落地顺序、要改的文件/符号、测试与验证命令。
 > 工具名 `SubAgent`（**不要**叫 `task`，避免与 `BackgroundTaskManager` 后台任务混淆）。
+>
+> 后续修订（2026-09）：子 agent 的受限注册表**放开 `bash`**（见 §5）。理由是 `SubAgent`
+> 是阻塞调用、且不存在并发或后台调用子 agent 的场景，共享 shell 安全；edit / write /
+> `SubAgent` 仍不注册。
 
 ## 0. 前置：确认边界
 
@@ -70,8 +74,11 @@
 
 改 `src/runtime.ts`（现有顺序：`:235` 建 tools，`:294` 建 runner）：
 
-- 建 `subTools`（只读：`globTool` / `grepTool` / `createReadTool(new ReadTracker())`，
-  **不含** `SubAgent` / edit / write / bash）。
+- 建 `subTools`（`createSubAgentToolRegistry(shellRuntime, config.tools.bash)`）：
+  `globTool` / `grepTool` / `createReadTool(new ReadTracker())` / `createBashTool(...)`
+  （read 与 bash 共享同一 `ReadTracker`），**不含** `SubAgent` / edit / write / update-plan。
+  子 agent 允许 `bash`：它阻塞、且不会并发或后台运行，所以共享 shell 是安全的；`bash`
+  仍运行在项目目录，并复用主 agent 的 `bashToolContext`（输出/后台任务根、rc 定义）。
 - 建 `runnerRef: { current: AgentRunner | null }`（仿 `activeModelRef`，`runtime.ts:239`）。
 - `createSubAgentRunner({ provider, tools: subTools, systemPrompt, workingDirectory,
   maxSteps, runId, sessionId, logger, onProgress: (e) => runnerRef.current?.emitProgress(...) })`。
@@ -191,7 +198,10 @@ interface SubAgentProgressMarker { id: string; task: string }   // 一次 run �
 
 - **回灌长度**：64k 兜底截断（`messages.ts:14`）会腰斩长结论——必须靠输出契约 + 工具层
   主动截断控制。
-- **可写子 agent**：需要与主 agent 共享 `ReadTracker` 并处理 `bash` 并发写；本期不做。
+- **可写子 agent**：子 agent 现已带 `bash`（可经 shell 间接改文件），但仍不注册
+  `edit` / `write`，也不与主 agent 共享 `ReadTracker`——read-before-edit 语义**不**跨
+  父子生效。若要让子 agent 用 `edit` / `write`，需共享同一个 `ReadTracker` 并重新评估
+  `bash` 并发写；本期不做。
 - **嵌套子 agent**：子注册表默认不含 `SubAgent`，天然不递归；如需嵌套再加 `depth`。
   `SubAgentProgressMarker` 的 `id` 已能区分多个 run，接嵌套时只需把父子事件都打上标记。
 - **独立模型**：`createSubAgentRunner` 已允许传独立 `provider`，但本期默认复用主 provider。
